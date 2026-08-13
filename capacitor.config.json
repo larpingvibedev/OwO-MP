@@ -1,0 +1,14 @@
+{
+  "appId": "com.nuclearplus.app",
+  "appName": "Nuclear Plus",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "CapacitorCookies": {
+      "enabled": true
+    }
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
