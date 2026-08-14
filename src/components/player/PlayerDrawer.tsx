@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   X, Sparkles, Music, Play, Plus, Trash2, Mic2, ListMusic, 
-  Compass, Radio, Volume2, Check, ExternalLink, Loader2, Info, Disc
+  Compass, Volume2, Check, ExternalLink, Loader2, Info, Disc, ListPlus
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -14,7 +14,7 @@ interface ParsedLyricLine {
 }
 
 function formatDuration(seconds: number): string {
-  if (!seconds || isNaN(seconds)) return '0:00';
+  if (!seconds || isNaN(seconds) || seconds <= 0) return '--:--';
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
@@ -26,6 +26,7 @@ export function PlayerDrawer() {
     currentTrack,
     isPlaying,
     currentTime,
+    duration,
     queue,
     shuffledQueue,
     queueIndex,
@@ -44,13 +45,15 @@ export function PlayerDrawer() {
     setRecommendedUpNext,
     setActivePlayerTab,
     closePlayerDrawer,
-    setCurrentTime
+    setCurrentTime,
+    saveQueueAsPlaylist
   } = usePlayerStore();
 
   const [isLoadingMix, setIsLoadingMix] = useState(false);
   const [lyricsData, setLyricsData] = useState<{ synced: ParsedLyricLine[] | null; plain: string | null } | null>(null);
   const [isLyricsLoading, setIsLyricsLoading] = useState(false);
   const [addedTrackIds, setAddedTrackIds] = useState<Set<string>>(new Set());
+  const [autoplayFilter, setAutoplayFilter] = useState<'all' | 'familiar' | 'popular' | 'discover' | 'deep_cuts' | 'downbeat'>('all');
   
   // Related Tab Data
   const [similarArtists, setSimilarArtists] = useState<SimilarArtist[]>([]);
@@ -216,7 +219,7 @@ export function PlayerDrawer() {
   const handlePlayRecommendedTrack = (track: Track) => {
     // Insert into queue right after current track and play
     const newQueue = [...activeQueue.slice(0, queueIndex + 1), track, ...activeQueue.slice(queueIndex + 1)];
-    setQueue(newQueue, queueIndex + 1, `${track.artist} Mix`);
+    setQueue(newQueue, queueIndex + 1, `${track.title} Mix`);
   };
 
   const handleAddRecommendedToQueue = (track: Track) => {
@@ -349,69 +352,98 @@ export function PlayerDrawer() {
         {/* ========================================================================= */}
         {activePlayerTab === 'up_next' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {/* Playing From Context Banner (YouTube Music Style) */}
+            {/* Playing From Context Banner & Save Button (YouTube Music Style) */}
             <div style={{
-              backgroundColor: 'rgba(255,255,255,0.03)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '8px',
-              padding: '12px 14px',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between'
+              justifyContent: 'space-between',
+              paddingBottom: '4px'
             }}>
               <div>
-                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.05em' }}>
+                <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.04em' }}>
                   Playing from
                 </div>
-                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Radio size={14} color="var(--accent-primary)" />
-                  <span>{playingFrom || `${currentTrack?.artist || 'Music'} Mix`}</span>
+                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '2px' }}>
+                  {playingFrom || `${currentTrack?.title || currentTrack?.artist || 'Track'} Mix`}
                 </div>
               </div>
 
-              {/* Autoplay Toggle Switch */}
-              <div 
-                onClick={toggleAutoplay}
-                title="Autoplay similar tracks continuously when queue ends"
+              {/* Save Queue as Playlist */}
+              <button
+                onClick={() => saveQueueAsPlaylist()}
+                title="Save queue to your playlists"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '8px',
-                  backgroundColor: autoplay ? 'rgba(52, 152, 219, 0.15)' : 'var(--bg-card)',
-                  border: `1px solid ${autoplay ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                  padding: '6px 12px',
+                  gap: '6px',
+                  padding: '6px 14px',
                   borderRadius: '20px',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  backgroundColor: 'rgba(255,255,255,0.08)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-primary)',
                   cursor: 'pointer',
-                  userSelect: 'none',
-                  transition: 'all 0.2s ease'
+                  transition: 'all 0.15s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.15)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.08)'}
+              >
+                <ListPlus size={15} />
+                <span>Save</span>
+              </button>
+            </div>
+
+            {/* Autoplay Toggle Card (YouTube Music Exact Switch) */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 14px',
+              backgroundColor: 'rgba(255,255,255,0.03)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px'
+            }}>
+              <div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Autoplay
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                  Add similar content to the end of the queue
+                </div>
+              </div>
+
+              {/* Toggle Switch */}
+              <div 
+                onClick={toggleAutoplay}
+                title="Toggle Autoplay"
+                style={{
+                  width: '42px',
+                  height: '24px',
+                  borderRadius: '12px',
+                  backgroundColor: autoplay ? 'var(--accent-primary)' : 'rgba(255,255,255,0.2)',
+                  position: 'relative',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.2s ease',
+                  flexShrink: 0
                 }}
               >
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: autoplay ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
-                  Autoplay {autoplay ? 'ON' : 'OFF'}
-                </span>
                 <div style={{
-                  width: '10px',
-                  height: '10px',
+                  width: '18px',
+                  height: '18px',
                   borderRadius: '50%',
-                  backgroundColor: autoplay ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                  boxShadow: autoplay ? '0 0 8px var(--accent-primary)' : 'none'
+                  backgroundColor: '#ffffff',
+                  position: 'absolute',
+                  top: '3px',
+                  left: autoplay ? '21px' : '3px',
+                  transition: 'left 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
                 }} />
               </div>
             </div>
 
-            {/* Unified Queue Section (Previous Songs + Active Playing + Upcoming) */}
+            {/* Active Queue Section */}
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 700, letterSpacing: '0.05em' }}>
-                  Queue ({activeQueue.length})
-                </div>
-                {activeQueue.length > 0 && (
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                    Track {queueIndex + 1} of {activeQueue.length}
-                  </div>
-                )}
-              </div>
-
               {activeQueue.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {activeQueue.map((track, idx) => {
@@ -506,7 +538,7 @@ export function PlayerDrawer() {
                             color: isCurrent ? 'var(--accent-primary)' : 'var(--text-secondary)',
                             fontWeight: isCurrent ? 700 : 400
                           }}>
-                            {formatDuration(track.duration)}
+                            {formatDuration(isCurrent && duration > 0 ? duration : track.duration)}
                           </span>
 
                           {!isCurrent && (
@@ -534,116 +566,200 @@ export function PlayerDrawer() {
                     );
                   })}
                 </div>
-              ) : (
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '12px 0' }}>
-                  Queue is empty.
-                </div>
-              )}
+              ) : null}
             </div>
 
-            {/* Recommended Auto-Mix Section (YouTube Music Algorithm) */}
-            <div style={{ marginTop: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Sparkles size={14} color="var(--accent-primary)" />
-                  <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-primary)', fontWeight: 700, letterSpacing: '0.05em' }}>
-                    Recommended Auto-Mix
+            {/* Autoplay is on Section (YouTube Music Filter Chips & Algorithmic Stream) */}
+            {autoplay && (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 700 }}>
+                    Autoplay is on
                   </span>
+                  {isLoadingMix && <Loader2 size={13} className="animate-spin" color="var(--accent-primary)" />}
                 </div>
-                {isLoadingMix && <Loader2 size={13} className="animate-spin" color="var(--accent-primary)" />}
-              </div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
-                Similar tracks selected by the algorithm based on your listening tastes.
-              </div>
 
-              {recommendedUpNext.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {recommendedUpNext.map((track) => {
-                    const isAdded = addedTrackIds.has(track.id);
+                {/* Algorithmic Filter Chips (YouTube Music Exact Match) */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  overflowX: 'auto',
+                  paddingBottom: '8px',
+                  marginBottom: '8px',
+                  scrollbarWidth: 'none'
+                }}>
+                  {[
+                    { id: 'all', label: 'All' },
+                    { id: 'familiar', label: 'Familiar' },
+                    { id: 'popular', label: 'Popular' },
+                    { id: 'discover', label: 'Discover' },
+                    { id: 'deep_cuts', label: 'Deep cuts' },
+                    { id: 'downbeat', label: 'Downbeat' }
+                  ].map((chip) => {
+                    const isActive = autoplayFilter === chip.id;
                     return (
-                      <div 
-                        key={`rec-${track.id}`}
+                      <button
+                        key={chip.id}
+                        onClick={() => setAutoplayFilter(chip.id as any)}
                         style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '10px',
-                          padding: '8px',
-                          borderRadius: '6px',
-                          backgroundColor: 'rgba(255,255,255,0.02)',
-                          border: '1px solid var(--border-color)',
-                          transition: 'background-color 0.15s'
+                          padding: '5px 12px',
+                          borderRadius: '16px',
+                          fontSize: '0.75rem',
+                          fontWeight: isActive ? 700 : 500,
+                          backgroundColor: isActive ? 'var(--text-primary)' : 'rgba(255,255,255,0.06)',
+                          color: isActive ? '#111111' : 'var(--text-secondary)',
+                          border: `1px solid ${isActive ? 'transparent' : 'var(--border-color)'}`,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          transition: 'all 0.15s ease'
                         }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.02)'}
                       >
-                        <div 
-                          onClick={() => handlePlayRecommendedTrack(track)}
-                          style={{
-                            width: '40px',
-                            height: '40px',
-                            borderRadius: '4px',
-                            backgroundImage: `url(${track.cover})`,
-                            backgroundSize: 'cover',
-                            backgroundPosition: 'center',
-                            cursor: 'pointer',
-                            position: 'relative',
-                            flexShrink: 0
-                          }}
-                        >
-                          <div style={{
-                            position: 'absolute',
-                            top: 0, left: 0, right: 0, bottom: 0,
-                            backgroundColor: 'rgba(0,0,0,0.3)',
-                            borderRadius: '4px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                          }}>
-                            <Play size={14} fill="white" color="white" />
-                          </div>
-                        </div>
-
-                        <div 
-                          onClick={() => handlePlayRecommendedTrack(track)}
-                          style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
-                        >
-                          <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {track.title}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {track.artist}
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => handleAddRecommendedToQueue(track)}
-                          title={isAdded ? 'Added to queue' : 'Add to queue'}
-                          style={{
-                            background: isAdded ? 'var(--accent-primary)' : 'none',
-                            border: `1px solid ${isAdded ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                            color: isAdded ? '#ffffff' : 'var(--text-secondary)',
-                            borderRadius: '50%',
-                            width: '28px',
-                            height: '28px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'pointer',
-                            transition: 'all 0.15s'
-                          }}
-                        >
-                          {isAdded ? <Check size={14} /> : <Plus size={14} />}
-                        </button>
-                      </div>
+                        {chip.label}
+                      </button>
                     );
                   })}
                 </div>
-              ) : (
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', padding: '16px 0', textAlign: 'center' }}>
-                  {isLoadingMix ? 'Generating your personalized auto-mix...' : 'No additional recommendations found.'}
-                </div>
-              )}
-            </div>
+
+                {/* Algorithmic Upcoming Stream */}
+                {recommendedUpNext.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {(() => {
+                      let list = recommendedUpNext;
+                      if (autoplayFilter === 'familiar') {
+                        const filtered = recommendedUpNext.filter(t => 
+                          t.artist.toLowerCase() === currentTrack?.artist.toLowerCase() ||
+                          favorites.some(f => f.id === t.id) ||
+                          Boolean(playHistory[t.id])
+                        );
+                        if (filtered.length > 0) list = filtered;
+                      } else if (autoplayFilter === 'popular') {
+                        const filtered = recommendedUpNext.filter(t => 
+                          t.artist.toLowerCase() === currentTrack?.artist.toLowerCase() ||
+                          (t.duration > 110 && t.duration < 280)
+                        );
+                        if (filtered.length > 0) list = filtered;
+                      } else if (autoplayFilter === 'discover') {
+                        const filtered = recommendedUpNext.filter(t => 
+                          !favorites.some(f => f.id === t.id) &&
+                          !playHistory[t.id] &&
+                          t.artist.toLowerCase() !== currentTrack?.artist.toLowerCase()
+                        );
+                        if (filtered.length > 0) list = filtered;
+                      } else if (autoplayFilter === 'deep_cuts') {
+                        const filtered = recommendedUpNext.filter(t => 
+                          t.title.toLowerCase().includes('remix') ||
+                          t.title.toLowerCase().includes('feat') ||
+                          t.title.toLowerCase().includes('slowed') ||
+                          t.title.toLowerCase().includes('acoustic') ||
+                          t.album === 'Single'
+                        );
+                        if (filtered.length > 0) list = filtered;
+                      } else if (autoplayFilter === 'downbeat') {
+                        const filtered = recommendedUpNext.filter(t => 
+                          t.duration > 160 ||
+                          t.title.toLowerCase().includes('acoustic') ||
+                          t.title.toLowerCase().includes('slowed') ||
+                          t.title.toLowerCase().includes('instrumental') ||
+                          t.title.toLowerCase().includes('outro')
+                        );
+                        if (filtered.length > 0) list = filtered;
+                      }
+
+                      return list.map((track) => {
+                        const isAdded = addedTrackIds.has(track.id);
+                        return (
+                          <div 
+                            key={`rec-${track.id}`}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              padding: '8px',
+                              borderRadius: '6px',
+                              backgroundColor: 'rgba(255,255,255,0.02)',
+                              border: '1px solid var(--border-color)',
+                              transition: 'background-color 0.15s'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.02)'}
+                          >
+                            <div 
+                              onClick={() => handlePlayRecommendedTrack(track)}
+                              style={{
+                                width: '38px',
+                                height: '38px',
+                                borderRadius: '4px',
+                                backgroundImage: `url(${track.cover})`,
+                                backgroundSize: 'cover',
+                                backgroundPosition: 'center',
+                                cursor: 'pointer',
+                                position: 'relative',
+                                flexShrink: 0
+                              }}
+                            >
+                              <div style={{
+                                position: 'absolute',
+                                top: 0, left: 0, right: 0, bottom: 0,
+                                backgroundColor: 'rgba(0,0,0,0.3)',
+                                borderRadius: '4px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}>
+                                <Play size={13} fill="white" color="white" />
+                              </div>
+                            </div>
+
+                            <div 
+                              onClick={() => handlePlayRecommendedTrack(track)}
+                              style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
+                            >
+                              <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {track.title}
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
+                                {track.artist}
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                {formatDuration(track.duration)}
+                              </span>
+
+                              <button
+                                onClick={() => handleAddRecommendedToQueue(track)}
+                                title={isAdded ? 'Added to queue' : 'Add to queue'}
+                                style={{
+                                  background: isAdded ? 'var(--accent-primary)' : 'none',
+                                  border: `1px solid ${isAdded ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                                  color: isAdded ? '#ffffff' : 'var(--text-secondary)',
+                                  borderRadius: '50%',
+                                  width: '26px',
+                                  height: '26px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s'
+                                }}
+                              >
+                                {isAdded ? <Check size={13} /> : <Plus size={13} />}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                ) : (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', padding: '16px 0', textAlign: 'center' }}>
+                    {isLoadingMix ? 'Generating your personalized auto-mix...' : 'No additional recommendations found.'}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

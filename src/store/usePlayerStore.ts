@@ -45,6 +45,15 @@ interface PlayerState {
   isNowPlayingVisible: boolean;
   playHistory: Record<string, { track: Track; playCount: number; lastPlayedAt: number }>;
 
+  // Recent Searches
+  recentSearchQueries: string[];
+  recentSearchedTracks: Track[];
+
+  // Toast Notifications
+  toastMessage: string | null;
+  showToast: (message: string) => void;
+  hideToast: () => void;
+
   // Actions
   setTheme: (theme: 'default' | 'rusty') => void;
   setRustyColor: (color: 'green' | 'amber' | 'cyan' | 'rust') => void;
@@ -80,8 +89,16 @@ interface PlayerState {
   setSearchResults: (results: Track[]) => void;
   setArtistProfile: (profile: ArtistProfile | null) => void;
   setIsSearching: (isSearching: boolean) => void;
+
+  addRecentSearchQuery: (query: string) => void;
+  removeRecentSearchQuery: (query: string) => void;
+  clearRecentSearchQueries: () => void;
+  addRecentSearchedTrack: (track: Track) => void;
+  removeRecentSearchedTrack: (trackId: string) => void;
+  clearRecentSearchedTracks: () => void;
   
   toggleFavorite: (track: Track) => void;
+  saveQueueAsPlaylist: (customName?: string) => void;
   generateRadio: (seedTrack: Track) => Promise<void>;
   generateMultiRadio: (seedTracks: Track[]) => Promise<void>;
 }
@@ -110,6 +127,9 @@ export const usePlayerStore = create<PlayerState>()(
   artistProfile: null,
   isSearching: false,
   
+  recentSearchQueries: [],
+  recentSearchedTracks: [],
+
   theme: 'default',
   rustyColor: 'green',
   
@@ -123,16 +143,29 @@ export const usePlayerStore = create<PlayerState>()(
   isNowPlayingVisible: false,
   playHistory: {},
   
+  toastMessage: null,
+  showToast: (message: string) => set({ toastMessage: message }),
+  hideToast: () => set({ toastMessage: null }),
+
   setTheme: (theme) => set({ theme }),
   setRustyColor: (rustyColor) => set({ rustyColor }),
   setCurrentTrack: (track) => {
-    const context = `${track.artist} Mix`;
+    const context = `${track.title} Mix`;
     set({ currentTrack: track, currentTime: 0, isPlaying: true, playingFrom: context });
   },
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   togglePlayPause: () => set((state) => ({ isPlaying: !state.isPlaying })),
   setCurrentTime: (currentTime) => set({ currentTime }),
-  setDuration: (duration) => set({ duration }),
+  setDuration: (duration) => set((state) => {
+    const rounded = Math.round(duration);
+    if (rounded > 0 && state.currentTrack && Math.abs((state.currentTrack.duration || 0) - rounded) > 0) {
+      const updatedTrack = { ...state.currentTrack, duration: rounded };
+      const updatedQueue = state.queue.map((t, i) => i === state.queueIndex ? updatedTrack : t);
+      const updatedShuffled = state.shuffledQueue.map((t, i) => i === state.queueIndex ? updatedTrack : t);
+      return { duration: rounded, currentTrack: updatedTrack, queue: updatedQueue, shuffledQueue: updatedShuffled };
+    }
+    return { duration: rounded };
+  }),
   setVolume: (volume) => set({ volume }),
   
   toggleAutoplay: () => set((state) => ({ autoplay: !state.autoplay })),
@@ -168,7 +201,7 @@ export const usePlayerStore = create<PlayerState>()(
     }
 
     const cur = isShuffle ? shuffled[newIndex] : tracks[newIndex];
-    const sourceContext = playingFrom || (cur ? `${cur.artist} Mix` : 'Queue');
+    const sourceContext = playingFrom || (cur ? `${cur.title} Mix` : 'Queue');
 
     set({
       queue: tracks,
@@ -182,9 +215,25 @@ export const usePlayerStore = create<PlayerState>()(
   },
   
   addToQueue: (track) => set((state) => {
+    if (!state.currentTrack) {
+      return {
+        queue: [track],
+        shuffledQueue: [track],
+        queueIndex: 0,
+        currentTrack: track,
+        playingFrom: `${track.title} Mix`,
+        currentTime: 0,
+        isPlaying: true,
+        toastMessage: `Playing "${track.title}"`
+      };
+    }
     const newQueue = [...state.queue, track];
     const newShuffled = [...state.shuffledQueue, track];
-    return { queue: newQueue, shuffledQueue: newShuffled };
+    return { 
+      queue: newQueue, 
+      shuffledQueue: newShuffled,
+      toastMessage: `Added "${track.title}" to Queue`
+    };
   }),
 
   removeFromQueue: (index) => set((state) => {
@@ -304,26 +353,25 @@ export const usePlayerStore = create<PlayerState>()(
     }
   },
 
-  toggleRepeat: () => {
-    const { repeatMode } = get();
-    const nextMode = repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off';
-    set({ repeatMode: nextMode });
-  },
-  
-  toggleQueue: () => set((state) => ({ isQueueVisible: !state.isQueueVisible, isNowPlayingVisible: false })),
-  toggleNowPlaying: () => set((state) => ({ isNowPlayingVisible: !state.isNowPlayingVisible, isQueueVisible: false })),
-  
+  toggleRepeat: () => set((state) => {
+    const modes: Array<'off' | 'all' | 'one'> = ['off', 'all', 'one'];
+    const nextMode = modes[(modes.indexOf(state.repeatMode) + 1) % modes.length];
+    return { repeatMode: nextMode };
+  }),
+
+  toggleQueue: () => set((state) => ({ isQueueVisible: !state.isQueueVisible })),
+  toggleNowPlaying: () => set((state) => ({ isNowPlayingVisible: !state.isNowPlayingVisible })),
+
   recordPlay: (track) => {
     if (!track || !track.id) return;
     set((state) => {
-      const existing = state.playHistory[track.id];
-      const count = existing ? existing.playCount + 1 : 1;
+      const existing = state.playHistory[track.id] || { track, playCount: 0, lastPlayedAt: 0 };
       return {
         playHistory: {
           ...state.playHistory,
           [track.id]: {
             track,
-            playCount: count,
+            playCount: existing.playCount + 1,
             lastPlayedAt: Date.now()
           }
         }
@@ -336,6 +384,50 @@ export const usePlayerStore = create<PlayerState>()(
   setSearchResults: (searchResults) => set({ searchResults }),
   setArtistProfile: (artistProfile) => set({ artistProfile }),
   setIsSearching: (isSearching) => set({ isSearching }),
+
+  addRecentSearchQuery: (query: string) => {
+    const qClean = query.trim();
+    if (!qClean) return;
+    set((state) => {
+      const filtered = (state.recentSearchQueries || []).filter(
+        q => q.toLowerCase() !== qClean.toLowerCase()
+      );
+      return {
+        recentSearchQueries: [qClean, ...filtered].slice(0, 15)
+      };
+    });
+  },
+
+  removeRecentSearchQuery: (query: string) => {
+    const qClean = query.trim().toLowerCase();
+    set((state) => ({
+      recentSearchQueries: (state.recentSearchQueries || []).filter(
+        q => q.toLowerCase() !== qClean
+      )
+    }));
+  },
+
+  clearRecentSearchQueries: () => set({ recentSearchQueries: [] }),
+
+  addRecentSearchedTrack: (track: any) => {
+    if (!track || !track.id) return;
+    set((state) => {
+      const filtered = (state.recentSearchedTracks || []).filter(
+        t => t.id !== track.id && !(t.title.toLowerCase() === track.title.toLowerCase() && t.artist.toLowerCase() === track.artist.toLowerCase())
+      );
+      return {
+        recentSearchedTracks: [track, ...filtered].slice(0, 20)
+      };
+    });
+  },
+
+  removeRecentSearchedTrack: (trackId: string) => {
+    set((state) => ({
+      recentSearchedTracks: (state.recentSearchedTracks || []).filter(t => t.id !== trackId)
+    }));
+  },
+
+  clearRecentSearchedTracks: () => set({ recentSearchedTracks: [] }),
   
   toggleFavorite: (track) => set((state) => {
     const isFav = state.favorites.some((t) => t.id === track.id);
@@ -345,6 +437,23 @@ export const usePlayerStore = create<PlayerState>()(
         : [...state.favorites, track]
     };
   }),
+
+  saveQueueAsPlaylist: (customName) => {
+    const state = get();
+    const tracks = [...state.queue, ...(state.recommendedUpNext || []).slice(0, 15)];
+    if (tracks.length === 0) return;
+    const name = customName || `${state.currentTrack?.title || state.currentTrack?.artist || 'My'} Mix`;
+    const newPl: Playlist = {
+      id: `pl-${Date.now()}`,
+      name,
+      tracks: tracks,
+      createdAt: Date.now()
+    };
+    set({
+      playlists: [...state.playlists, newPl],
+      toastMessage: `Saved "${name}" to Playlists`
+    });
+  },
 
   generateRadio: async (seedTrack) => {
     set({ isPlaying: false });
@@ -424,7 +533,9 @@ export const usePlayerStore = create<PlayerState>()(
         isShuffle: state.isShuffle,
         repeatMode: state.repeatMode,
         queue: state.queue,
-        playHistory: state.playHistory
+        playHistory: state.playHistory,
+        recentSearchQueries: state.recentSearchQueries,
+        recentSearchedTracks: state.recentSearchedTracks
       })
     }
   )

@@ -4,6 +4,7 @@ import { TopBar } from './TopBar';
 import { BottomPlayer } from '../player/BottomPlayer';
 import { AudioPlayer } from '../AudioPlayer';
 import { PlayerDrawer } from '../player/PlayerDrawer';
+import { Toast } from '../common/Toast';
 
 import { usePlayerStore } from '../../store/usePlayerStore';
 
@@ -30,6 +31,7 @@ export function MainLayout() {
         <PlayerDrawer />
       </div>
 
+      <Toast />
       <BottomPlayer />
     </div>
   );

@@ -1,9 +1,27 @@
 import { useState, useEffect } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { useNavigate } from 'react-router-dom';
-import { RotateCcw, ListMusic, Play, Plus, Check, Loader2, Sparkles, X, Music } from 'lucide-react';
+import { 
+  RotateCcw, 
+  ListMusic, 
+  Play, 
+  Plus, 
+  Check, 
+  Loader2, 
+  Sparkles, 
+  X, 
+  Music, 
+  Clock, 
+  History, 
+  Trash2, 
+  Search,
+  TrendingUp,
+  Compass,
+  Heart
+} from 'lucide-react';
 import type { SearchCategory, Track, PublicPlaylist } from '../types';
 import { searchPublicPlaylists, fetchPublicPlaylistTracks } from '../services/musicSearch';
+import { AddToQueueButton } from '../components/common/AddToQueueButton';
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -13,7 +31,28 @@ function formatTime(seconds: number): string {
 }
 
 export function Discover() {
-  const { searchResults, searchQuery, artistProfile, currentTrack, playHistory, setQueue, setIsPlaying } = usePlayerStore();
+  const { 
+    searchResults, 
+    searchQuery, 
+    artistProfile, 
+    currentTrack, 
+    playHistory, 
+    isSearching, 
+    recentSearchQueries,
+    recentSearchedTracks,
+    favorites,
+    toggleFavorite,
+    setSearchQuery,
+    addRecentSearchQuery,
+    removeRecentSearchQuery,
+    clearRecentSearchQueries,
+    addRecentSearchedTrack,
+    removeRecentSearchedTrack,
+    clearRecentSearchedTracks,
+    setQueue, 
+    setIsPlaying 
+  } = usePlayerStore();
+
   const [searchCategory, setSearchCategory] = useState<SearchCategory>('all');
   const [publicPlaylists, setPublicPlaylists] = useState<PublicPlaylist[]>([]);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
@@ -51,10 +90,283 @@ export function Discover() {
     };
   }, [searchQuery, artistProfile?.name]);
 
+  // Handle clicking a recent query chip
+  const handleQueryClick = (q: string) => {
+    setSearchQuery(q);
+    addRecentSearchQuery(q);
+  };
+
+  // Play a track and record it to recent searches
+  const handlePlayTrack = (track: Track, tracksQueue: Track[] = [track], index: number = 0, contextName?: string) => {
+    addRecentSearchedTrack(track);
+    addRecentSearchQuery(track.artist);
+    setQueue(tracksQueue, index, contextName || `${track.title} Mix`);
+    setIsPlaying(true);
+  };
+
+  // =========================================================================
+  // RECENT SEARCHES & DISCOVERY HUB (When Search Bar is Empty)
+  // =========================================================================
   if (!searchQuery.trim()) {
+    const hasRecentQueries = (recentSearchQueries || []).length > 0;
+    const hasRecentTracks = (recentSearchedTracks || []).length > 0;
+    const popularSuggestions = ['bunii', 'duskydemise', 'Slowed and Reverb', 'kendrick lamar', 'Hyperpop', 'phonk', 'ambient mix'];
+
     return (
-      <div style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '100px' }}>
-        Start typing in the search bar to discover new music.
+      <div style={{ paddingBottom: '40px', maxWidth: '1400px' }}>
+        {/* Header Title */}
+        <div style={{ marginBottom: '28px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Compass size={28} color="var(--accent-primary)" />
+          <div>
+            <h2 style={{ fontSize: '1.75rem', fontWeight: 800, margin: 0 }}>Search & Discover</h2>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '4px 0 0' }}>
+              Find songs, artists, albums, or pick up where you left off.
+            </p>
+          </div>
+        </div>
+
+        {/* 1. Recent Text Search Queries Chips */}
+        <div style={{ marginBottom: '36px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Clock size={18} color="var(--accent-primary)" />
+              <h3 className="section-header" style={{ fontSize: '1.15rem', margin: 0 }}>
+                Recent Searches
+              </h3>
+            </div>
+            {hasRecentQueries && (
+              <button
+                onClick={clearRecentSearchQueries}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontSize: '0.75rem',
+                  color: 'var(--text-secondary)',
+                  padding: '4px 10px',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                  cursor: 'pointer',
+                  border: '1px solid var(--border-color)',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <Trash2 size={13} />
+                <span>Clear Searches</span>
+              </button>
+            )}
+          </div>
+
+          {hasRecentQueries ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              {recentSearchQueries.map((q) => (
+                <div
+                  key={`query-${q}`}
+                  onClick={() => handleQueryClick(q)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 16px',
+                    borderRadius: '24px',
+                    backgroundColor: 'var(--bg-card)',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    userSelect: 'none'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)';
+                    e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'var(--bg-card)';
+                    e.currentTarget.style.borderColor = 'var(--border-color)';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
+                >
+                  <Search size={14} color="var(--accent-primary)" />
+                  <span>{q}</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeRecentSearchQuery(q);
+                    }}
+                    title="Remove from history"
+                    style={{
+                      padding: '2px',
+                      borderRadius: '50%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--text-secondary)',
+                      backgroundColor: 'rgba(255,255,255,0.06)',
+                      marginLeft: '4px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{
+              padding: '16px 20px',
+              borderRadius: '10px',
+              backgroundColor: 'rgba(255,255,255,0.02)',
+              border: '1px dashed var(--border-color)',
+              color: 'var(--text-secondary)',
+              fontSize: '0.85rem'
+            }}>
+              No recent search queries yet. Try searching in the bar above or tap a suggested term below!
+            </div>
+          )}
+        </div>
+
+        {/* 2. Suggested Quick Search Terms */}
+        <div style={{ marginBottom: '36px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+            <TrendingUp size={18} color="var(--accent-primary)" />
+            <h3 className="section-header" style={{ fontSize: '1.15rem', margin: 0 }}>
+              Trending & Suggested
+            </h3>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+            {popularSuggestions.map((term) => (
+              <button
+                key={`sug-${term}`}
+                onClick={() => handleQueryClick(term)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '7px 14px',
+                  borderRadius: '20px',
+                  backgroundColor: 'rgba(52, 152, 219, 0.08)',
+                  border: '1px solid rgba(52, 152, 219, 0.25)',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.82rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <Sparkles size={13} color="var(--accent-primary)" />
+                <span>{term}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 3. Recently Searched / Played Songs Grid */}
+        {hasRecentTracks && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <History size={18} color="var(--accent-primary)" />
+                <h3 className="section-header" style={{ fontSize: '1.15rem', margin: 0 }}>
+                  Recently Searched Songs
+                </h3>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '4px' }}>
+                  ({recentSearchedTracks.length})
+                </span>
+              </div>
+              <button
+                onClick={clearRecentSearchedTracks}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontSize: '0.75rem',
+                  color: 'var(--text-secondary)',
+                  padding: '4px 10px',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                  cursor: 'pointer',
+                  border: '1px solid var(--border-color)',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <Trash2 size={13} />
+                <span>Clear Songs</span>
+              </button>
+            </div>
+
+            <div className="cards-grid">
+              {recentSearchedTracks.map((track) => {
+                const isCurrent = currentTrack?.id === track.id;
+                return (
+                  <div 
+                    key={`rec-track-${track.id}`} 
+                    className={`album-card ${isCurrent ? 'active-playing' : ''}`}
+                    onClick={() => handlePlayTrack(track, [track], 0, 'Recent Searches')}
+                    style={{ position: 'relative' }}
+                  >
+                    <div 
+                      className="album-art" 
+                      style={{ overflow: 'hidden', position: 'relative', backgroundColor: 'var(--bg-main)' }}
+                    >
+                      <img 
+                        src={track.cover} 
+                        alt={track.title}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        loading="lazy"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+                        }}
+                      />
+                      {/* Add to Queue button (Top-Left) */}
+                      <AddToQueueButton track={track} variant="card-overlay" position="top-left" />
+                      
+                      {/* Remove from history button (Top-Right) */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeRecentSearchedTrack(track.id);
+                        }}
+                        title="Remove from history"
+                        style={{
+                          position: 'absolute',
+                          top: '8px',
+                          right: '8px',
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '50%',
+                          backgroundColor: 'rgba(0,0,0,0.72)',
+                          backdropFilter: 'blur(8px)',
+                          border: '1px solid rgba(255,255,255,0.15)',
+                          color: '#fff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          zIndex: 2
+                        }}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                    <div className="album-title">{track.title}</div>
+                    <div 
+                      className="album-artist"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/artist/${encodeURIComponent(track.artist)}${track.artistId ? `?artistId=${encodeURIComponent(track.artistId)}` : (track.channelId ? `?channelId=${encodeURIComponent(track.channelId)}` : '')}`);
+                      }}
+                    >
+                      {track.artist}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -134,7 +446,32 @@ export function Discover() {
   };
 
   return (
-    <div style={{ paddingBottom: '32px' }}>
+    <div style={{ paddingBottom: '32px', position: 'relative' }}>
+      {/* Live Search Sync Progress Bar */}
+      {isSearching && (
+        <div style={{
+          height: '3px',
+          width: '100%',
+          backgroundColor: 'rgba(255,255,255,0.05)',
+          overflow: 'hidden',
+          marginBottom: '20px',
+          borderRadius: '3px',
+          position: 'sticky',
+          top: 0,
+          zIndex: 10
+        }}>
+          <div 
+            className="search-progress-bar"
+            style={{
+              height: '100%',
+              width: '35%',
+              backgroundColor: 'var(--accent-primary)',
+              borderRadius: '3px'
+            }}
+          />
+        </div>
+      )}
+
       {/* Top Section: Top Result Artist Card (Left) + Top Songs (Right) */}
       {artistProfile && searchCategory !== 'playlists' && (
         <div className="top-result-container">
@@ -152,14 +489,23 @@ export function Discover() {
                 width: '120px',
                 height: '120px',
                 borderRadius: '50%',
-                backgroundImage: `url(${artistProfile.cover})`,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
+                overflow: 'hidden',
                 marginBottom: '20px',
                 boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-                border: '2px solid var(--border-color)'
+                border: '2px solid var(--border-color)',
+                backgroundColor: 'var(--bg-main)',
+                flexShrink: 0
               }}
-            />
+            >
+              <img 
+                src={artistProfile.cover} 
+                alt={artistProfile.name}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+                }}
+              />
+            </div>
 
             <h2 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '8px' }}>{artistProfile.name}</h2>
             
@@ -188,36 +534,63 @@ export function Discover() {
             </h3>
             {artistProfile.topTracks.length > 0 ? (
               <div className="top-tracks-list">
-                {artistProfile.topTracks.slice(0, 5).map((track: Track, idx: number) => (
-                  <div 
-                    key={track.id}
-                    className={`track-row ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
-                    onClick={() => {
-                      setQueue([track], 0, `${track.artist} Mix`);
-                      setIsPlaying(true);
-                    }}
-                  >
-                    <span className="track-row-index">{idx + 1}</span>
+                {artistProfile.topTracks.slice(0, 5).map((track: Track, idx: number) => {
+                  const isFav = favorites.some(f => f.id === track.id);
+                  return (
                     <div 
-                      className="track-row-cover" 
-                      style={{ backgroundImage: `url(${track.cover})` }} 
-                    />
-                    <div className="track-row-info">
-                      <div className="track-row-title">{track.title}</div>
+                      key={track.id}
+                      className={`track-row ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
+                      onClick={() => handlePlayTrack(track, [track], 0, `${track.title} Mix`)}
+                    >
+                      <span className="track-row-index">{idx + 1}</span>
                       <div 
-                        className="track-row-artist"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/artist/${encodeURIComponent(track.artist)}${track.artistId ? `?artistId=${encodeURIComponent(track.artistId)}` : (track.channelId ? `?channelId=${encodeURIComponent(track.channelId)}` : '')}`);
-                        }}
+                        className="track-row-cover" 
+                        style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)', flexShrink: 0 }}
                       >
-                        {track.artist}
+                        <img 
+                          src={track.cover} 
+                          alt={track.title} 
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+                          }}
+                        />
+                      </div>
+                      <div className="track-row-info">
+                        <div className="track-row-title">{track.title}</div>
+                        <div 
+                          className="track-row-artist"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/artist/${encodeURIComponent(track.artist)}${track.artistId ? `?artistId=${encodeURIComponent(track.artistId)}` : (track.channelId ? `?channelId=${encodeURIComponent(track.channelId)}` : '')}`);
+                          }}
+                        >
+                          {track.artist}
+                        </div>
+                      </div>
+                      <div className="track-row-album">{track.album || 'Single'}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} onClick={(e) => e.stopPropagation()}>
+                        <button 
+                          onClick={() => toggleFavorite(track)}
+                          title={isFav ? "Favorited" : "Favorite"}
+                          style={{ 
+                            background: 'none', 
+                            border: 'none', 
+                            cursor: 'pointer', 
+                            color: isFav ? 'var(--accent-primary)' : 'rgba(255,255,255,0.3)',
+                            padding: '4px',
+                            display: 'flex',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <Heart size={15} fill={isFav ? "currentColor" : "none"} />
+                        </button>
+                        <AddToQueueButton track={track} variant="row-btn" />
+                        <span className="track-row-duration" style={{ minWidth: '38px', textAlign: 'right' }}>{formatTime(track.duration)}</span>
                       </div>
                     </div>
-                    <div className="track-row-album">{track.album || 'Single'}</div>
-                    <span className="track-row-duration">{formatTime(track.duration)}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No top tracks found.</div>
@@ -238,15 +611,23 @@ export function Discover() {
               <div 
                 key={`recent-${track.id}`}
                 className={`album-card ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
-                onClick={() => {
-                  setQueue([track], 0, `${track.artist} Mix`);
-                  setIsPlaying(true);
-                }}
+                onClick={() => handlePlayTrack(track, [track], 0, `${track.title} Mix`)}
               >
                 <div 
                   className="album-art" 
-                  style={{ backgroundImage: `url(${track.cover})` }}
-                />
+                  style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)', position: 'relative' }}
+                >
+                  <img 
+                    src={track.cover} 
+                    alt={track.title} 
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    loading="lazy"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+                    }}
+                  />
+                  <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+                </div>
                 <div className="album-title">{track.title}</div>
                 <div 
                   className="album-artist"
@@ -287,7 +668,7 @@ export function Discover() {
         <div>
           {isLoadingPlaylists ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-secondary)', padding: '40px 0', justifyContent: 'center' }}>
-              <Loader2 className="spinning" size={24} color="var(--accent-primary)" />
+              <Loader2 className="animate-spin" size={24} color="var(--accent-primary)" />
               <span>Finding public & community playlists related to "{searchQuery}"...</span>
             </div>
           ) : publicPlaylists.length > 0 ? (
@@ -303,10 +684,21 @@ export function Discover() {
                   <div 
                     className="album-art" 
                     style={{ 
-                      backgroundImage: `url(${pl.cover})`,
-                      position: 'relative'
+                      overflow: 'hidden',
+                      position: 'relative',
+                      backgroundColor: 'var(--bg-main)'
                     }}
                   >
+                    <img 
+                      src={pl.cover} 
+                      alt={pl.name}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      loading="lazy"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80';
+                      }}
+                    />
+
                     {/* Source Tag Badge */}
                     <span 
                       className={`source-badge ${pl.source}`}
@@ -393,20 +785,22 @@ export function Discover() {
               <div 
                 key={track.id} 
                 className={`album-card ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
-                onClick={() => {
-                  setQueue([track], 0, `${track.artist} Mix`);
-                  setIsPlaying(true);
-                }}
+                onClick={() => handlePlayTrack(track, [track], 0, `${track.title} Mix`)}
               >
                 <div 
                   className="album-art" 
-                  style={{ backgroundImage: `url(${track.cover})` }}
+                  style={{ overflow: 'hidden', position: 'relative', backgroundColor: 'var(--bg-main)' }}
                 >
-                  {track.source && (
-                    <span className={`source-badge ${track.source}`}>
-                      {track.source}
-                    </span>
-                  )}
+                  <img 
+                    src={track.cover} 
+                    alt={track.title}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    loading="lazy"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+                    }}
+                  />
+                  <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
                 </div>
                 <div className="album-title">{track.title}</div>
                 <div 

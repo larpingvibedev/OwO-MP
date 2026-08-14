@@ -19,6 +19,7 @@ export interface Playlist {
   name: string;
   cover?: string;
   tracks: Track[];
+  createdAt?: number;
 }
 
 export interface PublicPlaylist {
@@ -73,6 +74,21 @@ export interface SimilarArtist {
   artistId?: string | number;
   channelId?: string;
   cover: string;
+}
+
+export interface SuggestionEntity {
+  type: 'artist' | 'song' | 'album' | 'playlist';
+  title: string;
+  subtitle: string;
+  thumbnail?: string;
+  browseId?: string;
+  videoId?: string;
+  artist?: string;
+}
+
+export interface SearchSuggestionsResult {
+  textSuggestions: string[];
+  entitySuggestions: SuggestionEntity[];
 }
 
 export type ViewType = 'dashboard' | 'discover' | 'albums' | 'playlists' | 'downloads' | 'settings';

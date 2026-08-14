@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { 
+  getDirectYouTubeId,
   resolveYouTubeVideoId, 
   resolveYouTubeMusicATV,
   getFallbackVideoId, 
@@ -97,7 +98,7 @@ export const AudioPlayer = () => {
                   } catch (e) {}
                 }
               } else {
-                nextTrack();
+                usePlayerStore.getState().nextTrack();
               }
             }
             // 1 = PLAYING
@@ -124,7 +125,7 @@ export const AudioPlayer = () => {
               }
             }
             // If error is unrecoverable, smoothly advance to next track
-            nextTrack();
+            usePlayerStore.getState().nextTrack();
           }
         }
       });
@@ -261,26 +262,26 @@ export const AudioPlayer = () => {
         audioRef.current.pause();
       }
 
-      // YouTube stream resolution (Prioritize 100% Pure Label/Distributor ATV)
-      let videoId: string | null = null;
-      try {
-        const atvId = await resolveYouTubeMusicATV(currentTrack.artist, currentTrack.title);
-        if (atvId) {
-          videoId = atvId;
-        }
-      } catch (e) {}
+      // 1. Direct YouTube Video ID (If track already comes from YouTube search/suggestions/profile)
+      let videoId: string | null = getDirectYouTubeId(currentTrack);
+
+      // 2. If no direct videoId (e.g. iTunes or imported track), resolve via ATV & scoring search
+      if (!videoId) {
+        try {
+          const atvId = await resolveYouTubeMusicATV(currentTrack.artist, currentTrack.title);
+          if (atvId) {
+            videoId = atvId;
+          }
+        } catch (e) {}
+      }
 
       if (!videoId) {
-        if (currentTrack.id.startsWith('piped-')) {
-          videoId = currentTrack.id.replace('piped-', '');
-        } else {
-          videoId = await resolveYouTubeVideoId(
-            currentTrack.artist, 
-            currentTrack.title, 
-            currentTrack.albumArtist, 
-            currentTrack.duration
-          );
-        }
+        videoId = await resolveYouTubeVideoId(
+          currentTrack.artist, 
+          currentTrack.title, 
+          currentTrack.albumArtist, 
+          currentTrack.duration
+        );
       }
 
       if (isCancelled) return;
@@ -312,7 +313,7 @@ export const AudioPlayer = () => {
         if (next2) prefetchTrackVideoId(next2);
       }
 
-      // 7. Background Auto-Mix Pre-Generation (Debounced 1s so it doesn't compete with active playback)
+      // 7. Background Auto-Mix Pre-Generation (Instant 200ms so queue always has upcoming stream)
       setTimeout(() => {
         if (isCancelled) return;
         const queuedIds = new Set(activeQueue.map(t => t.id));
@@ -325,7 +326,7 @@ export const AudioPlayer = () => {
             }
           })
           .catch(() => {});
-      }, 1000);
+      }, 200);
     }
 
     loadTrack();
@@ -377,7 +378,7 @@ export const AudioPlayer = () => {
                 audioRef.current.play().catch(console.warn);
               }
             } else {
-              nextTrack();
+              usePlayerStore.getState().nextTrack();
             }
           }
         }}

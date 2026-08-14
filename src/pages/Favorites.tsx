@@ -1,5 +1,6 @@
 import { usePlayerStore } from '../store/usePlayerStore';
 import { Play, Heart, Trash2 } from 'lucide-react';
+import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import type { Track } from '../types';
 
 function formatTime(seconds: number): string {
@@ -63,18 +64,17 @@ export function Favorites() {
                 <div className="track-row-title">{track.title}</div>
                 <div className="track-row-artist">{track.artist}</div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }} onClick={(e) => e.stopPropagation()}>
+                <AddToQueueButton track={track} variant="row-btn" />
                 <button 
                   className="secondary-btn" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleFavorite(track);
-                  }}
+                  onClick={() => toggleFavorite(track)}
                   title="Remove from favorites"
+                  style={{ padding: '6px' }}
                 >
-                  <Trash2 size={16} color="var(--text-secondary)" />
+                  <Trash2 size={15} color="var(--text-secondary)" />
                 </button>
-                <span className="track-row-duration">{formatTime(track.duration)}</span>
+                <span className="track-row-duration" style={{ minWidth: '38px', textAlign: 'right' }}>{formatTime(track.duration)}</span>
               </div>
             </div>
           ))}

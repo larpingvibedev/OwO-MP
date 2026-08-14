@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Carousel } from '../components/Carousel';
 import { SpeedDialGrid } from '../components/SpeedDialGrid';
+import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import type { Track, PublicPlaylist } from '../types';
 import { 
   fetchArtistDeepTracks, 
@@ -327,7 +328,7 @@ export function Dashboard() {
           tracks={defaultSpeedDial} 
           currentTrack={currentTrack}
           onTrackClick={(track) => {
-            setQueue([track], 0, `${track.artist} Mix`);
+            setQueue([track], 0, `${track.title} Mix`);
             setIsPlaying(true);
           }}
           onArtistClick={(artistName) => {
@@ -384,7 +385,7 @@ export function Dashboard() {
                 {/* Image Cover */}
                 <div 
                   onClick={() => {
-                    setQueue([track], 0, `${track.artist} Mix`);
+                    setQueue([track], 0, `${track.title} Mix`);
                     setIsPlaying(true);
                   }}
                   style={{
@@ -418,7 +419,7 @@ export function Dashboard() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div 
                     onClick={() => {
-                      setQueue([track], 0, `${track.artist} Mix`);
+                      setQueue([track], 0, `${track.title} Mix`);
                       setIsPlaying(true);
                     }}
                     style={{ 
@@ -506,14 +507,16 @@ export function Dashboard() {
               key={`rec-${track.id}`}
               className="album-card"
               onClick={() => {
-                setQueue([track], 0, `${track.artist} Mix`);
+                setQueue([track], 0, `${track.title} Mix`);
                 setIsPlaying(true);
               }}
             >
               <div 
                 className="album-art" 
-                style={{ backgroundImage: `url(${track.cover})` }}
-              />
+                style={{ backgroundImage: `url(${track.cover})`, position: 'relative' }}
+              >
+                <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+              </div>
               <div className="album-title">{track.title}</div>
               <div 
                 className="album-artist"
@@ -541,14 +544,16 @@ export function Dashboard() {
               key={`cover-${track.id}`}
               className="album-card"
               onClick={() => {
-                setQueue([track], 0, `${track.artist} Mix`);
+                setQueue([track], 0, `${track.title} Mix`);
                 setIsPlaying(true);
               }}
             >
               <div 
                 className="album-art" 
-                style={{ backgroundImage: `url(${track.cover})` }}
-              />
+                style={{ backgroundImage: `url(${track.cover})`, position: 'relative' }}
+              >
+                <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+              </div>
               <div className="album-title">{track.title}</div>
               <div 
                 className="album-artist"
@@ -663,14 +668,16 @@ export function Dashboard() {
               key={`forgotten-${track.id}`}
               className="album-card"
               onClick={() => {
-                setQueue([track], 0, `${track.artist} Mix`);
+                setQueue([track], 0, `${track.title} Mix`);
                 setIsPlaying(true);
               }}
             >
               <div 
                 className="album-art" 
-                style={{ backgroundImage: `url(${track.cover})` }}
-              />
+                style={{ backgroundImage: `url(${track.cover})`, position: 'relative' }}
+              >
+                <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+              </div>
               <div className="album-title">{track.title}</div>
               <div 
                 className="album-artist"

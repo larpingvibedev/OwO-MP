@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchArtistProfile } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
-import { Play, CheckCircle, Loader2 } from 'lucide-react';
+import { Play, CheckCircle, Loader2, Heart } from 'lucide-react';
+import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import type { ArtistProfile, Track } from '../types';
 
 function formatTime(seconds: number): string {
@@ -20,7 +21,7 @@ export function Artist() {
   const navigate = useNavigate();
   const [profile, setProfile] = useState<ArtistProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const { currentTrack, setQueue, setIsPlaying } = usePlayerStore();
+  const { currentTrack, setQueue, setIsPlaying, favorites, toggleFavorite } = usePlayerStore();
 
   useEffect(() => {
     if (artistName) {
@@ -122,35 +123,56 @@ export function Artist() {
           <>
             <h3 className="section-header" style={{ marginTop: '24px', marginBottom: '16px' }}>Top Songs</h3>
             <div className="top-tracks-list">
-              {profile.topTracks.map((track, idx) => (
-                <div 
-                  key={track.id} 
-                  className={`track-row ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
-                  onClick={() => handlePlayTrack(track)}
-                >
-                  <span className="track-row-index">{idx + 1}</span>
+              {profile.topTracks.map((track, idx) => {
+                const isFav = favorites.some(f => f.id === track.id);
+                return (
                   <div 
-                    className="track-row-cover" 
-                    style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)' }} 
+                    key={track.id} 
+                    className={`track-row ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
+                    onClick={() => handlePlayTrack(track)}
                   >
-                    <img 
-                      src={track.cover} 
-                      alt={track.title} 
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                      loading="lazy"
-                      onError={(e) => {
-                        if (profile.cover) (e.currentTarget as HTMLImageElement).src = profile.cover;
-                      }}
-                    />
+                    <span className="track-row-index">{idx + 1}</span>
+                    <div 
+                      className="track-row-cover" 
+                      style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)' }} 
+                    >
+                      <img 
+                        src={track.cover} 
+                        alt={track.title} 
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                        loading="lazy"
+                        onError={(e) => {
+                          if (profile.cover) (e.currentTarget as HTMLImageElement).src = profile.cover;
+                        }}
+                      />
+                    </div>
+                    <div className="track-row-info">
+                      <div className="track-row-title">{track.title}</div>
+                      <div className="track-row-artist">{track.artist}</div>
+                    </div>
+                    <div className="track-row-album">{track.album || 'Single'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} onClick={(e) => e.stopPropagation()}>
+                      <button 
+                        onClick={() => toggleFavorite(track)}
+                        title={isFav ? "Favorited" : "Favorite"}
+                        style={{ 
+                          background: 'none', 
+                          border: 'none', 
+                          cursor: 'pointer', 
+                          color: isFav ? 'var(--accent-primary)' : 'rgba(255,255,255,0.3)',
+                          padding: '4px',
+                          display: 'flex',
+                          alignItems: 'center'
+                        }}
+                      >
+                        <Heart size={15} fill={isFav ? "currentColor" : "none"} />
+                      </button>
+                      <AddToQueueButton track={track} variant="row-btn" />
+                      <span className="track-row-duration" style={{ minWidth: '38px', textAlign: 'right' }}>{formatTime(track.duration)}</span>
+                    </div>
                   </div>
-                  <div className="track-row-info">
-                    <div className="track-row-title">{track.title}</div>
-                    <div className="track-row-artist">{track.artist}</div>
-                  </div>
-                  <div className="track-row-album">{track.album || 'Single'}</div>
-                  <span className="track-row-duration">{formatTime(track.duration)}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}

@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
-import { Search, ChevronLeft, ChevronRight, Loader2, Terminal, Sparkles, Palette } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Search, ChevronLeft, ChevronRight, Loader2, Terminal, Sparkles, Palette, X } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
-import { searchFreeMusic, fetchArtistProfile } from '../../services/musicSearch';
+import { searchFreeMusic, fetchArtistProfile, getSearchSuggestions } from '../../services/musicSearch';
+import { SearchDropdown } from '../search/SearchDropdown';
+import type { SuggestionEntity, Track } from '../../types';
 
 export function TopBar() {
   const navigate = useNavigate();
@@ -14,6 +16,11 @@ export function TopBar() {
     setArtistProfile,
     setIsSearching, 
     isSearching,
+    recentSearchQueries,
+    addRecentSearchQuery,
+    removeRecentSearchQuery,
+    addRecentSearchedTrack,
+    setCurrentTrack,
     theme,
     rustyColor,
     setTheme,
@@ -22,13 +29,42 @@ export function TopBar() {
 
   // Handle local query state to avoid lagging the input
   const [localQuery, setLocalQuery] = useState(searchQuery);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [textSuggestions, setTextSuggestions] = useState<string[]>([]);
+  const [entitySuggestions, setEntitySuggestions] = useState<SuggestionEntity[]>([]);
+  const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
+
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  // Sync when searchQuery is updated from external (e.g. clicking a recent search chip)
+  useEffect(() => {
+    setLocalQuery(searchQuery);
+  }, [searchQuery]);
+
+  // Click outside to close dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setLocalQuery(val);
-    if (val.trim() && location.pathname !== '/discover') {
-      navigate('/discover');
-    }
+    setIsDropdownOpen(true);
+  };
+
+  const handleClear = () => {
+    setLocalQuery('');
+    setSearchQuery('');
+    setSearchResults([]);
+    setArtistProfile(null);
+    setTextSuggestions([]);
+    setEntitySuggestions([]);
   };
 
   const handleToggleTheme = () => {
@@ -42,29 +78,124 @@ export function TopBar() {
     setRustyColor(colors[nextIdx]);
   };
 
+  // Live Suggestions Fetcher (Snappy ~100ms debounce)
   useEffect(() => {
     if (!localQuery.trim()) {
-      setSearchResults([]);
-      setArtistProfile(null);
-      setIsSearching(false);
+      setTextSuggestions([]);
+      setEntitySuggestions([]);
+      setIsSuggestionsLoading(false);
       return;
     }
 
+    setIsSuggestionsLoading(true);
+    const controller = new AbortController();
+
+    const sugTimer = setTimeout(async () => {
+      try {
+        const { textSuggestions: ts, entitySuggestions: es } = await getSearchSuggestions(localQuery, controller.signal);
+        if (!controller.signal.aborted) {
+          setTextSuggestions(ts);
+          setEntitySuggestions(es);
+          setIsSuggestionsLoading(false);
+        }
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          setIsSuggestionsLoading(false);
+        }
+      }
+    }, 100);
+
+    return () => {
+      clearTimeout(sugTimer);
+      controller.abort();
+    };
+  }, [localQuery]);
+
+  // Full Search Submitter (Runs search on Enter or selection, keeping results persistent while typing)
+  const handleSearchSubmit = async (queryToSearch?: string) => {
+    const q = (queryToSearch !== undefined ? queryToSearch : localQuery).trim();
+    if (!q) {
+      handleClear();
+      return;
+    }
+
+    setIsDropdownOpen(false);
+    setLocalQuery(q);
+    setSearchQuery(q);
+    addRecentSearchQuery(q);
     setIsSearching(true);
-    const timer = setTimeout(async () => {
-      setSearchQuery(localQuery);
-      const results = await searchFreeMusic(localQuery);
-      const qClean = localQuery.trim().toLowerCase();
-      const topResultChannelId = results.find(t => (t.artist.toLowerCase() === qClean || t.albumArtist?.toLowerCase() === qClean) && t.channelId)?.channelId || results[0]?.channelId;
-      const profile = await fetchArtistProfile(localQuery, topResultChannelId);
 
-      setSearchResults(results);
+    if (location.pathname !== '/discover') {
+      navigate('/discover');
+    }
+
+    try {
+      // 1. Run ultra-fast hybrid search (< 350ms)
+      const { tracks, profileCandidate } = await searchFreeMusic(q);
+      setSearchResults(tracks);
+
+      // 2. Resolve artist profile in parallel
+      const qClean = q.toLowerCase();
+      const topResultChannelId = profileCandidate?.channelId ||
+        tracks.find(t => (t.artist.toLowerCase() === qClean || t.albumArtist?.toLowerCase() === qClean) && t.channelId)?.channelId ||
+        tracks[0]?.channelId;
+
+      const profile = await fetchArtistProfile(profileCandidate?.name || q, topResultChannelId);
       setArtistProfile(profile);
+    } catch (err) {
+      console.warn('Search submit warning:', err);
+    } finally {
       setIsSearching(false);
-    }, 400);
+    }
+  };
 
-    return () => clearTimeout(timer);
-  }, [localQuery, setSearchQuery, setSearchResults, setArtistProfile, setIsSearching]);
+  // Sync external searchQuery changes (e.g. clicking chip in Discover)
+  const lastExecutedQueryRef = useRef<string>('');
+  useEffect(() => {
+    if (searchQuery && searchQuery !== lastExecutedQueryRef.current) {
+      lastExecutedQueryRef.current = searchQuery;
+      setLocalQuery(searchQuery);
+      handleSearchSubmit(searchQuery);
+    }
+  }, [searchQuery]);
+
+  // Dropdown query selection
+  const handleSelectQuery = (query: string) => {
+    handleSearchSubmit(query);
+  };
+
+  // Dropdown entity selection (Direct play / navigate)
+  const handleSelectEntity = (entity: SuggestionEntity) => {
+    setIsDropdownOpen(false);
+    addRecentSearchQuery(entity.title);
+
+    if (entity.type === 'artist') {
+      const channelParam = entity.browseId ? `?channelId=${encodeURIComponent(entity.browseId)}` : '';
+      navigate(`/artist/${encodeURIComponent(entity.title)}${channelParam}`);
+    } else if (entity.type === 'song') {
+      const track: Track = {
+        id: entity.videoId || `sug-${Date.now()}`,
+        title: entity.title,
+        artist: entity.artist || entity.subtitle.split('•')?.[1]?.trim() || '',
+        duration: 0,
+        cover: entity.thumbnail || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+        streamUrl: entity.videoId ? `https://www.youtube.com/watch?v=${entity.videoId}` : ''
+      };
+      setCurrentTrack(track);
+      addRecentSearchedTrack(track);
+    } else {
+      handleSearchSubmit(entity.title);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleSearchSubmit();
+    } else if (e.key === 'Escape') {
+      setIsDropdownOpen(false);
+    }
+  };
 
   return (
     <header className="top-bar">
@@ -77,8 +208,12 @@ export function TopBar() {
         </button>
       </div>
       
-      <div className="search-container">
-        {isSearching ? (
+      <div 
+        ref={searchContainerRef} 
+        className="search-container" 
+        style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+      >
+        {isSearching || isSuggestionsLoading ? (
           <Loader2 size={18} className="search-icon animate-spin" style={{ color: 'var(--accent-primary)' }} />
         ) : (
           <Search size={18} className="search-icon" color="var(--text-secondary)" />
@@ -89,6 +224,44 @@ export function TopBar() {
           placeholder="Search tracks, albums, artists..." 
           value={localQuery}
           onChange={handleInputChange}
+          onFocus={() => setIsDropdownOpen(true)}
+          onKeyDown={handleKeyDown}
+          style={{ paddingRight: (localQuery || searchQuery) ? '36px' : '16px' }}
+        />
+        {(localQuery || searchQuery) && (
+          <button
+            onClick={handleClear}
+            title="Clear search"
+            style={{
+              position: 'absolute',
+              right: '12px',
+              color: 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '2px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              transition: 'all 0.2s',
+              cursor: 'pointer'
+            }}
+          >
+            <X size={14} />
+          </button>
+        )}
+
+        {/* YouTube Music Style Search Dropdown Overlay */}
+        <SearchDropdown
+          isOpen={isDropdownOpen}
+          query={localQuery}
+          recentQueries={recentSearchQueries || []}
+          textSuggestions={textSuggestions}
+          entitySuggestions={entitySuggestions}
+          isLoading={isSuggestionsLoading}
+          onSelectQuery={handleSelectQuery}
+          onRemoveRecentQuery={removeRecentSearchQuery}
+          onSelectEntity={handleSelectEntity}
+          onClose={() => setIsDropdownOpen(false)}
         />
       </div>
 

@@ -358,6 +358,7 @@
   background-color: var(--bg-main);
   box-shadow: 0 8px 24px rgba(0,0,0,0.3);
   overflow: hidden;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -371,6 +372,80 @@
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* Card Quick Add to Queue Button */
+.card-queue-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 5;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.album-card:hover .card-queue-btn,
+.card-queue-btn.added {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.card-queue-btn:hover {
+  transform: scale(1.12) !important;
+  background-color: rgba(0, 0, 0, 0.92);
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.card-queue-btn.added {
+  background-color: var(--accent-primary);
+  color: #000;
+  border-color: var(--accent-primary);
+}
+
+/* Global Floating Toast */
+.global-toast-container {
+  position: fixed;
+  bottom: 96px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background-color: rgba(18, 18, 18, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65);
+  padding: 10px 22px;
+  border-radius: 30px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 600;
+  z-index: 9999;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.global-toast-container.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
 }
 
 .album-card .album-title {
@@ -659,3 +734,253 @@
   background-color: var(--bg-card-hover);
   transform: translateY(-2px);
 }
+
+@keyframes searchPulse {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(100%); }
+  100% { transform: translateX(300%); }
+}
+
+.search-progress-bar {
+  animation: searchPulse 1.2s infinite ease-in-out;
+}
+
+/* Search Dropdown Overlay */
+.search-dropdown-overlay {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 100%;
+  min-width: 480px;
+  max-width: 600px;
+  background: rgba(18, 18, 20, 0.98);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  z-index: 1000;
+  overflow: hidden;
+  animation: dropdownFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.search-dropdown-scroll {
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.search-dropdown-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.search-dropdown-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.search-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  user-select: none;
+}
+
+.search-dropdown-item:hover,
+.search-dropdown-item.active {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.search-item-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-item-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.search-history-item .search-item-icon {
+  color: #a0a0a0;
+}
+
+.search-text-suggestion .search-item-icon {
+  color: #8e8e93;
+}
+
+.search-item-text {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #f1f1f1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-item-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 50%;
+  color: #717171;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.search-item-delete-btn:hover {
+  color: #ff5555;
+  background-color: rgba(255, 85, 85, 0.15);
+}
+
+/* Entity suggestions */
+.search-dropdown-entities {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.search-entity-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+}
+
+.search-entity-thumb-wrapper {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.search-entity-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background-color: #242424;
+}
+
+.search-entity-thumb.artist-avatar {
+  border-radius: 50%;
+}
+
+.search-entity-thumb.track-art {
+  border-radius: 6px;
+}
+
+.search-entity-play-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  color: #fff;
+}
+
+.search-entity-item:hover .search-entity-play-overlay {
+  opacity: 1;
+}
+
+.search-entity-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.search-entity-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-entity-subtitle {
+  font-size: 0.8rem;
+  color: #aaa;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entity-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #ccc;
+  text-transform: uppercase;
+}
+
+.artist-badge {
+  background-color: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+}
+
+.playlist-badge {
+  background-color: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+
+.album-badge {
+  background-color: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.subtitle-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-dropdown-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.search-dropdown-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--accent-primary, #1db954);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+
