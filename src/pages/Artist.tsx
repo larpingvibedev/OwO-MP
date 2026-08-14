@@ -164,19 +164,19 @@ export function Artist() {
                 <div 
                   key={album.id} 
                   className="album-card"
-                  onClick={() => navigate(`/album/${album.id}?name=${encodeURIComponent(album.name)}&artist=${encodeURIComponent(album.artist)}&cover=${encodeURIComponent(album.cover || profile.cover || '')}`)}
+                  onClick={() => navigate(`/album/${album.id}?name=${encodeURIComponent(album.name)}&artist=${encodeURIComponent(album.artist)}&cover=${encodeURIComponent(album.cover || '')}`)}
                 >
                   <div 
                     className="album-art"
                     style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)' }}
                   >
                     <img 
-                      src={album.cover || profile.cover} 
+                      src={album.cover || 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80'} 
                       alt={album.name} 
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
                       loading="lazy"
                       onError={(e) => {
-                        if (profile.cover) (e.currentTarget as HTMLImageElement).src = profile.cover;
+                        (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80';
                       }}
                     />
                   </div>
@@ -197,19 +197,19 @@ export function Artist() {
                 <div 
                   key={single.id} 
                   className="album-card"
-                  onClick={() => navigate(`/album/${single.id}?name=${encodeURIComponent(single.name)}&artist=${encodeURIComponent(single.artist)}&cover=${encodeURIComponent(single.cover || profile.cover || '')}`)}
+                  onClick={() => navigate(`/album/${single.id}?name=${encodeURIComponent(single.name)}&artist=${encodeURIComponent(single.artist)}&cover=${encodeURIComponent(single.cover || '')}`)}
                 >
                   <div 
                     className="album-art"
                     style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)' }}
                   >
                     <img 
-                      src={single.cover || profile.cover} 
+                      src={single.cover || 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80'} 
                       alt={single.name} 
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
                       loading="lazy"
                       onError={(e) => {
-                        if (profile.cover) (e.currentTarget as HTMLImageElement).src = profile.cover;
+                        (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80';
                       }}
                     />
                   </div>

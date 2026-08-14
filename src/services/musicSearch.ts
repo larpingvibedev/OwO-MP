@@ -390,57 +390,57 @@ export async function fetchArtistProfileFromYTM(
 
   let targetBrowseId: string | null = null;
 
-  // 1. Search YouTube Music directly for the official Artist profile of artistQuery
-  for (const base of endpoints) {
-    try {
-      const searchRes = await fetch(`${base}/search`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
-          query: artistQuery
-        })
-      });
+  // 1. Direct channelId priority: If channelId is provided or artistQuery is a browse ID, use it directly!
+  if (channelId && (channelId.startsWith('UC') || channelId.startsWith('FEmusic_artist_'))) {
+    targetBrowseId = channelId;
+  } else if (artistQuery.startsWith('UC') || artistQuery.startsWith('FEmusic_artist_')) {
+    targetBrowseId = artistQuery;
+  }
 
-      if (searchRes.ok) {
-        const searchData = await searchRes.json();
-        const sections = searchData?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
-        for (const sec of sections) {
-          const items = sec?.musicShelfRenderer?.contents || (sec?.musicCardShelfRenderer ? [sec.musicCardShelfRenderer] : []);
-          for (const item of items) {
-            const r = item?.musicResponsiveListItemRenderer || item;
-            const subtitle = r?.subtitle?.runs?.map((s: any) => s.text).join('') || '';
-            const bId = r?.onTap?.browseEndpoint?.browseId ||
-                        r?.title?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
-                        r?.navigationEndpoint?.browseEndpoint?.browseId ||
-                        r?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
-                        r?.buttons?.[0]?.buttonRenderer?.command?.browseEndpoint?.browseId;
-            if (subtitle.toLowerCase().includes('artist') && bId) {
-              targetBrowseId = bId;
-              break;
+  // 2. Otherwise search YouTube Music directly for the official Artist profile of artistQuery
+  if (!targetBrowseId) {
+    for (const base of endpoints) {
+      try {
+        const searchRes = await fetch(`${base}/search`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
+            query: artistQuery
+          })
+        });
+
+        if (searchRes.ok) {
+          const searchData = await searchRes.json();
+          const sections = searchData?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+          for (const sec of sections) {
+            const items = sec?.musicShelfRenderer?.contents || (sec?.musicCardShelfRenderer ? [sec.musicCardShelfRenderer] : []);
+            for (const item of items) {
+              const r = item?.musicResponsiveListItemRenderer || item;
+              const subtitle = r?.subtitle?.runs?.map((s: any) => s.text).join('') || '';
+              const bId = r?.onTap?.browseEndpoint?.browseId ||
+                          r?.title?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
+                          r?.navigationEndpoint?.browseEndpoint?.browseId ||
+                          r?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
+                          r?.buttons?.[0]?.buttonRenderer?.command?.browseEndpoint?.browseId;
+              if (subtitle.toLowerCase().includes('artist') && bId) {
+                targetBrowseId = bId;
+                break;
+              }
             }
+            if (targetBrowseId) break;
+          }
+          if (!targetBrowseId) {
+            const str = JSON.stringify(searchData);
+            const m = /"browseId":"(UC[a-zA-Z0-9_-]{22})"[^}]*?"pageType":"MUSIC_PAGE_TYPE_ARTIST"/.exec(str) ||
+                      /"pageType":"MUSIC_PAGE_TYPE_ARTIST"[^}]*?"browseId":"(UC[a-zA-Z0-9_-]{22})"/.exec(str);
+            targetBrowseId = m ? m[1] : null;
           }
           if (targetBrowseId) break;
         }
-        if (!targetBrowseId) {
-          const str = JSON.stringify(searchData);
-          const m = /"browseId":"(UC[a-zA-Z0-9_-]{22})"[^}]*?"pageType":"MUSIC_PAGE_TYPE_ARTIST"/.exec(str) ||
-                    /"pageType":"MUSIC_PAGE_TYPE_ARTIST"[^}]*?"browseId":"(UC[a-zA-Z0-9_-]{22})"/.exec(str);
-          targetBrowseId = m ? m[1] : null;
-        }
-        if (targetBrowseId) break;
-      }
-    } catch (e) {}
-  }
-
-  // 2. If search didn't find an Artist card, check if channelId was provided or query is a UC id
-  if (!targetBrowseId) {
-    if (channelId && (channelId.startsWith('UC') || channelId.startsWith('FEmusic_artist_'))) {
-      targetBrowseId = channelId;
-    } else if (artistQuery.startsWith('UC') || artistQuery.startsWith('FEmusic_artist_')) {
-      targetBrowseId = artistQuery;
+      } catch (e) {}
     }
   }
 
@@ -683,8 +683,8 @@ export async function fetchArtistProfileFromYTM(
     }
   }
 
-  // Set avatar to top track cover if available
-  if (topTracks.length > 0 && topTracks[0].cover) {
+  // If no official header avatar was found on the artist page, fallback to top track cover
+  if (!rawBanner && topTracks.length > 0 && topTracks[0].cover) {
     avatar = topTracks[0].cover;
   }
 
@@ -735,36 +735,6 @@ export async function fetchArtistProfileFromYTM(
       }
     } catch (e) {
       console.warn("Could not fetch full singles:", e);
-    }
-  }
-
-  // Extract collaborating artists from top tracks & singles to enrich the verified pool
-  const allTitles = [
-    ...topTracks.map(t => t.title),
-    ...singlesAndEPs.map(s => s.name)
-  ];
-  allTitles.forEach(title => {
-    const featMatch = /(?:feat\.?|ft\.?|featuring|with|\bx\b|\b&\b)\s+([^()\[\]]+)/i.exec(title);
-    if (featMatch) {
-      const collabPart = featMatch[1];
-      const names = collabPart.split(/[,&/]| and /i);
-      names.forEach(n => {
-        const nClean = n.trim().replace(/^[(\["']+|[)\]"']+$/g, '');
-        if (nClean && nClean.length >= 2 && nClean.toLowerCase() !== artistName.toLowerCase().trim() && !similarArtists.some(s => s.name.toLowerCase() === nClean.toLowerCase())) {
-          similarArtists.push({
-            name: nClean,
-            cover: avatar
-          });
-        }
-      });
-    }
-  });
-
-  // Dynamic rotation: gently shuffle the authentic related pool so every visit is fresh and engaging
-  if (similarArtists.length > 3) {
-    for (let i = similarArtists.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [similarArtists[i], similarArtists[j]] = [similarArtists[j], similarArtists[i]];
     }
   }
 
