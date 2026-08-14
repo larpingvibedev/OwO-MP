@@ -2123,11 +2123,12 @@ export async function fetchSimilarPlaylists(seedPlaylist: Playlist): Promise<Pub
 }
 
 /**
- * Fetches authentic Similar Artists:
- * 1. Official algorithmic peer artists from YouTube Music's InnerTube "Fans Might Also Like" cluster
+ * Fetches authentic Similar Artists for the Related tab:
+ * 1. Track-specific Related artists and Mood matches from YouTube Music's InnerTube /next and /browse endpoints
  * 2. Official collaborators and featured artists extracted directly from the artist's releases and tracks
+ * 3. Algorithmic peer artists from YouTube Music's InnerTube "Fans Might Also Like" cluster
  */
-export async function fetchSimilarArtists(artistName: string, _primaryArtistId?: string | number): Promise<SimilarArtist[]> {
+export async function fetchSimilarArtists(artistName: string, videoIdOrTrackId?: string | number): Promise<SimilarArtist[]> {
   if (!artistName || !artistName.trim()) return [];
   const clean = artistName.trim();
   const cleanLower = clean.toLowerCase();
@@ -2136,8 +2137,21 @@ export async function fetchSimilarArtists(artistName: string, _primaryArtistId?:
   const seenArtists = new Set<string>();
   seenArtists.add(cleanLower);
 
+  const endpoints = [
+    '/api/ytmusic/youtubei/v1',
+    'https://music.youtube.com/youtubei/v1'
+  ];
+
   const addArtist = (name: string, cover: string, artistId?: string | number, channelId?: string) => {
     if (!name) return;
+    
+    // Split combined names if multiple artists are grouped together
+    if (name.includes(',') || name.includes(' & ') || name.includes(' and ')) {
+      const parts = name.split(/[,&/]| and /i);
+      parts.forEach(p => addArtist(p, cover, artistId, channelId));
+      return;
+    }
+
     let trimmed = name.trim()
       .replace(/^(?:\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s+/i, '')
       .replace(/ - Topic$/i, '')
@@ -2164,16 +2178,82 @@ export async function fetchSimilarArtists(artistName: string, _primaryArtistId?:
   };
 
   try {
-    // 1. Primary Source: Official YouTube Music InnerTube Profile
+    // 1. If a track / video ID is available, query YouTube Music's track-specific Related endpoint
+    const videoId = typeof videoIdOrTrackId === 'string'
+      ? videoIdOrTrackId.replace('piped-', '').replace('yt-', '').replace('youtube-', '')
+      : undefined;
+
+    if (videoId && videoId.length === 11) {
+      for (const base of endpoints) {
+        try {
+          const nextRes = await fetch(`${base}/next`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
+              videoId: videoId
+            })
+          });
+
+          if (nextRes.ok) {
+            const nextData = await nextRes.json();
+            const tabs = nextData?.contents?.singleColumnMusicWatchNextResultsRenderer?.tabbedRenderer?.watchNextTabbedResultsRenderer?.tabs || [];
+            const relatedBrowseId = tabs[3]?.tabRenderer?.endpoint?.browseEndpoint?.browseId;
+
+            if (relatedBrowseId) {
+              const browseRes = await fetch(`${base}/browse`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
+                  browseId: relatedBrowseId
+                })
+              });
+
+              if (browseRes.ok) {
+                const browseData = await browseRes.json();
+                const sections = browseData?.contents?.sectionListRenderer?.contents || [];
+
+                sections.forEach((sec: any) => {
+                  const shelf = sec.musicCarouselShelfRenderer || sec.musicShelfRenderer;
+                  const title = (shelf?.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs?.[0]?.text || shelf?.title?.runs?.[0]?.text || '').toLowerCase();
+                  const items = shelf?.contents || [];
+
+                  // A. Track-specific Similar Artists
+                  if (title.includes('similar artist') || title.includes('artists')) {
+                    items.forEach((it: any) => {
+                      const card = it.musicTwoRowItemRenderer;
+                      const name = card?.title?.runs?.[0]?.text;
+                      const bId = card?.navigationEndpoint?.browseEndpoint?.browseId;
+                      const thumb = card?.thumbnailRenderer?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
+                      if (name) addArtist(name, thumb, undefined, bId);
+                    });
+                  }
+
+                  // B. Track-specific Mood Matches (You Might Also Like)
+                  if (title.includes('you might also like')) {
+                    items.forEach((it: any) => {
+                      const r = it.musicResponsiveListItemRenderer;
+                      const artistRun = r?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
+                      const bId = r?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId;
+                      const thumb = r?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
+                      if (artistRun) addArtist(artistRun, thumb, undefined, bId);
+                    });
+                  }
+                });
+                break;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 2. Artist Profile Source (Collaborators and Fans Might Also Like)
     const profile = await fetchArtistProfileFromYTM(clean);
 
     if (profile) {
-      // A. Add official "Fans Might Also Like" algorithmic peers
-      (profile.similarArtists || []).forEach(sim => {
-        addArtist(sim.name, sim.cover, undefined, sim.channelId);
-      });
-
-      // B. Extract collaborating artists from track titles (e.g. "feat. kid moon & Diego Ayala", "sloss & bunii", etc.)
+      // Extract collaborating artists from singles & track titles
       const allTitles = [
         ...profile.topTracks.map(t => t.title),
         ...profile.singlesAndEPs.map(s => s.name)
@@ -2192,9 +2272,14 @@ export async function fetchSimilarArtists(artistName: string, _primaryArtistId?:
           });
         }
       });
+
+      // Add profile peer artists
+      (profile.similarArtists || []).forEach(sim => {
+        addArtist(sim.name, sim.cover, undefined, sim.channelId);
+      });
     }
 
-    // 2. Secondary Source (if profile returned fewer than 6 similar artists): iTunes official collaborator search
+    // 3. Fallback to iTunes collaborator discovery if under 6 results
     if (results.length < 6) {
       try {
         const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&entity=song&limit=50`);

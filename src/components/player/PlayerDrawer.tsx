@@ -181,8 +181,8 @@ export function PlayerDrawer() {
     setIsSimilarArtistsLoading(true);
     setIsMoreFromArtistLoading(true);
 
-    // 1. Fetch Similar Artists
-    fetchSimilarArtists(currentTrack.artist)
+    // 1. Fetch Similar Artists (contextual to the current track and artist)
+    fetchSimilarArtists(currentTrack.artist, currentTrack.id)
       .then(artists => {
         if (isMounted) {
           setSimilarArtists(artists);
