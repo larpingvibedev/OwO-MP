@@ -1105,7 +1105,7 @@ export function PlayerDrawer() {
                       : (currentTrack.id.startsWith('piped-') ? currentTrack.id.replace('piped-', '') : currentTrack.id);
                     const releaseName = currentTrack.album || currentTrack.title;
                     
-                    navigate(`/album/${encodeURIComponent(releaseTargetId)}?name=${encodeURIComponent(releaseName)}&artist=${encodeURIComponent(currentTrack.artist)}`);
+                    navigate(`/album/${encodeURIComponent(releaseTargetId)}?name=${encodeURIComponent(releaseName)}&artist=${encodeURIComponent(currentTrack.artist)}&cover=${encodeURIComponent(currentTrack.cover || '')}`);
                     closePlayerDrawer();
                   }}
                   className="hero-play-btn"

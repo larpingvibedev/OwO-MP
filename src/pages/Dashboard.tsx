@@ -575,7 +575,7 @@ export function Dashboard() {
             <div 
               key={`album-${item.id}`}
               className="album-card"
-              onClick={() => navigate(`/album/${item.playlistId || item.id}?name=${encodeURIComponent(item.name || (item as any).title || '')}&artist=${encodeURIComponent(item.author || '')}`)}
+              onClick={() => navigate(`/album/${item.playlistId || item.id}?name=${encodeURIComponent(item.name || (item as any).title || '')}&artist=${encodeURIComponent(item.author || '')}&cover=${encodeURIComponent(item.cover || '')}`)}
             >
               <div className="album-art" style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)' }}>
                 <img 
@@ -604,7 +604,7 @@ export function Dashboard() {
             <div 
               key={`similar-${item.id}`}
               className="album-card"
-              onClick={() => navigate(`/album/${item.playlistId || item.id}?name=${encodeURIComponent(item.name || (item as any).title || '')}&artist=${encodeURIComponent(item.author || '')}`)}
+              onClick={() => navigate(`/album/${item.playlistId || item.id}?name=${encodeURIComponent(item.name || (item as any).title || '')}&artist=${encodeURIComponent(item.author || '')}&cover=${encodeURIComponent(item.cover || '')}`)}
             >
               <div className="album-art" style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)' }}>
                 <img 
@@ -633,7 +633,7 @@ export function Dashboard() {
             <div 
               key={`community-${item.id}`}
               className="album-card"
-              onClick={() => navigate(`/album/${item.playlistId || item.id}?name=${encodeURIComponent(item.name || (item as any).title || '')}&artist=${encodeURIComponent(item.author || '')}`)}
+              onClick={() => navigate(`/album/${item.playlistId || item.id}?name=${encodeURIComponent(item.name || (item as any).title || '')}&artist=${encodeURIComponent(item.author || '')}&cover=${encodeURIComponent(item.cover || '')}`)}
             >
               <div className="album-art" style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)' }}>
                 <img 

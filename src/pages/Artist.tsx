@@ -164,7 +164,7 @@ export function Artist() {
                 <div 
                   key={album.id} 
                   className="album-card"
-                  onClick={() => navigate(`/album/${album.id}?name=${encodeURIComponent(album.name)}&artist=${encodeURIComponent(album.artist)}`)}
+                  onClick={() => navigate(`/album/${album.id}?name=${encodeURIComponent(album.name)}&artist=${encodeURIComponent(album.artist)}&cover=${encodeURIComponent(album.cover || profile.cover || '')}`)}
                 >
                   <div 
                     className="album-art"
@@ -197,7 +197,7 @@ export function Artist() {
                 <div 
                   key={single.id} 
                   className="album-card"
-                  onClick={() => navigate(`/album/${single.id}?name=${encodeURIComponent(single.name)}&artist=${encodeURIComponent(single.artist)}`)}
+                  onClick={() => navigate(`/album/${single.id}?name=${encodeURIComponent(single.name)}&artist=${encodeURIComponent(single.artist)}&cover=${encodeURIComponent(single.cover || profile.cover || '')}`)}
                 >
                   <div 
                     className="album-art"

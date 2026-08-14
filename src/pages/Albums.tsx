@@ -36,12 +36,22 @@ export function Albums() {
             <div 
               key={album.id} 
               className="album-card"
-              onClick={() => navigate(`/album/${album.id}?name=${encodeURIComponent(album.name)}&artist=${encodeURIComponent(album.artist)}`)}
+              onClick={() => navigate(`/album/${album.id}?name=${encodeURIComponent(album.name)}&artist=${encodeURIComponent(album.artist)}&cover=${encodeURIComponent(album.cover || '')}`)}
             >
               <div 
                 className="album-art"
-                style={{ backgroundImage: `url(${album.cover})` }}
-              />
+                style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)' }}
+              >
+                <img 
+                  src={album.cover} 
+                  alt={album.name} 
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                  loading="lazy"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+                  }}
+                />
+              </div>
               <div className="album-title">{album.name}</div>
               <div className="album-artist">{album.artist}</div>
             </div>

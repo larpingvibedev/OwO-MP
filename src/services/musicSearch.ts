@@ -786,7 +786,8 @@ export async function fetchArtistProfileFromYTM(
 export async function fetchAlbumDetailsFromYTM(
   albumBrowseId: string, 
   fallbackAlbumName: string, 
-  fallbackArtistName: string
+  fallbackArtistName: string,
+  fallbackCover?: string
 ): Promise<AlbumDetail | null> {
   const endpoints = [
     '/api/ytmusic/youtubei/v1',
@@ -818,16 +819,23 @@ export async function fetchAlbumDetailsFromYTM(
   if (!data) return null;
 
   const twoCol = data?.contents?.twoColumnBrowseResultsRenderer;
-  const leftHeader = twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.musicResponsiveHeaderRenderer;
+  const secContents = twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+  const leftHeader = secContents[0]?.musicResponsiveHeaderRenderer ||
+                     data?.header?.musicDetailHeaderRenderer ||
+                     data?.header?.musicResponsiveHeaderRenderer ||
+                     twoCol?.header?.musicResponsiveHeaderRenderer;
   
   const albumTitle = leftHeader?.title?.runs?.[0]?.text || fallbackAlbumName;
   const albumSubtitle = leftHeader?.subtitle?.runs?.map((r: any) => r.text).join('') || 'Official Release';
   const artist = leftHeader?.straplineTextOne?.runs?.[0]?.text || fallbackArtistName;
-  const cover = leftHeader?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
-                'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+  const rawCover = leftHeader?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
+                   leftHeader?.thumbnailRenderer?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
+                   leftHeader?.thumbnail?.croppedSquareThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
+  const cover = cleanGoogleImageUrl(rawCover || fallbackCover || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80', 500);
 
   const trackItems = twoCol?.secondaryContents?.sectionListRenderer?.contents?.[0]?.musicShelfRenderer?.contents ||
-                    twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[1]?.musicShelfRenderer?.contents || [];
+                    twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[1]?.musicShelfRenderer?.contents ||
+                    secContents[1]?.musicShelfRenderer?.contents || [];
 
   const tracks: Track[] = [];
   trackItems.forEach((item: any) => {
@@ -838,6 +846,8 @@ export async function fetchAlbumDetailsFromYTM(
                     r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
     const durationStr = r.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text;
     const trackArtist = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((s: any) => s.text).join('') || artist;
+    const rawTrackCover = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
+    const trackCover = cleanGoogleImageUrl(rawTrackCover || cover, 500);
 
     let duration = 180;
     if (durationStr) {
@@ -854,7 +864,7 @@ export async function fetchAlbumDetailsFromYTM(
         albumArtist: artist,
         album: albumTitle,
         duration: duration,
-        cover: cover,
+        cover: trackCover,
         streamUrl: `${trackArtist} - ${trackTitle}`,
         source: 'youtube',
         category: 'song'
@@ -907,10 +917,15 @@ export async function fetchArtistProfile(
  * Fetches Official Album Detail View & Chronological Tracklist (Tracks 1..N)
  * Resolves official playlist track IDs where available.
  */
-export async function fetchAlbumDetails(albumId: string, albumName: string, artistName: string): Promise<AlbumDetail> {
+export async function fetchAlbumDetails(
+  albumId: string, 
+  albumName: string, 
+  artistName: string, 
+  fallbackCover?: string
+): Promise<AlbumDetail> {
   const cleanId = albumId.replace('album-', '').replace('album-derived-', '');
   let rawTracks: any[] = [];
-  let albumCover = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+  let albumCover = fallbackCover || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
   let releaseDateStr: string | undefined = undefined;
 
   // 1. Mix and Artist Radio Handler
@@ -923,7 +938,7 @@ export async function fetchAlbumDetails(albumId: string, albumName: string, arti
           id: albumId,
           name: `${artist} Mix`,
           artist: artist,
-          cover: profile.cover || (profile.topTracks[0]?.cover) || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+          cover: profile.cover || (profile.topTracks[0]?.cover) || fallbackCover || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
           releaseDate: 'Curated Mix',
           tracks: profile.topTracks
         };
@@ -936,7 +951,7 @@ export async function fetchAlbumDetails(albumId: string, albumName: string, arti
   // 2. YouTube Music Browse ID (MPREb_... / MPAD... / VLOLAK...)
   if (albumId.startsWith('MPREb_') || albumId.startsWith('MPAD') || albumId.startsWith('VLOLAK') || cleanId.startsWith('MPREb_')) {
     try {
-      const ytmDetail = await fetchAlbumDetailsFromYTM(cleanId, albumName, artistName);
+      const ytmDetail = await fetchAlbumDetailsFromYTM(cleanId, albumName, artistName, fallbackCover);
       if (ytmDetail && ytmDetail.tracks.length > 0) {
         return ytmDetail;
       }
