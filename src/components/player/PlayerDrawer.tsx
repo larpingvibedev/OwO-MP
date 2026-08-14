@@ -860,7 +860,7 @@ export function PlayerDrawer() {
                     <div 
                       key={`sim-art-${idx}-${artist.name}`}
                       onClick={() => {
-                        navigate(`/artist/${encodeURIComponent(artist.name)}${artist.artistId ? `?artistId=${encodeURIComponent(artist.artistId)}` : ''}`);
+                        navigate(`/artist/${encodeURIComponent(artist.name)}${artist.channelId ? `?channelId=${encodeURIComponent(artist.channelId)}` : (artist.artistId ? `?artistId=${encodeURIComponent(artist.artistId)}` : '')}`);
                         closePlayerDrawer();
                       }}
                       style={{
@@ -889,14 +889,21 @@ export function PlayerDrawer() {
                           width: '56px',
                           height: '56px',
                           borderRadius: '50%',
-                          backgroundImage: `url(${artist.cover})`,
-                          backgroundSize: 'cover',
-                          backgroundPosition: 'center',
+                          overflow: 'hidden',
+                          backgroundColor: 'var(--bg-main)',
                           marginBottom: '8px',
                           boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
                           border: '2px solid rgba(255,255,255,0.1)'
                         }}
-                      />
+                      >
+                        <img 
+                          src={artist.cover} 
+                          alt={artist.name} 
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                          loading="lazy"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80'; }}
+                        />
+                      </div>
                       <div style={{ 
                         fontWeight: 700, 
                         fontSize: '0.8rem', 

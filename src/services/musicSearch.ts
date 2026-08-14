@@ -2124,8 +2124,8 @@ export async function fetchSimilarPlaylists(seedPlaylist: Playlist): Promise<Pub
 
 /**
  * Fetches authentic Similar Artists:
- * 1. Official features and collaborators extracted directly from the artist's songs & titles
- * 2. Algorithmic peer artists that listeners of this artist also listen to (via Topic Radio clusters and iTunes)
+ * 1. Official algorithmic peer artists from YouTube Music's InnerTube "Fans Might Also Like" cluster
+ * 2. Official collaborators and featured artists extracted directly from the artist's releases and tracks
  */
 export async function fetchSimilarArtists(artistName: string, _primaryArtistId?: string | number): Promise<SimilarArtist[]> {
   if (!artistName || !artistName.trim()) return [];
@@ -2136,7 +2136,7 @@ export async function fetchSimilarArtists(artistName: string, _primaryArtistId?:
   const seenArtists = new Set<string>();
   seenArtists.add(cleanLower);
 
-  const addArtist = (name: string, cover: string, artistId?: string | number) => {
+  const addArtist = (name: string, cover: string, artistId?: string | number, channelId?: string) => {
     if (!name) return;
     let trimmed = name.trim()
       .replace(/^(?:\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s+/i, '')
@@ -2149,7 +2149,7 @@ export async function fetchSimilarArtists(artistName: string, _primaryArtistId?:
 
     // Disqualify invalid names, channel keywords, or current artist
     if (!trimmed || trimmed.length < 2 || seenArtists.has(tLower)) return;
-    if (tLower === cleanLower || tLower.includes('various') || tLower.includes('topic') || tLower.includes('records') || tLower.includes('vevo') || tLower.includes('archive') || tLower.includes('soundtrack')) return;
+    if (tLower === cleanLower || tLower.includes('various') || tLower.includes('topic') || tLower.includes('records') || tLower.includes('soundtrack') || tLower.includes('official') || tLower.includes('audio') || tLower.includes('video') || tLower.includes('visualizer') || tLower.includes('performance')) return;
     
     // Reject substring false positives like 'juliibunii' when target is 'bunii'
     if (tLower.includes(cleanLower) && !tLower.includes(' & ') && !tLower.includes(' and ') && !tLower.includes(' feat')) return;
@@ -2158,69 +2158,65 @@ export async function fetchSimilarArtists(artistName: string, _primaryArtistId?:
     results.push({
       name: trimmed,
       artistId: artistId,
-      cover: cover || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80'
+      channelId: channelId,
+      cover: cleanGoogleImageUrl(cover, 500)
     });
   };
 
   try {
-    // 1. Fetch iTunes tracks & collaborative tracks to extract official co-artist names from metadata
-    const itunesPromise = fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&entity=song&limit=100`)
-      .then(r => r.ok ? r.json() : { results: [] })
-      .catch(() => ({ results: [] }));
+    // 1. Primary Source: Official YouTube Music InnerTube Profile
+    const profile = await fetchArtistProfileFromYTM(clean);
 
-    // 2. Fetch YouTube Music Topic Search for peer artists
-    const ytPromise = fetchFastFromInvidious(`${clean} Topic`);
+    if (profile) {
+      // A. Add official "Fans Might Also Like" algorithmic peers
+      (profile.similarArtists || []).forEach(sim => {
+        addArtist(sim.name, sim.cover, undefined, sim.channelId);
+      });
 
-    const [itunesRes, ytRes] = await Promise.allSettled([
-      itunesPromise,
-      ytPromise
-    ]);
+      // B. Extract collaborating artists from track titles (e.g. "feat. kid moon & Diego Ayala", "sloss & bunii", etc.)
+      const allTitles = [
+        ...profile.topTracks.map(t => t.title),
+        ...profile.singlesAndEPs.map(s => s.name)
+      ];
 
-    // A. Extract Real Collaborators strictly from artistName metadata (NOT from track titles!)
-    if (itunesRes.status === 'fulfilled' && Array.isArray(itunesRes.value?.results)) {
-      itunesRes.value.results.forEach((item: any) => {
-        const cover = item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '300x300bb') : '';
-        const rawArtist = item.artistName || '';
-        const aLower = rawArtist.toLowerCase();
-
-        // If artist string contains delimiters like & or , or feat
-        if (aLower.includes('&') || aLower.includes(',') || aLower.includes(' feat') || aLower.includes(' ft')) {
-          const parts = rawArtist.split(/[,&/]| feat\.? | ft\.? | featuring /i);
-          parts.forEach((p: string) => {
-            const pClean = p.trim();
-            if (pClean && pClean.toLowerCase() !== cleanLower) {
-              addArtist(pClean, cover, item.artistId);
-            }
-          });
-        }
-
-        // If this is a track featuring our artist, the main artist is a collaborator (e.g. sloss on jane doe)
-        if (aLower !== cleanLower && (aLower.includes(cleanLower) || (item.trackName && item.trackName.toLowerCase().includes(cleanLower)))) {
-          const parts = rawArtist.split(/[,&/]| feat\.? | ft\.? /i);
-          parts.forEach((p: string) => {
-            const pClean = p.trim();
-            if (pClean && pClean.toLowerCase() !== cleanLower) {
-              addArtist(pClean, cover, item.artistId);
+      allTitles.forEach(title => {
+        const featMatch = /(?:feat\.?|ft\.?|featuring|with|\bx\b|\b&\b)\s+([^()\[\]]+)/i.exec(title);
+        if (featMatch) {
+          const collabPart = featMatch[1];
+          const names = collabPart.split(/[,&/]| and /i);
+          names.forEach(n => {
+            const nClean = n.trim();
+            if (nClean && nClean.toLowerCase() !== cleanLower) {
+              addArtist(nClean, profile.cover);
             }
           });
         }
       });
     }
 
-    // B. Extract Algorithmic Peer Topic Artists from YouTube Music Topic searches
-    if (ytRes.status === 'fulfilled' && Array.isArray(ytRes.value)) {
-      ytRes.value.forEach((item: any) => {
-        if (!item.author || !item.videoId) return;
-        const rawAuthor = item.author.trim();
-        const isTopic = rawAuthor.endsWith(' - Topic');
-        const authorClean = rawAuthor.replace(/ - Topic$/i, '').trim();
-        const authorLower = authorClean.toLowerCase();
+    // 2. Secondary Source (if profile returned fewer than 6 similar artists): iTunes official collaborator search
+    if (results.length < 6) {
+      try {
+        const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&entity=song&limit=50`);
+        if (itunesRes.ok) {
+          const itunesData = await itunesRes.json();
+          (itunesData.results || []).forEach((item: any) => {
+            const rawArtist = item.artistName || '';
+            const aLower = rawArtist.toLowerCase();
+            const cover = item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '300x300bb') : '';
 
-        if (authorClean && !seenArtists.has(authorLower) && isTopic && authorLower !== cleanLower) {
-          const cover = item.videoThumbnails?.find((t: any) => t.quality === 'medium')?.url || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`;
-          addArtist(authorClean, cover);
+            if (aLower.includes('&') || aLower.includes(',') || aLower.includes(' feat') || aLower.includes(' ft')) {
+              const parts = rawArtist.split(/[,&/]| feat\.? | ft\.? | featuring /i);
+              parts.forEach((p: string) => {
+                const pClean = p.trim();
+                if (pClean && pClean.toLowerCase() !== cleanLower) {
+                  addArtist(pClean, cover, item.artistId);
+                }
+              });
+            }
+          });
         }
-      });
+      } catch (e) {}
     }
   } catch (err) {
     console.warn('fetchSimilarArtists warning:', err);
