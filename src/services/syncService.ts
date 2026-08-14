@@ -32,7 +32,7 @@ class DeviceSyncManager {
     }
 
     // Initialize peer
-    const fullPeerId = `nuclear-sync-${this.roomId}-${this.deviceId}`;
+    const fullPeerId = `owo-sync-${this.roomId}-${this.deviceId}`;
     this.peer = new Peer(fullPeerId, {
       debug: 1
     });
@@ -54,7 +54,7 @@ class DeviceSyncManager {
 
   private connectToExistingPeers() {
     // Attempt connecting to host peer if we are a joining device
-    const hostPeerId = `nuclear-sync-${this.roomId}-host`;
+    const hostPeerId = `owo-sync-${this.roomId}-host`;
     if (this.peer && this.peer.id !== hostPeerId) {
       const conn = this.peer.connect(hostPeerId);
       this.setupConnection(conn);

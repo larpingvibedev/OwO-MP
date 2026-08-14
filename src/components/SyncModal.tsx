@@ -7,7 +7,7 @@ interface SyncModalProps {
 }
 
 export const SyncModal: React.FC<SyncModalProps> = ({ onClose }) => {
-  const [roomCode, setRoomCode] = useState('MY-NUCLEAR-CAR');
+  const [roomCode, setRoomCode] = useState('MY-OWO-CAR');
   const [isConnected, setIsConnected] = useState(false);
   const [copied, setCopied] = useState(false);
 

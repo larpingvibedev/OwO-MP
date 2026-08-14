@@ -1,34 +1,25 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  /* Core Colors */
-  --bg-base: #0f0f11;       /* Deepest dark for main content */
-  --bg-surface: #18181c;    /* Slightly lighter for sidebars/cards */
-  --bg-elevated: #242429;   /* For hover states and popups */
+  /* Nuclear Theme Variables */
+  --bg-main: #181818;
+  --bg-sidebar: #121212;
+  --bg-topbar: #181818;
+  --bg-player: #202020;
   
-  /* Accents (Vibrant Purple/Pink gradient) */
-  --accent-primary: #9d4edd;
-  --accent-secondary: #ff006e;
-  --accent-gradient: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-  --accent-glow: rgba(157, 78, 221, 0.4);
-
-  /* Typography */
+  --bg-card: #222222;
+  --bg-card-hover: #2a2a2a;
+  
   --text-primary: #ffffff;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+  --text-secondary: #a0a0a0;
+  
+  --accent-primary: #3498db; /* A vibrant blue, common in sleek players */
+  --accent-secondary: #2ecc71; 
+  
+  --border-color: #2c2c2c;
+  --border-light: rgba(255, 255, 255, 0.05);
 
-  /* Borders & Dividers */
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
-
-  /* Glassmorphism */
-  --glass-bg: rgba(24, 24, 28, 0.65);
-  --glass-blur: blur(16px);
-
-  /* Layout Measurements */
-  --sidebar-width: 260px;
-  --player-height: 90px;
-  --queue-width: 320px;
+  --font-main: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
 * {
@@ -38,16 +29,17 @@
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background-color: var(--bg-base);
+  font-family: var(--font-main);
+  background-color: var(--bg-main);
   color: var(--text-primary);
-  overflow: hidden; /* App-like feel, prevent body scrolling */
-  user-select: none; /* Prevent text selection like a native app */
+  overflow: hidden; /* We handle scrolling internally */
+  user-select: none;
 }
 
-/* Custom Scrollbar */
+/* Custom Scrollbar for Webkit */
 ::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -55,28 +47,20 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--bg-elevated);
+  background: var(--bg-card-hover);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--border-strong);
+  background: #444;
 }
 
-/* Base button styles */
 button {
-  background: none;
-  border: none;
-  color: inherit;
-  font: inherit;
   cursor: pointer;
-  outline: none;
-  transition: all 0.2s ease;
-}
-
-button:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: 2px;
+  border: none;
+  background: none;
+  font-family: inherit;
+  color: inherit;
 }
 
 input {

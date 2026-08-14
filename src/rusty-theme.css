@@ -1,0 +1,570 @@
+/* ==========================================================================
+   RUSTY UI - Retro / Hacker / TUI Terminal Theme
+   Inspired by rmpc (Rusty Music Player Client) and Unix TUI applications
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Share+Tech+Mono&display=swap');
+
+/* Color Schemes */
+.theme-rusty {
+  --bg-main: #07090e;
+  --bg-sidebar: #05070a;
+  --bg-topbar: #07090e;
+  --bg-player: #05070a;
+  --bg-card: #0c1017;
+  --bg-card-hover: #131b26;
+  
+  --text-primary: #e6edf3;
+  --text-secondary: #7d8590;
+  
+  --border-color: #1f2937;
+  --border-light: #151d28;
+  
+  --font-main: 'JetBrains Mono', 'Share Tech Mono', monospace, Consolas;
+}
+
+/* 1. Matrix CRT Green (Default) */
+.theme-rusty.rusty-green {
+  --accent-primary: #00ff66;
+  --accent-secondary: #00cc55;
+  --border-color: #12301f;
+  --rusty-glow: 0 0 10px rgba(0, 255, 102, 0.25);
+  --rusty-bg-accent: rgba(0, 255, 102, 0.12);
+}
+
+/* 2. Phosphor Amber */
+.theme-rusty.rusty-amber {
+  --accent-primary: #ffb000;
+  --accent-secondary: #e69d00;
+  --border-color: #3b2a0c;
+  --rusty-glow: 0 0 10px rgba(255, 176, 0, 0.25);
+  --rusty-bg-accent: rgba(255, 176, 0, 0.12);
+}
+
+/* 3. Cyberpunk Cyan */
+.theme-rusty.rusty-cyan {
+  --accent-primary: #00e5ff;
+  --accent-secondary: #00b4cc;
+  --border-color: #0f303d;
+  --rusty-glow: 0 0 10px rgba(0, 229, 255, 0.25);
+  --rusty-bg-accent: rgba(0, 229, 255, 0.12);
+}
+
+/* 4. Classic Rust Orange */
+.theme-rusty.rusty-rust {
+  --accent-primary: #ff5722;
+  --accent-secondary: #e64a19;
+  --border-color: #3b1c14;
+  --rusty-glow: 0 0 10px rgba(255, 87, 34, 0.25);
+  --rusty-bg-accent: rgba(255, 87, 34, 0.12);
+}
+
+/* ==========================================================================
+   Global Terminal Geometry (Strict 0px Corners & High Contrast)
+   ========================================================================== */
+.theme-rusty,
+.theme-rusty * {
+  font-family: var(--font-main) !important;
+  letter-spacing: -0.01em;
+}
+
+.theme-rusty *,
+.theme-rusty button,
+.theme-rusty input,
+.theme-rusty img,
+.theme-rusty div,
+.theme-rusty section,
+.theme-rusty aside,
+.theme-rusty header,
+.theme-rusty footer {
+  border-radius: 0px !important;
+  box-shadow: none !important;
+}
+
+/* Scanline / CRT Subtle Atmosphere */
+.theme-rusty {
+  position: relative;
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+}
+
+.theme-rusty::before {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.2) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+  z-index: 999;
+  background-size: 100% 3px, 4px 100%;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+/* Monospace Scrollbars */
+.theme-rusty ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.theme-rusty ::-webkit-scrollbar-track {
+  background: #030407;
+  border-left: 1px solid var(--border-color);
+}
+
+.theme-rusty ::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border: 1px solid var(--accent-primary);
+}
+
+.theme-rusty ::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
+
+/* ==========================================================================
+   Sidebar Navigation (TUI Menu Style)
+   ========================================================================== */
+.theme-rusty .sidebar {
+  background-color: var(--bg-sidebar);
+  border-right: 1px solid var(--border-color);
+  width: 230px;
+}
+
+.theme-rusty .sidebar-logo {
+  font-family: var(--font-main);
+  font-weight: 800;
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 18px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.theme-rusty .sidebar-logo::before {
+  content: "[#]";
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.theme-rusty .nav-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--text-secondary);
+  margin: 18px 24px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.theme-rusty .nav-section-title::before {
+  content: "::";
+  color: var(--accent-primary);
+}
+
+.theme-rusty .nav-item {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-left: 2px solid transparent;
+  transition: none;
+  padding: 8px 20px;
+  gap: 12px;
+}
+
+.theme-rusty .nav-item:hover {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border-left: 2px solid var(--text-secondary);
+}
+
+.theme-rusty .nav-item.active {
+  background-color: var(--rusty-bg-accent);
+  color: var(--accent-primary);
+  border-left: 2px solid var(--accent-primary);
+  font-weight: 700;
+}
+
+.theme-rusty .nav-item.active::before {
+  display: none;
+}
+
+.theme-rusty .nav-item span::before {
+  content: "> ";
+  opacity: 0;
+  color: var(--accent-primary);
+}
+
+.theme-rusty .nav-item.active span::before,
+.theme-rusty .nav-item:hover span::before {
+  opacity: 1;
+}
+
+/* ==========================================================================
+   Top Bar (Command Shell Style)
+   ========================================================================== */
+.theme-rusty .top-bar {
+  background-color: var(--bg-topbar);
+  border-bottom: 1px solid var(--border-color);
+  height: 56px;
+  padding: 0 20px;
+}
+
+.theme-rusty .nav-btn {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  width: 32px;
+  height: 32px;
+  transition: none;
+}
+
+.theme-rusty .nav-btn:hover {
+  background-color: var(--accent-primary);
+  color: #000000;
+  border-color: var(--accent-primary);
+}
+
+.theme-rusty .search-container {
+  background-color: #030407;
+  border: 1px solid var(--border-color);
+  height: 36px;
+  max-width: 440px;
+  padding: 0 12px;
+}
+
+.theme-rusty .search-container:focus-within {
+  border-color: var(--accent-primary);
+  background-color: #000000;
+}
+
+.theme-rusty .search-input {
+  color: var(--accent-primary);
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.theme-rusty .search-input::placeholder {
+  color: var(--text-secondary);
+  font-style: normal;
+}
+
+/* ==========================================================================
+   Cards & Lists (TUI ASCII Block Paneling)
+   ========================================================================== */
+.theme-rusty .album-card,
+.theme-rusty .top-artist-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 14px;
+  transition: none;
+}
+
+.theme-rusty .album-card:hover,
+.theme-rusty .top-artist-card:hover {
+  background-color: var(--bg-card-hover);
+  border-color: var(--accent-primary);
+  transform: none;
+}
+
+.theme-rusty .album-card .album-art {
+  border: 1px solid var(--border-color);
+  filter: contrast(1.1) brightness(0.9);
+}
+
+.theme-rusty .album-card:hover .album-art {
+  border-color: var(--accent-primary);
+  filter: contrast(1.15) brightness(1.0);
+}
+
+.theme-rusty .album-card .album-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.theme-rusty .album-card .album-artist {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+/* Track Row (Table Listing) */
+.theme-rusty .track-row {
+  border: 1px solid transparent;
+  border-bottom: 1px solid var(--border-light);
+  padding: 6px 12px;
+  transition: none;
+}
+
+.theme-rusty .track-row:hover {
+  background-color: var(--bg-card);
+  border-color: var(--border-color);
+}
+
+.theme-rusty .track-row.active-playing {
+  background-color: var(--rusty-bg-accent);
+  border-color: var(--accent-primary);
+}
+
+.theme-rusty .track-row-index {
+  font-family: var(--font-main);
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.theme-rusty .track-row.active-playing .track-row-index {
+  color: var(--accent-primary);
+}
+
+.theme-rusty .track-row-cover {
+  border: 1px solid var(--border-color);
+}
+
+.theme-rusty .track-row-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.theme-rusty .track-row.active-playing .track-row-title {
+  color: var(--accent-primary);
+}
+
+.theme-rusty .track-row-artist,
+.theme-rusty .track-row-album,
+.theme-rusty .track-row-duration {
+  font-size: 0.8rem;
+}
+
+/* Filter Chips (Terminal Tag Style) */
+.theme-rusty .filter-chip {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 14px;
+}
+
+.theme-rusty .filter-chip:hover {
+  background-color: var(--bg-card-hover);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.theme-rusty .filter-chip.active {
+  background-color: var(--accent-primary);
+  color: #000000;
+  border-color: var(--accent-primary);
+  font-weight: 800;
+}
+
+/* Source Badge */
+.theme-rusty .source-badge {
+  background-color: #000000;
+  border: 1px solid var(--accent-primary);
+  color: var(--accent-primary);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   Bottom Player (TUI Status Bar & Transport Controls)
+   ========================================================================== */
+.theme-rusty .player-bar {
+  background-color: var(--bg-player);
+  border-top: 2px solid var(--border-color);
+  height: 76px;
+  padding: 0 20px;
+}
+
+/* Progress bar styled as high-contrast terminal meter */
+.theme-rusty .progress-container-top {
+  height: 4px;
+  background-color: #111620;
+}
+
+.theme-rusty .progress-container-top:hover {
+  height: 6px;
+  top: -4px;
+}
+
+.theme-rusty .progress-bar-fill {
+  background-color: var(--accent-primary);
+}
+
+.theme-rusty .current-art {
+  border: 1px solid var(--border-color);
+  width: 48px;
+  height: 48px;
+}
+
+.theme-rusty .current-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+}
+
+.theme-rusty .current-title::before {
+  content: "[PLAYING] ";
+  font-size: 0.7rem;
+  color: var(--accent-primary);
+  font-weight: 800;
+}
+
+.theme-rusty .current-artist {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+/* Transport Buttons */
+.theme-rusty .play-btn {
+  background-color: var(--accent-primary);
+  color: #000000;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--accent-primary);
+  transition: none;
+}
+
+.theme-rusty .play-btn:hover {
+  background-color: #ffffff;
+  border-color: #ffffff;
+  transform: none;
+}
+
+.theme-rusty .secondary-btn {
+  border: 1px solid transparent;
+  padding: 4px;
+  transition: none;
+}
+
+.theme-rusty .secondary-btn:hover {
+  border-color: var(--border-color);
+  background-color: var(--bg-card);
+  color: var(--accent-primary);
+}
+
+.theme-rusty .volume-bar-wrapper {
+  background-color: #111620;
+  border: 1px solid var(--border-color);
+  height: 8px;
+}
+
+.theme-rusty .volume-bar-fill {
+  background-color: var(--text-secondary);
+}
+
+.theme-rusty .volume-bar-wrapper:hover .volume-bar-fill {
+  background-color: var(--accent-primary);
+}
+
+.theme-rusty .hero-play-btn {
+  background-color: var(--accent-primary);
+  color: #000000;
+  border: 1px solid var(--accent-primary);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: none;
+}
+
+.theme-rusty .hero-play-btn:hover {
+  background-color: #ffffff;
+  border-color: #ffffff;
+  transform: none;
+}
+
+/* Hero Section */
+.theme-rusty .artist-hero-card {
+  border: 1px solid var(--border-color);
+}
+
+.theme-rusty .artist-avatar {
+  border: 2px solid var(--accent-primary);
+}
+
+.theme-rusty .artist-name-title {
+  font-family: var(--font-main);
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--accent-primary);
+}
+
+/* ==========================================================================
+   Mobile & Responsive Tweaks (< 768px & < 480px)
+   ========================================================================== */
+@media (max-width: 768px) {
+  .theme-rusty .sidebar {
+    width: 70px;
+    padding: 16px 0;
+  }
+
+  .theme-rusty .sidebar-logo {
+    font-size: 0.75rem;
+    padding: 0 10px 12px;
+    justify-content: center;
+  }
+
+  .theme-rusty .sidebar-logo span {
+    display: none;
+  }
+
+  .theme-rusty .nav-section-title {
+    display: none;
+  }
+
+  .theme-rusty .nav-item {
+    justify-content: center;
+    padding: 10px 0;
+  }
+
+  .theme-rusty .nav-item span {
+    display: none;
+  }
+
+  .theme-rusty .top-bar {
+    padding: 0 12px;
+  }
+
+  .theme-rusty .search-container {
+    max-width: 220px;
+  }
+
+  .theme-rusty .main-scroll-view {
+    padding: 16px;
+  }
+
+  .theme-rusty .player-bar {
+    grid-template-columns: 1fr auto;
+    height: 72px;
+    padding: 0 12px;
+  }
+
+  .theme-rusty .extra-controls {
+    display: none;
+  }
+
+  .theme-rusty .track-row {
+    grid-template-columns: 24px 38px 1fr 60px;
+    gap: 10px;
+  }
+
+  .theme-rusty .track-row-album {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   Player Drawer (Up Next / Lyrics / Related TUI Panel)
+   ========================================================================== */
+.theme-rusty .player-drawer-container {
+  background-color: #030407 !important;
+  border-left: 2px solid var(--border-color) !important;
+  border-radius: 0 !important;
+  font-family: var(--font-main);
+}
+

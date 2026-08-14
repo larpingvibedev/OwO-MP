@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import type { Track, Playlist, ViewType } from '../types';
+import { persist } from 'zustand/middleware';
+import type { Track, Playlist, ViewType, ArtistProfile } from '../types';
+import { fetchUpNextMix } from '../services/musicSearch';
 
 interface PlayerState {
   // Current track & playback
@@ -17,13 +19,35 @@ interface PlayerState {
   activeView: ViewType;
   searchQuery: string;
   searchResults: Track[];
+  artistProfile: ArtistProfile | null;
   isSearching: boolean;
+  
+  // Theme & Appearance
+  theme: 'default' | 'rusty';
+  rustyColor: 'green' | 'amber' | 'cyan' | 'rust';
   
   // Library
   playlists: Playlist[];
   favorites: Track[];
   
+  // YouTube Music Style Up Next & Drawer State
+  autoplay: boolean;
+  playingFrom: string;
+  recommendedUpNext: Track[];
+  activePlayerTab: 'up_next' | 'lyrics' | 'related';
+  isPlayerDrawerOpen: boolean;
+  
+  // Advanced Playback State & History
+  isShuffle: boolean;
+  repeatMode: 'off' | 'all' | 'one';
+  shuffledQueue: Track[];
+  isQueueVisible: boolean;
+  isNowPlayingVisible: boolean;
+  playHistory: Record<string, { track: Track; playCount: number; lastPlayedAt: number }>;
+
   // Actions
+  setTheme: (theme: 'default' | 'rusty') => void;
+  setRustyColor: (color: 'green' | 'amber' | 'cyan' | 'rust') => void;
   setCurrentTrack: (track: Track) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   togglePlayPause: () => void;
@@ -31,120 +55,286 @@ interface PlayerState {
   setDuration: (duration: number) => void;
   setVolume: (volume: number) => void;
   
-  setQueue: (tracks: Track[], initialIndex?: number) => void;
+  setQueue: (tracks: Track[], initialIndex?: number, playingFrom?: string) => void;
   addToQueue: (track: Track) => void;
+  removeFromQueue: (index: number) => void;
   nextTrack: () => void;
   prevTrack: () => void;
   
+  toggleAutoplay: () => void;
+  setPlayingFrom: (source: string) => void;
+  setRecommendedUpNext: (tracks: Track[]) => void;
+  setActivePlayerTab: (tab: 'up_next' | 'lyrics' | 'related') => void;
+  openPlayerDrawer: (tab?: 'up_next' | 'lyrics' | 'related') => void;
+  closePlayerDrawer: () => void;
+  togglePlayerDrawer: (tab?: 'up_next' | 'lyrics' | 'related') => void;
+
+  toggleShuffle: () => void;
+  toggleRepeat: () => void;
+  toggleQueue: () => void;
+  toggleNowPlaying: () => void;
+  recordPlay: (track: Track) => void;
+
   setActiveView: (view: ViewType) => void;
   setSearchQuery: (query: string) => void;
   setSearchResults: (results: Track[]) => void;
+  setArtistProfile: (profile: ArtistProfile | null) => void;
   setIsSearching: (isSearching: boolean) => void;
   
   toggleFavorite: (track: Track) => void;
+  generateRadio: (seedTrack: Track) => Promise<void>;
+  generateMultiRadio: (seedTracks: Track[]) => Promise<void>;
 }
 
-// Sample initial tracks for demonstration
-const SAMPLE_TRACKS: Track[] = [
-  {
-    id: '1',
-    title: 'Instant Crush',
-    artist: 'Daft Punk ft. Julian Casablancas',
-    album: 'Random Access Memories',
-    duration: 337,
-    cover: 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500&q=80',
-    streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-    source: 'demo'
-  },
-  {
-    id: '2',
-    title: 'Feels Like We Only Go Backwards',
-    artist: 'Tame Impala',
-    album: 'Lonerism',
-    duration: 193,
-    cover: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=500&q=80',
-    streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
-    source: 'demo'
-  },
-  {
-    id: '3',
-    title: 'Starboy',
-    artist: 'The Weeknd ft. Daft Punk',
-    album: 'Starboy',
-    duration: 230,
-    cover: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
-    streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
-    source: 'demo'
-  }
-];
-
-export const usePlayerStore = create<PlayerState>((set, get) => ({
-  currentTrack: SAMPLE_TRACKS[0],
+export const usePlayerStore = create<PlayerState>()(
+  persist(
+    (set, get) => ({
+      currentTrack: null,
   isPlaying: false,
   currentTime: 0,
-  duration: 337,
+  duration: 0,
   volume: 0.8,
   
-  queue: SAMPLE_TRACKS,
+  queue: [],
   queueIndex: 0,
   
+  autoplay: true,
+  playingFrom: 'Auto Mix',
+  recommendedUpNext: [],
+  activePlayerTab: 'up_next',
+  isPlayerDrawerOpen: false,
+
   activeView: 'dashboard',
   searchQuery: '',
   searchResults: [],
+  artistProfile: null,
   isSearching: false,
   
-  playlists: [
-    {
-      id: 'p1',
-      name: 'Cyberpunk Synthwave',
-      tracks: SAMPLE_TRACKS
-    }
-  ],
-  favorites: [],
+  theme: 'default',
+  rustyColor: 'green',
   
-  setCurrentTrack: (track) => set({ currentTrack: track, currentTime: 0 }),
+  playlists: [],
+  favorites: [],
+
+  isShuffle: false,
+  repeatMode: 'off',
+  shuffledQueue: [],
+  isQueueVisible: false,
+  isNowPlayingVisible: false,
+  playHistory: {},
+  
+  setTheme: (theme) => set({ theme }),
+  setRustyColor: (rustyColor) => set({ rustyColor }),
+  setCurrentTrack: (track) => {
+    const context = `${track.artist} Mix`;
+    set({ currentTrack: track, currentTime: 0, isPlaying: true, playingFrom: context });
+  },
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   togglePlayPause: () => set((state) => ({ isPlaying: !state.isPlaying })),
   setCurrentTime: (currentTime) => set({ currentTime }),
   setDuration: (duration) => set({ duration }),
   setVolume: (volume) => set({ volume }),
   
-  setQueue: (tracks, initialIndex = 0) => set({
-    queue: tracks,
-    queueIndex: initialIndex,
-    currentTrack: tracks[initialIndex] || null,
-    currentTime: 0
+  toggleAutoplay: () => set((state) => ({ autoplay: !state.autoplay })),
+  setPlayingFrom: (playingFrom) => set({ playingFrom }),
+  setRecommendedUpNext: (recommendedUpNext) => set({ recommendedUpNext }),
+  setActivePlayerTab: (activePlayerTab) => set({ activePlayerTab }),
+  openPlayerDrawer: (tab = 'up_next') => set({ isPlayerDrawerOpen: true, activePlayerTab: tab }),
+  closePlayerDrawer: () => set({ isPlayerDrawerOpen: false }),
+  togglePlayerDrawer: (tab) => set((state) => {
+    if (state.isPlayerDrawerOpen && (!tab || tab === state.activePlayerTab)) {
+      return { isPlayerDrawerOpen: false };
+    }
+    return { isPlayerDrawerOpen: true, activePlayerTab: tab || state.activePlayerTab };
+  }),
+
+  setQueue: (tracks, initialIndex = 0, playingFrom) => {
+    const isShuffle = get().isShuffle;
+    let shuffled = [...tracks];
+    let newIndex = initialIndex;
+    
+    if (isShuffle) {
+      // Fisher-Yates shuffle
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      const selectedTrack = tracks[initialIndex];
+      const selectedIdx = shuffled.findIndex(t => t.id === selectedTrack?.id);
+      if (selectedIdx !== -1) {
+        [shuffled[0], shuffled[selectedIdx]] = [shuffled[selectedIdx], shuffled[0]];
+      }
+      newIndex = 0;
+    }
+
+    const cur = isShuffle ? shuffled[newIndex] : tracks[newIndex];
+    const sourceContext = playingFrom || (cur ? `${cur.artist} Mix` : 'Queue');
+
+    set({
+      queue: tracks,
+      shuffledQueue: shuffled,
+      queueIndex: newIndex,
+      currentTrack: cur,
+      playingFrom: sourceContext,
+      currentTime: 0,
+      isPlaying: true
+    });
+  },
+  
+  addToQueue: (track) => set((state) => {
+    const newQueue = [...state.queue, track];
+    const newShuffled = [...state.shuffledQueue, track];
+    return { queue: newQueue, shuffledQueue: newShuffled };
+  }),
+
+  removeFromQueue: (index) => set((state) => {
+    const newQueue = state.queue.filter((_, i) => i !== index);
+    const newShuffled = state.shuffledQueue.filter((_, i) => i !== index);
+    let newIndex = state.queueIndex;
+    if (index < state.queueIndex) {
+      newIndex = Math.max(0, state.queueIndex - 1);
+    }
+    return { queue: newQueue, shuffledQueue: newShuffled, queueIndex: newIndex };
   }),
   
-  addToQueue: (track) => set((state) => ({
-    queue: [...state.queue, track]
-  })),
-  
-  nextTrack: () => {
-    const { queue, queueIndex } = get();
-    if (queue.length === 0) return;
-    const nextIndex = (queueIndex + 1) % queue.length;
-    set({
-      queueIndex: nextIndex,
-      currentTrack: queue[nextIndex],
-      currentTime: 0
-    });
+  nextTrack: async () => {
+    const { queue, shuffledQueue, queueIndex, isShuffle, repeatMode, autoplay, recommendedUpNext, currentTrack, favorites, playHistory } = get();
+    const activeQueue = isShuffle ? shuffledQueue : queue;
+    if (activeQueue.length === 0 && !currentTrack) return;
+
+    const nextIndex = queueIndex + 1;
+    if (nextIndex < activeQueue.length) {
+      set({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, isPlaying: true });
+    } else if (repeatMode === 'all' && activeQueue.length > 0) {
+      set({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: true });
+    } else if (autoplay) {
+      // 1. If pre-fetched auto-mix exists, play immediately
+      if (recommendedUpNext && recommendedUpNext.length > 0) {
+        const autoTrack = recommendedUpNext[0];
+        const remainingMix = recommendedUpNext.slice(1);
+        const newQueue = [...queue, autoTrack];
+        const newShuffled = [...shuffledQueue, autoTrack];
+        set({
+          queue: newQueue,
+          shuffledQueue: newShuffled,
+          queueIndex: newQueue.length - 1,
+          currentTrack: autoTrack,
+          recommendedUpNext: remainingMix,
+          currentTime: 0,
+          isPlaying: true
+        });
+        return;
+      }
+
+      // 2. If recommendedUpNext is empty, fetch on the fly instantly
+      if (currentTrack) {
+        try {
+          const queuedIds = new Set(activeQueue.map(t => t.id));
+          const freshMix = await fetchUpNextMix(currentTrack, favorites, playHistory, queuedIds);
+          if (freshMix && freshMix.length > 0) {
+            const autoTrack = freshMix[0];
+            const remainingMix = freshMix.slice(1);
+            const newQueue = [...queue, autoTrack];
+            const newShuffled = [...shuffledQueue, autoTrack];
+            set({
+              queue: newQueue,
+              shuffledQueue: newShuffled,
+              queueIndex: newQueue.length - 1,
+              currentTrack: autoTrack,
+              recommendedUpNext: remainingMix,
+              currentTime: 0,
+              isPlaying: true
+            });
+            return;
+          }
+        } catch (err) {
+          console.warn('Autoplay on-the-fly fetch error:', err);
+        }
+      }
+
+      // If no tracks could be resolved, stop
+      set({ isPlaying: false });
+    } else {
+      // End of queue with autoplay off
+      set({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: false });
+    }
   },
   
   prevTrack: () => {
-    const { queue, queueIndex } = get();
-    if (queue.length === 0) return;
-    const prevIndex = (queueIndex - 1 + queue.length) % queue.length;
+    const { queue, shuffledQueue, queueIndex, isShuffle, currentTime } = get();
+    const activeQueue = isShuffle ? shuffledQueue : queue;
+    if (activeQueue.length === 0) return;
+
+    // If more than 3 seconds in, restart track
+    if (currentTime > 3) {
+      set({ currentTime: 0, isPlaying: true });
+      return;
+    }
+
+    const prevIndex = (queueIndex - 1 + activeQueue.length) % activeQueue.length;
     set({
       queueIndex: prevIndex,
-      currentTrack: queue[prevIndex],
-      currentTime: 0
+      currentTrack: activeQueue[prevIndex],
+      currentTime: 0,
+      isPlaying: true
     });
   },
+
+  toggleShuffle: () => {
+    const { isShuffle, queue, currentTrack } = get();
+    const newShuffle = !isShuffle;
+    
+    if (newShuffle) {
+      let shuffled = [...queue];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      let newIndex = 0;
+      if (currentTrack) {
+        const currentIdx = shuffled.findIndex(t => t.id === currentTrack.id);
+        if (currentIdx !== -1) {
+          [shuffled[0], shuffled[currentIdx]] = [shuffled[currentIdx], shuffled[0]];
+        }
+      }
+      set({ isShuffle: true, shuffledQueue: shuffled, queueIndex: newIndex });
+    } else {
+      const originalIndex = currentTrack ? queue.findIndex(t => t.id === currentTrack.id) : 0;
+      set({ isShuffle: false, queueIndex: Math.max(0, originalIndex) });
+    }
+  },
+
+  toggleRepeat: () => {
+    const { repeatMode } = get();
+    const nextMode = repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off';
+    set({ repeatMode: nextMode });
+  },
   
+  toggleQueue: () => set((state) => ({ isQueueVisible: !state.isQueueVisible, isNowPlayingVisible: false })),
+  toggleNowPlaying: () => set((state) => ({ isNowPlayingVisible: !state.isNowPlayingVisible, isQueueVisible: false })),
+  
+  recordPlay: (track) => {
+    if (!track || !track.id) return;
+    set((state) => {
+      const existing = state.playHistory[track.id];
+      const count = existing ? existing.playCount + 1 : 1;
+      return {
+        playHistory: {
+          ...state.playHistory,
+          [track.id]: {
+            track,
+            playCount: count,
+            lastPlayedAt: Date.now()
+          }
+        }
+      };
+    });
+  },
+
   setActiveView: (view) => set({ activeView: view }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setSearchResults: (searchResults) => set({ searchResults }),
+  setArtistProfile: (artistProfile) => set({ artistProfile }),
   setIsSearching: (isSearching) => set({ isSearching }),
   
   toggleFavorite: (track) => set((state) => {
@@ -154,5 +344,88 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         ? state.favorites.filter((t) => t.id !== track.id)
         : [...state.favorites, track]
     };
-  })
-}));
+  }),
+
+  generateRadio: async (seedTrack) => {
+    set({ isPlaying: false });
+    try {
+      const state = get();
+      const mix = await fetchUpNextMix(seedTrack, state.favorites, state.playHistory);
+      const radioQueue = [seedTrack, ...mix.filter(t => t.id !== seedTrack.id)];
+      get().setQueue(radioQueue, 0, `${seedTrack.artist} Radio`);
+      set({ isPlaying: true });
+    } catch (e) {
+      get().setQueue([seedTrack], 0);
+      set({ isPlaying: true });
+    }
+  },
+
+  generateMultiRadio: async (seedTracks) => {
+    if (seedTracks.length === 0) return;
+    set({ isPlaying: false });
+    
+    try {
+      const fetchPromises = seedTracks.slice(0, 3).map(track => 
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(track.artist)}&entity=song&limit=15`)
+          .then(r => r.ok ? r.json() : { results: [] })
+          .catch(() => ({ results: [] }))
+      );
+      
+      const results = await Promise.all(fetchPromises);
+      const tracks: Track[] = [];
+      const seenKeys = new Set(seedTracks.map(t => `${t.artist}-${t.title}`.toLowerCase().replace(/[^a-z0-9]/g, '')));
+      
+      results.forEach(data => {
+        if (data.results) {
+          data.results.forEach((item: any) => {
+            const key = `${item.artistName}-${item.trackName}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (!seenKeys.has(key)) {
+              seenKeys.add(key);
+              tracks.push({
+                id: `track-${item.trackId}`,
+                title: item.trackName,
+                artist: item.artistName,
+                albumArtist: item.collectionArtistName || item.artistName,
+                album: item.collectionName || 'Single',
+                duration: Math.round((item.trackTimeMillis || 210000) / 1000),
+                cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+                streamUrl: `${item.artistName} - ${item.trackName}`,
+                source: 'youtube',
+                category: 'song'
+              });
+            }
+          });
+        }
+      });
+      
+      for (let i = tracks.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [tracks[i], tracks[j]] = [tracks[j], tracks[i]];
+      }
+      
+      const radioQueue = [...seedTracks, ...tracks.slice(0, 20 - seedTracks.length)];
+      get().setQueue(radioQueue, 0);
+      set({ isPlaying: true });
+    } catch (e) {
+      get().setQueue(seedTracks, 0);
+      set({ isPlaying: true });
+    }
+  }
+    }),
+    {
+      name: 'owo-music-player-storage',
+      partialize: (state) => ({
+        theme: state.theme,
+        rustyColor: state.rustyColor,
+        favorites: state.favorites,
+        playlists: state.playlists,
+        volume: state.volume,
+        autoplay: state.autoplay,
+        isShuffle: state.isShuffle,
+        repeatMode: state.repeatMode,
+        queue: state.queue,
+        playHistory: state.playHistory
+      })
+    }
+  )
+);
