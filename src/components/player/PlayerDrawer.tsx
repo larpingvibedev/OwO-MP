@@ -1,17 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
-  X, Sparkles, Music, Play, Plus, Trash2, Mic2, ListMusic, 
-  Compass, Volume2, Check, ExternalLink, Loader2, Info, Disc, ListPlus
+  X, Sparkles, Music, Play, Plus, Mic2, ListMusic, 
+  Compass, Volume2, Check, ExternalLink, Loader2, Info, Disc, ListPlus,
+  Copy, BookOpen, Search
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { fetchUpNextMix, fetchSimilarArtists, fetchArtistDeepTracks } from '../../services/musicSearch';
+import { fetchLyrics, type LyricsResult } from '../../services/lyricsService';
 import type { Track, SimilarArtist } from '../../types';
-
-interface ParsedLyricLine {
-  time: number;
-  text: string;
-}
+import { TrackOptionsMenu } from '../common/TrackOptionsMenu';
 
 function formatDuration(seconds: number): string {
   if (!seconds || isNaN(seconds) || seconds <= 0) return '--:--';
@@ -50,7 +48,10 @@ export function PlayerDrawer() {
   } = usePlayerStore();
 
   const [isLoadingMix, setIsLoadingMix] = useState(false);
-  const [lyricsData, setLyricsData] = useState<{ synced: ParsedLyricLine[] | null; plain: string | null } | null>(null);
+  const [lyricsResult, setLyricsResult] = useState<LyricsResult | null>(null);
+  const [lyricsMode, setLyricsMode] = useState<'synced' | 'plain'>('synced');
+  const [lyricsFontSize, setLyricsFontSize] = useState<number>(1.05);
+  const [isCopied, setIsCopied] = useState(false);
   const [isLyricsLoading, setIsLyricsLoading] = useState(false);
   const [addedTrackIds, setAddedTrackIds] = useState<Set<string>>(new Set());
   const [autoplayFilter, setAutoplayFilter] = useState<'all' | 'familiar' | 'popular' | 'discover' | 'deep_cuts' | 'downbeat'>('all');
@@ -102,69 +103,35 @@ export function PlayerDrawer() {
     };
   }, [currentTrack?.id, favorites.length]);
 
-  // 2. Fetch Synced & Plain Lyrics from LRCLIB
+  // 2. Fetch Multi-Tier Lyrics from LRCLIB, Genius & Musixmatch
   useEffect(() => {
     if (!currentTrack || activePlayerTab !== 'lyrics') return;
 
     let isMounted = true;
     setIsLyricsLoading(true);
-    setLyricsData(null);
+    setLyricsResult(null);
 
-    const fetchLyrics = async () => {
-      try {
-        const url = new URL('https://lrclib.net/api/get');
-        url.searchParams.append('track_name', currentTrack.title);
-        url.searchParams.append('artist_name', currentTrack.artist);
-
-        const res = await fetch(url.toString());
-        if (!res.ok) throw new Error('Lyrics not found');
-
-        const data = await res.json();
+    fetchLyrics(currentTrack.title, currentTrack.artist, currentTrack.album, currentTrack.duration)
+      .then(result => {
         if (!isMounted) return;
-
-        if (data.syncedLyrics) {
-          // Parse LRC format [mm:ss.xx]
-          const lines: ParsedLyricLine[] = [];
-          const regex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\](.*)/;
-
-          data.syncedLyrics.split('\n').forEach((line: string) => {
-            const match = line.match(regex);
-            if (match) {
-              const minutes = parseInt(match[1], 10);
-              const seconds = parseInt(match[2], 10);
-              const millis = match[3] ? parseInt(match[3].padEnd(3, '0').slice(0, 3), 10) : 0;
-              const time = minutes * 60 + seconds + millis / 1000;
-              const text = match[4].trim();
-              if (text) {
-                lines.push({ time, text });
-              }
-            }
-          });
-
-          setLyricsData({
-            synced: lines.length > 0 ? lines : null,
-            plain: data.plainLyrics || data.syncedLyrics
-          });
-        } else if (data.plainLyrics) {
-          setLyricsData({ synced: null, plain: data.plainLyrics });
+        setLyricsResult(result);
+        if (result.synced && result.synced.length > 0) {
+          setLyricsMode('synced');
         } else {
-          setLyricsData(null);
+          setLyricsMode('plain');
         }
-      } catch (err) {
-        if (isMounted) {
-          setLyricsData(null);
-        }
-      } finally {
+      })
+      .catch(() => {
+        if (isMounted) setLyricsResult(null);
+      })
+      .finally(() => {
         if (isMounted) setIsLyricsLoading(false);
-      }
-    };
-
-    fetchLyrics();
+      });
 
     return () => {
       isMounted = false;
     };
-  }, [currentTrack?.id, activePlayerTab]);
+  }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, activePlayerTab]);
 
   // 3. Auto-Scroll Synced Lyrics
   useEffect(() => {
@@ -532,7 +499,7 @@ export function PlayerDrawer() {
                         </div>
 
                         {/* Duration & Actions */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <span style={{
                             fontSize: '0.75rem',
                             color: isCurrent ? 'var(--accent-primary)' : 'var(--text-secondary)',
@@ -541,26 +508,11 @@ export function PlayerDrawer() {
                             {formatDuration(isCurrent && duration > 0 ? duration : track.duration)}
                           </span>
 
-                          {!isCurrent && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeFromQueue(idx);
-                              }}
-                              title="Remove from queue"
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: 'var(--text-secondary)',
-                                cursor: 'pointer',
-                                padding: '4px',
-                                display: 'flex',
-                                alignItems: 'center'
-                              }}
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
+                          <TrackOptionsMenu 
+                            track={track} 
+                            variant="row" 
+                            onRemoveFromQueue={!isCurrent ? () => removeFromQueue(idx) : undefined} 
+                          />
                         </div>
                       </div>
                     );
@@ -723,7 +675,7 @@ export function PlayerDrawer() {
                               </div>
                             </div>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                                 {formatDuration(track.duration)}
                               </span>
@@ -747,6 +699,8 @@ export function PlayerDrawer() {
                               >
                                 {isAdded ? <Check size={13} /> : <Plus size={13} />}
                               </button>
+
+                              <TrackOptionsMenu track={track} variant="row" />
                             </div>
                           </div>
                         );
@@ -764,40 +718,187 @@ export function PlayerDrawer() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 2: LYRICS (Synced & Plain)                                            */}
+        {/* TAB 2: LYRICS (LRCLIB Synced Karaoke, Plain & Genius Integration)          */}
         {/* ========================================================================= */}
         {activePlayerTab === 'lyrics' && (
           <div ref={lyricsScrollRef} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {currentTrack && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)' }}>
-                <div 
-                  style={{
-                    width: '48px',
-                    height: '48px',
-                    borderRadius: '6px',
-                    backgroundImage: `url(${currentTrack.cover})`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                    flexShrink: 0
-                  }}
-                />
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>{currentTrack.title}</div>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{currentTrack.artist}</div>
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+                paddingBottom: '14px',
+                borderBottom: '1px solid var(--border-color)'
+              }}>
+                {/* Track Info & Provider Badge */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                    <div 
+                      style={{
+                        width: '44px',
+                        height: '44px',
+                        borderRadius: '6px',
+                        backgroundImage: `url(${currentTrack.cover})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                        flexShrink: 0
+                      }}
+                    />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {currentTrack.title}
+                      </div>
+                      <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {currentTrack.artist}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Lyrics Provider Badge */}
+                  {lyricsResult && lyricsResult.source !== 'None' && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '4px 10px',
+                      borderRadius: '12px',
+                      backgroundColor: 'rgba(255,255,255,0.06)',
+                      border: '1px solid var(--border-color)',
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      color: lyricsResult.isSynced ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                      flexShrink: 0
+                    }}>
+                      <div style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        backgroundColor: lyricsResult.isSynced ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                      }} />
+                      <span>{lyricsResult.isSynced ? 'Synced • LRCLIB' : lyricsResult.source}</span>
+                    </div>
+                  )}
                 </div>
+
+                {/* Lyrics Toolbar: Synced/Plain Mode, Font Size, Copy */}
+                {lyricsResult && (lyricsResult.synced || lyricsResult.plain) && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '4px' }}>
+                    {/* Mode Toggle (if synced lyrics available) */}
+                    {lyricsResult.synced && (
+                      <div style={{ display: 'flex', gap: '4px', backgroundColor: 'rgba(255,255,255,0.04)', padding: '2px', borderRadius: '16px', border: '1px solid var(--border-color)' }}>
+                        <button
+                          onClick={() => setLyricsMode('synced')}
+                          style={{
+                            padding: '4px 10px',
+                            borderRadius: '14px',
+                            fontSize: '0.72rem',
+                            fontWeight: lyricsMode === 'synced' ? 700 : 500,
+                            backgroundColor: lyricsMode === 'synced' ? 'var(--accent-primary)' : 'transparent',
+                            color: lyricsMode === 'synced' ? '#ffffff' : 'var(--text-secondary)',
+                            border: 'none',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          Synced
+                        </button>
+                        <button
+                          onClick={() => setLyricsMode('plain')}
+                          style={{
+                            padding: '4px 10px',
+                            borderRadius: '14px',
+                            fontSize: '0.72rem',
+                            fontWeight: lyricsMode === 'plain' ? 700 : 500,
+                            backgroundColor: lyricsMode === 'plain' ? 'var(--accent-primary)' : 'transparent',
+                            color: lyricsMode === 'plain' ? '#ffffff' : 'var(--text-secondary)',
+                            border: 'none',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          Static
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Font Size & Copy Actions */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto' }}>
+                      {/* Font Size Controls */}
+                      <button
+                        onClick={() => setLyricsFontSize(prev => Math.max(0.85, prev - 0.1))}
+                        title="Smaller lyrics font"
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          backgroundColor: 'rgba(255,255,255,0.04)',
+                          border: '1px solid var(--border-color)',
+                          color: 'var(--text-secondary)',
+                          fontSize: '0.72rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        A-
+                      </button>
+                      <button
+                        onClick={() => setLyricsFontSize(prev => Math.min(1.45, prev + 0.1))}
+                        title="Larger lyrics font"
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          backgroundColor: 'rgba(255,255,255,0.04)',
+                          border: '1px solid var(--border-color)',
+                          color: 'var(--text-secondary)',
+                          fontSize: '0.72rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        A+
+                      </button>
+
+                      {/* Copy Lyrics */}
+                      <button
+                        onClick={() => {
+                          const text = lyricsResult.plain || (lyricsResult.synced ? lyricsResult.synced.map(s => s.text).join('\n') : '');
+                          if (text) {
+                            navigator.clipboard.writeText(text);
+                            setIsCopied(true);
+                            setTimeout(() => setIsCopied(false), 2000);
+                          }
+                        }}
+                        title="Copy full lyrics"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          backgroundColor: isCopied ? 'rgba(46, 204, 113, 0.15)' : 'rgba(255,255,255,0.04)',
+                          border: `1px solid ${isCopied ? '#2ecc71' : 'var(--border-color)'}`,
+                          color: isCopied ? '#2ecc71' : 'var(--text-secondary)',
+                          fontSize: '0.72rem',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s'
+                        }}
+                      >
+                        {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                        <span>{isCopied ? 'Copied' : 'Copy'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
             {isLyricsLoading ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', gap: '12px', color: 'var(--accent-primary)' }}>
                 <Loader2 size={28} className="animate-spin" />
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Searching lyrics...</span>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Searching LRCLIB & Genius...</span>
               </div>
-            ) : lyricsData?.synced ? (
-              /* Synced Real-Time Lyrics */
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', paddingBottom: '32px' }}>
-                {lyricsData.synced.map((line, index) => {
-                  const nextLine = lyricsData.synced![index + 1];
+            ) : lyricsResult?.synced && lyricsMode === 'synced' ? (
+              /* Synced Real-Time Lyrics with Tap-to-Seek */
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '32px' }}>
+                {lyricsResult.synced.map((line, index) => {
+                  const nextLine = lyricsResult.synced![index + 1];
                   const isCurrent = currentTime >= line.time && (!nextLine || currentTime < nextLine.time);
                   const isPast = nextLine && currentTime >= nextLine.time;
 
@@ -806,25 +907,30 @@ export function PlayerDrawer() {
                       key={`lyric-${index}`}
                       ref={isCurrent ? activeLyricRef : null}
                       onClick={() => handleSeekToLyric(line.time)}
+                      title={`Click to jump to ${formatDuration(line.time)}`}
                       style={{
-                        fontSize: isCurrent ? '1.15rem' : '0.95rem',
+                        fontSize: isCurrent ? `${1.25 * lyricsFontSize}rem` : `${1.05 * lyricsFontSize}rem`,
                         fontWeight: isCurrent ? 800 : 500,
                         color: isCurrent 
                           ? 'var(--accent-primary)' 
                           : isPast 
-                            ? 'rgba(255,255,255,0.45)' 
+                            ? 'rgba(255,255,255,0.4)' 
                             : 'rgba(255,255,255,0.75)',
                         cursor: 'pointer',
-                        lineHeight: '1.5',
-                        transition: 'all 0.2s ease',
-                        padding: '4px 0',
-                        textShadow: isCurrent ? '0 0 16px rgba(52, 152, 219, 0.4)' : 'none'
+                        lineHeight: '1.6',
+                        transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                        padding: '6px 10px',
+                        borderRadius: '8px',
+                        backgroundColor: isCurrent ? 'rgba(52, 152, 219, 0.1)' : 'transparent',
+                        textShadow: isCurrent ? '0 0 20px rgba(52, 152, 219, 0.5)' : 'none',
+                        transform: isCurrent ? 'scale(1.02)' : 'scale(1)',
+                        transformOrigin: 'left center'
                       }}
-                      onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-primary)'}
+                      onMouseEnter={(e) => {
+                        if (!isCurrent) e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.03)';
+                      }}
                       onMouseLeave={(e) => {
-                        if (!isCurrent) {
-                          e.currentTarget.style.color = isPast ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.75)';
-                        }
+                        if (!isCurrent) e.currentTarget.style.backgroundColor = 'transparent';
                       }}
                     >
                       {line.text}
@@ -832,15 +938,123 @@ export function PlayerDrawer() {
                   );
                 })}
               </div>
-            ) : lyricsData?.plain ? (
-              /* Plain Text Lyrics */
-              <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.8', fontSize: '0.95rem', color: 'var(--text-primary)' }}>
-                {lyricsData.plain}
+            ) : lyricsResult?.plain ? (
+              /* Plain Text Static Lyrics */
+              <div style={{
+                whiteSpace: 'pre-wrap',
+                lineHeight: '1.9',
+                fontSize: `${lyricsFontSize}rem`,
+                color: 'var(--text-primary)',
+                padding: '8px 4px 32px'
+              }}>
+                {lyricsResult.plain}
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', gap: '12px', color: 'var(--text-secondary)' }}>
-                <Music size={32} />
-                <span style={{ fontSize: '0.9rem', fontStyle: 'italic' }}>No lyrics found for this track.</span>
+              /* Empty Fallback State with Direct Search */
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', gap: '16px', color: 'var(--text-secondary)' }}>
+                <Music size={36} opacity={0.4} />
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                    No Automated Lyrics Found
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    Search directly on leading lyrics platforms:
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                  <a
+                    href={`https://genius.com/search?q=${encodeURIComponent(`${currentTrack?.artist || ''} ${currentTrack?.title || ''}`)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 14px',
+                      borderRadius: '8px',
+                      backgroundColor: 'rgba(255, 255, 0, 0.1)',
+                      border: '1px solid rgba(255, 255, 0, 0.3)',
+                      color: '#ffff55',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      textDecoration: 'none'
+                    }}
+                  >
+                    <BookOpen size={14} />
+                    <span>Search Genius ↗</span>
+                  </a>
+
+                  <a
+                    href={`https://www.musixmatch.com/search/${encodeURIComponent(`${currentTrack?.artist || ''} ${currentTrack?.title || ''}`)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 14px',
+                      borderRadius: '8px',
+                      backgroundColor: 'rgba(255, 75, 75, 0.1)',
+                      border: '1px solid rgba(255, 75, 75, 0.3)',
+                      color: '#ff6b6b',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      textDecoration: 'none'
+                    }}
+                  >
+                    <Search size={14} />
+                    <span>Search Musixmatch ↗</span>
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* Genius Annotation & Meaning Card */}
+            {lyricsResult?.geniusUrl && (
+              <div style={{
+                marginTop: '12px',
+                padding: '14px 16px',
+                backgroundColor: 'rgba(255,255,255,0.03)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <BookOpen size={18} color="#ffff55" />
+                  <div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Genius Verified Annotations
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                      Read story, meanings, and line-by-line breakdowns
+                    </div>
+                  </div>
+                </div>
+
+                <a
+                  href={lyricsResult.geniusUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    backgroundColor: 'rgba(255,255,255,0.08)',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    textDecoration: 'none',
+                    border: '1px solid var(--border-color)'
+                  }}
+                >
+                  <span>Open</span>
+                  <ExternalLink size={12} />
+                </a>
               </div>
             )}
           </div>

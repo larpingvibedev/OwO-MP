@@ -98,6 +98,9 @@ interface PlayerState {
   clearRecentSearchedTracks: () => void;
   
   toggleFavorite: (track: Track) => void;
+  playNext: (track: Track) => void;
+  addToPlaylist: (playlistId: string, track: Track) => void;
+  createPlaylistWithTrack: (name: string, track: Track) => void;
   saveQueueAsPlaylist: (customName?: string) => void;
   generateRadio: (seedTrack: Track) => Promise<void>;
   generateMultiRadio: (seedTracks: Track[]) => Promise<void>;
@@ -151,18 +154,37 @@ export const usePlayerStore = create<PlayerState>()(
   setRustyColor: (rustyColor) => set({ rustyColor }),
   setCurrentTrack: (track) => {
     const context = `${track.title} Mix`;
-    set({ currentTrack: track, currentTime: 0, isPlaying: true, playingFrom: context });
+    set({ 
+      currentTrack: track, 
+      currentTime: 0, 
+      duration: track.duration || 0,
+      isPlaying: true, 
+      playingFrom: context,
+      queue: [track],
+      shuffledQueue: [track],
+      queueIndex: 0
+    });
   },
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   togglePlayPause: () => set((state) => ({ isPlaying: !state.isPlaying })),
   setCurrentTime: (currentTime) => set({ currentTime }),
   setDuration: (duration) => set((state) => {
     const rounded = Math.round(duration);
-    if (rounded > 0 && state.currentTrack && Math.abs((state.currentTrack.duration || 0) - rounded) > 0) {
-      const updatedTrack = { ...state.currentTrack, duration: rounded };
-      const updatedQueue = state.queue.map((t, i) => i === state.queueIndex ? updatedTrack : t);
-      const updatedShuffled = state.shuffledQueue.map((t, i) => i === state.queueIndex ? updatedTrack : t);
-      return { duration: rounded, currentTrack: updatedTrack, queue: updatedQueue, shuffledQueue: updatedShuffled };
+    if (rounded > 0) {
+      let updatedTrack = state.currentTrack;
+      let updatedQueue = state.queue;
+      let updatedShuffled = state.shuffledQueue;
+      if (state.currentTrack && state.currentTrack.duration !== rounded) {
+        updatedTrack = { ...state.currentTrack, duration: rounded };
+        updatedQueue = state.queue.map((t, i) => i === state.queueIndex ? updatedTrack! : t);
+        updatedShuffled = state.shuffledQueue.map((t, i) => i === state.queueIndex ? updatedTrack! : t);
+      }
+      return { 
+        duration: rounded, 
+        currentTrack: updatedTrack, 
+        queue: updatedQueue, 
+        shuffledQueue: updatedShuffled 
+      };
     }
     return { duration: rounded };
   }),
@@ -210,6 +232,7 @@ export const usePlayerStore = create<PlayerState>()(
       currentTrack: cur,
       playingFrom: sourceContext,
       currentTime: 0,
+      duration: cur?.duration || 0,
       isPlaying: true
     });
   },
@@ -233,6 +256,37 @@ export const usePlayerStore = create<PlayerState>()(
       queue: newQueue, 
       shuffledQueue: newShuffled,
       toastMessage: `Added "${track.title}" to Queue`
+    };
+  }),
+
+  playNext: (track) => set((state) => {
+    if (!state.currentTrack || state.queue.length === 0) {
+      return {
+        queue: [track],
+        shuffledQueue: [track],
+        queueIndex: 0,
+        currentTrack: track,
+        playingFrom: `${track.title} Mix`,
+        currentTime: 0,
+        isPlaying: true,
+        toastMessage: `Playing "${track.title}"`
+      };
+    }
+    const insertIdx = state.queueIndex + 1;
+    const newQueue = [
+      ...state.queue.slice(0, insertIdx),
+      track,
+      ...state.queue.slice(insertIdx)
+    ];
+    const newShuffled = [
+      ...state.shuffledQueue.slice(0, insertIdx),
+      track,
+      ...state.shuffledQueue.slice(insertIdx)
+    ];
+    return {
+      queue: newQueue,
+      shuffledQueue: newShuffled,
+      toastMessage: `Playing "${track.title}" next`
     };
   }),
 
@@ -272,6 +326,20 @@ export const usePlayerStore = create<PlayerState>()(
           currentTime: 0,
           isPlaying: true
         });
+
+        // Replenish stream in background when low
+        if (remainingMix.length < 5) {
+          const queuedIds = new Set(newQueue.map(t => t.id));
+          fetchUpNextMix(autoTrack, favorites, playHistory, queuedIds)
+            .then(fresh => {
+              if (fresh && fresh.length > 0) {
+                const existingIds = new Set([...newQueue, ...remainingMix].map(t => t.id));
+                const filtered = fresh.filter(t => !existingIds.has(t.id));
+                set({ recommendedUpNext: [...remainingMix, ...filtered] });
+              }
+            })
+            .catch(() => {});
+        }
         return;
       }
 
@@ -454,6 +522,34 @@ export const usePlayerStore = create<PlayerState>()(
       toastMessage: `Saved "${name}" to Playlists`
     });
   },
+
+  addToPlaylist: (playlistId, track) => set((state) => {
+    const pl = state.playlists.find(p => p.id === playlistId);
+    if (!pl) return {};
+    if (pl.tracks.some(t => t.id === track.id)) {
+      return { toastMessage: `"${track.title}" is already in ${pl.name}` };
+    }
+    const updated = state.playlists.map(p => 
+      p.id === playlistId ? { ...p, tracks: [...p.tracks, track] } : p
+    );
+    return {
+      playlists: updated,
+      toastMessage: `Added "${track.title}" to ${pl.name}`
+    };
+  }),
+
+  createPlaylistWithTrack: (name, track) => set((state) => {
+    const newPl: Playlist = {
+      id: `pl-${Date.now()}`,
+      name: name.trim() || 'My Playlist',
+      tracks: [track],
+      createdAt: Date.now()
+    };
+    return {
+      playlists: [...state.playlists, newPl],
+      toastMessage: `Created playlist "${newPl.name}"`
+    };
+  }),
 
   generateRadio: async (seedTrack) => {
     set({ isPlaying: false });

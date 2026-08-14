@@ -15,6 +15,7 @@ import {
 import { Carousel } from '../components/Carousel';
 import { SpeedDialGrid } from '../components/SpeedDialGrid';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
+import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
 import type { Track, PublicPlaylist } from '../types';
 import { 
   fetchArtistDeepTracks, 
@@ -449,8 +450,9 @@ export function Dashboard() {
                   </div>
                 </div>
 
-                {/* Quick Radio & Seed Select controls */}
-                <div style={{ display: 'flex', gap: '4px' }}>
+                {/* Quick Radio & Seed Select & Options Menu */}
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                  <TrackOptionsMenu track={track} variant="row" />
                   <button
                     onClick={() => handleStartRadio(track)}
                     title="Start Radio"
@@ -516,6 +518,7 @@ export function Dashboard() {
                 style={{ backgroundImage: `url(${track.cover})`, position: 'relative' }}
               >
                 <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+                <TrackOptionsMenu track={track} variant="card" style={{ position: 'absolute', top: '8px', left: '8px', zIndex: 3 }} />
               </div>
               <div className="album-title">{track.title}</div>
               <div 
@@ -553,6 +556,7 @@ export function Dashboard() {
                 style={{ backgroundImage: `url(${track.cover})`, position: 'relative' }}
               >
                 <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+                <TrackOptionsMenu track={track} variant="card" style={{ position: 'absolute', top: '8px', left: '8px', zIndex: 3 }} />
               </div>
               <div className="album-title">{track.title}</div>
               <div 
@@ -677,6 +681,7 @@ export function Dashboard() {
                 style={{ backgroundImage: `url(${track.cover})`, position: 'relative' }}
               >
                 <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+                <TrackOptionsMenu track={track} variant="card" style={{ position: 'absolute', top: '8px', left: '8px', zIndex: 3 }} />
               </div>
               <div className="album-title">{track.title}</div>
               <div 

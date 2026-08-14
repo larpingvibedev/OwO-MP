@@ -1,15 +1,11 @@
 import { useEffect, useState } from 'react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { X, Loader2 } from 'lucide-react';
-
-interface LyricsData {
-  syncedLyrics: string | null;
-  plainLyrics: string | null;
-}
+import { fetchLyrics, type LyricsResult } from '../../services/lyricsService';
 
 export function NowPlayingPanel() {
   const { currentTrack, isNowPlayingVisible, toggleNowPlaying } = usePlayerStore();
-  const [lyrics, setLyrics] = useState<LyricsData | null>(null);
+  const [lyricsResult, setLyricsResult] = useState<LyricsResult | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -17,34 +13,18 @@ export function NowPlayingPanel() {
 
     let isMounted = true;
     setLoading(true);
-    setLyrics(null);
+    setLyricsResult(null);
 
-    const fetchLyrics = async () => {
-      try {
-        const url = new URL('https://lrclib.net/api/get');
-        url.searchParams.append('track_name', currentTrack.title);
-        url.searchParams.append('artist_name', currentTrack.artist);
-
-        const res = await fetch(url.toString());
-        if (!res.ok) throw new Error('Lyrics not found');
-        
-        const data = await res.json();
-        if (isMounted) {
-          setLyrics({
-            syncedLyrics: data.syncedLyrics,
-            plainLyrics: data.plainLyrics
-          });
-        }
-      } catch (err) {
-        if (isMounted) {
-          setLyrics({ syncedLyrics: null, plainLyrics: null });
-        }
-      } finally {
+    fetchLyrics(currentTrack.title, currentTrack.artist, currentTrack.album, currentTrack.duration)
+      .then(res => {
+        if (isMounted) setLyricsResult(res);
+      })
+      .catch(() => {
+        if (isMounted) setLyricsResult(null);
+      })
+      .finally(() => {
         if (isMounted) setLoading(false);
-      }
-    };
-
-    fetchLyrics();
+      });
 
     return () => {
       isMounted = false;
@@ -109,10 +89,9 @@ export function NowPlayingPanel() {
             <div style={{ display: 'flex', justifyContent: 'center', padding: '24px' }}>
               <Loader2 size={24} className="animate-spin" color="var(--accent-primary)" />
             </div>
-          ) : lyrics?.syncedLyrics || lyrics?.plainLyrics ? (
-            <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '1rem', color: 'var(--text-primary)' }}>
-              {/* Note: We just display plain lyrics for now. Parsing synced lyrics and syncing to currentTime can be added later. */}
-              {lyrics.plainLyrics || lyrics.syncedLyrics}
+          ) : lyricsResult?.plain || (lyricsResult?.synced && lyricsResult.synced.length > 0) ? (
+            <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+              {lyricsResult.plain || lyricsResult.synced?.map(s => s.text).join('\n')}
             </div>
           ) : (
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontStyle: 'italic' }}>

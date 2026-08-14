@@ -259,6 +259,34 @@ export async function resolveAlbumPlaylist(artistName: string, albumName: string
 }
 
 /**
+ * Helper to extract the 100% Official Studio Audio Track ID (ATV / Topic) from YouTube Music item renderers.
+ * YouTube Music embeds the pure Audio Track ID in the Track Credits menu endpoint (MPTC[videoId]).
+ */
+export function extractOfficialAudioTrackId(renderer: any, fallbackVideoId?: string): string | null {
+  if (!renderer) return fallbackVideoId || null;
+
+  // 1. Check Track Credits browse endpoint (MPTC...)
+  const menuItems = renderer.menu?.menuRenderer?.items || [];
+  for (const mi of menuItems) {
+    const browseId = mi?.menuNavigationItemRenderer?.navigationEndpoint?.browseEndpoint?.browseId;
+    if (browseId && browseId.startsWith('MPTC')) {
+      const audioId = browseId.replace('MPTC', '').trim();
+      if (/^[a-zA-Z0-9_-]{11}$/.test(audioId)) {
+        return audioId;
+      }
+    }
+  }
+
+  // 2. Check direct watchEndpoint videoId if already an ATV or fallback
+  const watchId = renderer.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+                  renderer.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+                  renderer.playlistItemData?.videoId ||
+                  fallbackVideoId;
+
+  return watchId || null;
+}
+
+/**
  * Extracts a direct YouTube Video ID from any Track object if already known.
  * Universal and format-agnostic (supports piped-, yt-, direct URL, or raw ID).
  */
@@ -423,9 +451,10 @@ export async function searchFreeMusic(query: string, signal?: AbortSignal): Prom
           if (r) {
             const title = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
             const subtitle = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((s: any) => s.text).join('') || '';
-            const videoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+            const rawVideoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
                             r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
                             r.playlistItemData?.videoId;
+            const videoId = extractOfficialAudioTrackId(r, rawVideoId);
             const rawThumb = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
             const channelId = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId;
 
@@ -873,8 +902,9 @@ export async function fetchArtistProfileFromYTM(
         const r = item.musicResponsiveListItemRenderer;
         if (!r) return;
         const trackTitle = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
-        const videoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+        const rawVideoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
                         r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
+        const videoId = extractOfficialAudioTrackId(r, rawVideoId);
         const rawThumb = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
         const thumb = cleanGoogleImageUrl(rawThumb || avatar);
         const durationStr = r.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text;
@@ -1008,8 +1038,9 @@ export async function fetchArtistProfileFromYTM(
             const r = item.musicResponsiveListItemRenderer;
             if (!r) return;
             const trackTitle = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
-            const videoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+            const rawVideoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
                             r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
+            const videoId = extractOfficialAudioTrackId(r, rawVideoId);
             const rawThumb = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
             const thumb = cleanGoogleImageUrl(rawThumb || avatar);
             const durationStr = r.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text;
@@ -1176,8 +1207,9 @@ export async function fetchAlbumDetailsFromYTM(
     const r = item.musicResponsiveListItemRenderer;
     if (!r) return;
     const trackTitle = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
-    const videoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+    const rawVideoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
                     r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
+    const videoId = extractOfficialAudioTrackId(r, rawVideoId);
     const durationStr = r.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text;
     const trackArtist = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((s: any) => s.text).join('') || artist;
     const rawTrackCover = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
@@ -1545,9 +1577,10 @@ export async function resolveYouTubeMusicATV(artist: string, title: string): Pro
             const card = sec.musicCardShelfRenderer;
             const cTitle = card.title?.runs?.[0]?.text || '';
             const cNormTitle = cTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
-            const videoId = card.onTap?.watchEndpoint?.videoId ||
-                            card.title?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
-                            card.buttons?.[0]?.buttonRenderer?.command?.watchEndpoint?.videoId;
+            const rawId = card.onTap?.watchEndpoint?.videoId ||
+                          card.title?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+                          card.buttons?.[0]?.buttonRenderer?.command?.watchEndpoint?.videoId;
+            const videoId = extractOfficialAudioTrackId(card, rawId);
 
             if (videoId && (cNormTitle.includes(normTitle) || normTitle.includes(cNormTitle))) {
               return videoId;
@@ -1560,9 +1593,10 @@ export async function resolveYouTubeMusicATV(artist: string, title: string): Pro
             if (r) {
               const iTitle = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '';
               const iNormTitle = iTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
-              const videoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
-                              r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
-                              r.playlistItemData?.videoId;
+              const rawId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+                            r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+                            r.playlistItemData?.videoId;
+              const videoId = extractOfficialAudioTrackId(r, rawId);
 
               if (videoId && (iNormTitle.includes(normTitle) || normTitle.includes(iNormTitle))) {
                 return videoId;

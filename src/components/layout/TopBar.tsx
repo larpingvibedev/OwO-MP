@@ -20,7 +20,8 @@ export function TopBar() {
     addRecentSearchQuery,
     removeRecentSearchQuery,
     addRecentSearchedTrack,
-    setCurrentTrack,
+    setQueue,
+    setIsPlaying,
     theme,
     rustyColor,
     setTheme,
@@ -179,9 +180,11 @@ export function TopBar() {
         artist: entity.artist || entity.subtitle.split('•')?.[1]?.trim() || '',
         duration: 0,
         cover: entity.thumbnail || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
-        streamUrl: entity.videoId ? `https://www.youtube.com/watch?v=${entity.videoId}` : ''
+        streamUrl: entity.videoId ? `https://www.youtube.com/watch?v=${entity.videoId}` : '',
+        source: 'youtube'
       };
-      setCurrentTrack(track);
+      setQueue([track], 0, `${track.title} Mix`);
+      setIsPlaying(true);
       addRecentSearchedTrack(track);
     } else {
       handleSearchSubmit(entity.title);

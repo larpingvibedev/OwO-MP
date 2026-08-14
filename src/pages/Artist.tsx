@@ -4,6 +4,7 @@ import { fetchArtistProfile } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { Play, CheckCircle, Loader2, Heart } from 'lucide-react';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
+import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
 import type { ArtistProfile, Track } from '../types';
 
 function formatTime(seconds: number): string {
@@ -168,6 +169,7 @@ export function Artist() {
                         <Heart size={15} fill={isFav ? "currentColor" : "none"} />
                       </button>
                       <AddToQueueButton track={track} variant="row-btn" />
+                      <TrackOptionsMenu track={track} variant="row" />
                       <span className="track-row-duration" style={{ minWidth: '38px', textAlign: 'right' }}>{formatTime(track.duration)}</span>
                     </div>
                   </div>

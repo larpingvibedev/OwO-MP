@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
+import { TrackOptionsMenu } from '../common/TrackOptionsMenu';
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -147,7 +148,8 @@ export function BottomPlayer() {
 
   // Active seek percentage (follows mouse in real-time during drag)
   const displayTime = isDraggingSeek ? dragSeekTime : currentTime;
-  const seekPercentage = duration ? (displayTime / duration) * 100 : 0;
+  const effectiveDuration = Math.max(displayTime, duration || 0);
+  const seekPercentage = effectiveDuration > 0 ? Math.min(100, (displayTime / effectiveDuration) * 100) : 0;
 
   return (
     <footer className="player-bar">
@@ -267,13 +269,16 @@ export function BottomPlayer() {
           </div>
         </div>
         {currentTrack && (
-          <button 
-            className="secondary-btn" 
-            onClick={() => toggleFavorite(currentTrack)}
-            style={{ marginLeft: '12px', color: isFavorite ? 'var(--accent-primary)' : 'var(--text-secondary)' }}
-          >
-            <Heart size={18} fill={isFavorite ? 'currentColor' : 'none'} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px' }}>
+            <button 
+              className="secondary-btn" 
+              onClick={() => toggleFavorite(currentTrack)}
+              style={{ color: isFavorite ? 'var(--accent-primary)' : 'var(--text-secondary)' }}
+            >
+              <Heart size={18} fill={isFavorite ? 'currentColor' : 'none'} />
+            </button>
+            <TrackOptionsMenu track={currentTrack} variant="row" />
+          </div>
         )}
       </div>
 
@@ -311,7 +316,7 @@ export function BottomPlayer() {
           <span style={{ color: isDraggingSeek ? 'var(--accent-primary)' : 'var(--text-secondary)', fontWeight: isDraggingSeek ? 700 : 400 }}>
             {formatTime(displayTime)}
           </span>
-          <span>{formatTime(duration)}</span>
+          <span>{formatTime(effectiveDuration)}</span>
         </div>
       </div>
 

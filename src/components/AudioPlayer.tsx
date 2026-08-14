@@ -26,6 +26,7 @@ export const AudioPlayer = () => {
   const currentVideoIdRef = useRef<string | null>(null);
   const pendingVideoIdRef = useRef<string | null>(null);
   const isSwitchingRef = useRef<boolean>(false);
+  const activeLoadedTrackIdRef = useRef<string | null>(null);
 
   const {
     currentTrack,
@@ -79,7 +80,6 @@ export const AudioPlayer = () => {
                 currentVideoIdRef.current = vid;
                 try {
                   ytPlayerRef.current.loadVideoById(vid);
-                  ytPlayerRef.current.playVideo();
                 } catch (err) {
                   console.warn('Error playing pending video:', err);
                 }
@@ -89,16 +89,20 @@ export const AudioPlayer = () => {
           onStateChange: (event: any) => {
             // 0 = ENDED
             if (event.data === 0) {
-              const currentRepeat = usePlayerStore.getState().repeatMode;
-              if (currentRepeat === 'one') {
-                if (ytPlayerRef.current) {
-                  try {
-                    ytPlayerRef.current.seekTo(0);
-                    ytPlayerRef.current.playVideo();
-                  } catch (e) {}
+              if (!isSwitchingRef.current) {
+                isSwitchingRef.current = true;
+                const currentRepeat = usePlayerStore.getState().repeatMode;
+                if (currentRepeat === 'one') {
+                  if (ytPlayerRef.current) {
+                    try {
+                      ytPlayerRef.current.seekTo(0);
+                      ytPlayerRef.current.playVideo();
+                      isSwitchingRef.current = false;
+                    } catch (e) {}
+                  }
+                } else {
+                  usePlayerStore.getState().nextTrack();
                 }
-              } else {
-                usePlayerStore.getState().nextTrack();
               }
             }
             // 1 = PLAYING
@@ -107,10 +111,18 @@ export const AudioPlayer = () => {
               if (!usePlayerStore.getState().isPlaying) {
                 setIsPlaying(true);
               }
+              // Immediately sync live YouTube video duration
+              if (ytPlayerRef.current?.getDuration) {
+                const realDur = ytPlayerRef.current.getDuration();
+                if (realDur > 0) {
+                  usePlayerStore.getState().setDuration(realDur);
+                }
+              }
             }
           },
           onError: (event: any) => {
             console.warn('YouTube Player Error code:', event.data);
+            isSwitchingRef.current = false;
             const state = usePlayerStore.getState();
             const curTrack = state.currentTrack;
             if (curTrack) {
@@ -120,7 +132,6 @@ export const AudioPlayer = () => {
                 console.log('Attempting fallback audio candidate:', fallbackId);
                 currentVideoIdRef.current = fallbackId;
                 ytPlayerRef.current.loadVideoById(fallbackId);
-                ytPlayerRef.current.playVideo();
                 return;
               }
             }
@@ -149,29 +160,63 @@ export const AudioPlayer = () => {
     };
   }, []);
 
-  // 2. Sync Time & Duration tracking
+  const isYouTubeTrack = (t: typeof currentTrack) => {
+    if (!t) return false;
+    if (t.source === 'youtube') return true;
+    if (t.resolvedStreamUrl?.startsWith('http')) return false;
+    return true;
+  };
+
+  // 2. Sync Time & Duration tracking & Seamless End-of-Track Autoplay Trigger
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
 
     intervalRef.current = setInterval(() => {
-      if (currentTrack?.source === 'youtube' && ytReadyRef.current && ytPlayerRef.current?.getCurrentTime) {
+      if (isYouTubeTrack(currentTrack) && ytReadyRef.current && ytPlayerRef.current) {
         try {
-          const time = ytPlayerRef.current.getCurrentTime() || 0;
-          const dur = ytPlayerRef.current.getDuration() || currentTrack.duration || 180;
-          if (time > 0) setCurrentTime(time);
-          if (dur > 0) setDuration(dur);
+          const time = ytPlayerRef.current.getCurrentTime?.() || 0;
+          const ytDur = ytPlayerRef.current.getDuration?.() || 0;
+
+          // Always ensure the store's duration matches the actual video duration from YouTube
+          if (ytDur > 0) {
+            const currentStoreDur = usePlayerStore.getState().duration;
+            if (Math.abs(currentStoreDur - ytDur) >= 0.5) {
+              setDuration(ytDur);
+            }
+          }
+
+          const effectiveDur = ytDur > 0 ? ytDur : (usePlayerStore.getState().duration || 180);
+          const clampedTime = Math.min(time, effectiveDur);
+          if (clampedTime >= 0) {
+            setCurrentTime(clampedTime);
+          }
+
+          // Fallback end-of-track trigger ONLY when the audio has reached 100% of its full duration
+          if (ytDur > 5 && time >= ytDur && !isSwitchingRef.current) {
+            isSwitchingRef.current = true;
+            setTimeout(() => { isSwitchingRef.current = false; }, 3500);
+
+            const currentRepeat = usePlayerStore.getState().repeatMode;
+            if (currentRepeat === 'one') {
+              ytPlayerRef.current.seekTo(0);
+              ytPlayerRef.current.playVideo();
+              isSwitchingRef.current = false;
+            } else {
+              usePlayerStore.getState().nextTrack();
+            }
+          }
         } catch (e) {}
       }
-    }, 500);
+    }, 400);
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [currentTrack, setCurrentTime, setDuration]);
+  }, [currentTrack?.id, setCurrentTime, setDuration]);
 
   // 3. Play / Pause Control
   useEffect(() => {
-    if (currentTrack?.source === 'youtube') {
+    if (isYouTubeTrack(currentTrack)) {
       if (audioRef.current) audioRef.current.pause();
 
       if (ytReadyRef.current && ytPlayerRef.current && !isSwitchingRef.current) {
@@ -194,7 +239,7 @@ export const AudioPlayer = () => {
         }
       }
     }
-  }, [isPlaying, currentTrack, setIsPlaying]);
+  }, [isPlaying, currentTrack?.id, setIsPlaying]);
 
   // 4. Volume Control
   useEffect(() => {
@@ -212,7 +257,7 @@ export const AudioPlayer = () => {
       const customEvent = e as CustomEvent<{ time: number }>;
       const targetTime = customEvent.detail?.time ?? 0;
 
-      if (currentTrack?.source === 'youtube') {
+      if (isYouTubeTrack(currentTrack)) {
         if (ytReadyRef.current && ytPlayerRef.current?.seekTo) {
           try {
             ytPlayerRef.current.seekTo(targetTime, true);
@@ -233,15 +278,21 @@ export const AudioPlayer = () => {
 
     window.addEventListener('music:seek', handleSeek);
     return () => window.removeEventListener('music:seek', handleSeek);
-  }, [currentTrack]);
+  }, [currentTrack?.id]);
 
   // 5. Track Change & Stream Resolution
   useEffect(() => {
     let isCancelled = false;
-    isSwitchingRef.current = true;
 
     async function loadTrack() {
       if (!currentTrack) return;
+
+      // Prevent reloading identical track and stuttering opening second
+      if (currentTrack.id === activeLoadedTrackIdRef.current) {
+        return;
+      }
+      activeLoadedTrackIdRef.current = currentTrack.id;
+      isSwitchingRef.current = true;
 
       recordPlay(currentTrack);
 
@@ -294,7 +345,6 @@ export const AudioPlayer = () => {
               videoId,
               startSeconds: 0
             });
-            ytPlayerRef.current.playVideo();
           } catch (err) {
             console.warn('Error loading video by ID:', err);
           }
@@ -334,7 +384,7 @@ export const AudioPlayer = () => {
     return () => {
       isCancelled = true;
     };
-  }, [currentTrack]);
+  }, [currentTrack?.id]);
 
   // 7. MediaSession Integration
   useEffect(() => {

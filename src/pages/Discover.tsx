@@ -22,6 +22,7 @@ import {
 import type { SearchCategory, Track, PublicPlaylist } from '../types';
 import { searchPublicPlaylists, fetchPublicPlaylistTracks } from '../services/musicSearch';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
+import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -586,6 +587,7 @@ export function Discover() {
                           <Heart size={15} fill={isFav ? "currentColor" : "none"} />
                         </button>
                         <AddToQueueButton track={track} variant="row-btn" />
+                        <TrackOptionsMenu track={track} variant="row" />
                         <span className="track-row-duration" style={{ minWidth: '38px', textAlign: 'right' }}>{formatTime(track.duration)}</span>
                       </div>
                     </div>
@@ -627,6 +629,7 @@ export function Discover() {
                     }}
                   />
                   <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+                  <TrackOptionsMenu track={track} variant="card" style={{ position: 'absolute', top: '8px', left: '8px', zIndex: 3 }} />
                 </div>
                 <div className="album-title">{track.title}</div>
                 <div 
@@ -801,6 +804,7 @@ export function Discover() {
                     }}
                   />
                   <AddToQueueButton track={track} variant="card-overlay" position="top-right" />
+                  <TrackOptionsMenu track={track} variant="card" style={{ position: 'absolute', top: '8px', left: '8px', zIndex: 3 }} />
                 </div>
                 <div className="album-title">{track.title}</div>
                 <div 
