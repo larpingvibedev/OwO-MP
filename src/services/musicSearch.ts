@@ -738,6 +738,36 @@ export async function fetchArtistProfileFromYTM(
     }
   }
 
+  // Extract collaborating artists from top tracks & singles to enrich the verified pool
+  const allTitles = [
+    ...topTracks.map(t => t.title),
+    ...singlesAndEPs.map(s => s.name)
+  ];
+  allTitles.forEach(title => {
+    const featMatch = /(?:feat\.?|ft\.?|featuring|with|\bx\b|\b&\b)\s+([^()\[\]]+)/i.exec(title);
+    if (featMatch) {
+      const collabPart = featMatch[1];
+      const names = collabPart.split(/[,&/]| and /i);
+      names.forEach(n => {
+        const nClean = n.trim().replace(/^[(\["']+|[)\]"']+$/g, '');
+        if (nClean && nClean.length >= 2 && nClean.toLowerCase() !== artistName.toLowerCase().trim() && !similarArtists.some(s => s.name.toLowerCase() === nClean.toLowerCase())) {
+          similarArtists.push({
+            name: nClean,
+            cover: avatar
+          });
+        }
+      });
+    }
+  });
+
+  // Dynamic rotation: gently shuffle the authentic related pool so every visit is fresh and engaging
+  if (similarArtists.length > 3) {
+    for (let i = similarArtists.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [similarArtists[i], similarArtists[j]] = [similarArtists[j], similarArtists[i]];
+    }
+  }
+
   return {
     name: artistName,
     channelId: targetBrowseId,
@@ -2302,6 +2332,14 @@ export async function fetchSimilarArtists(artistName: string, videoIdOrTrackId?:
           });
         }
       } catch (e) {}
+    }
+
+    // Dynamic rotation: shuffle the authentic related pool so every track playback / tab open is fresh
+    if (results.length > 3) {
+      for (let i = results.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [results[i], results[j]] = [results[j], results[i]];
+      }
     }
   } catch (err) {
     console.warn('fetchSimilarArtists warning:', err);
