@@ -7,8 +7,7 @@ import {
   getFallbackVideoId, 
   invalidateVideoId, 
   prefetchTrackVideoId,
-  fetchUpNextMix,
-  fetchDirectAudioStream
+  fetchUpNextMix
 } from '../services/musicSearch';
 import { audioEngine } from '../services/audioEngine';
 
@@ -371,40 +370,23 @@ export const AudioPlayer = () => {
         audioRef.current.pause();
       }
 
-      // 1. Direct YouTube Video ID (If track already comes from YouTube search/suggestions/profile)
-      let videoId: string | null = getDirectYouTubeId(currentTrack);
+      // 1. Resolve 100% official studio topic release via Topic / ATV Resolver FIRST
+      let videoId = await resolveYouTubeVideoId(
+        currentTrack.artist, 
+        currentTrack.title, 
+        currentTrack.albumArtist, 
+        currentTrack.duration
+      );
 
-      // 2. Resolve via comprehensive YouTube scoring search (populates fallbacks automatically)
+      // 2. Fall back to existing direct YouTube ID if topic search returned nothing
       if (!videoId) {
-        videoId = await resolveYouTubeVideoId(
-          currentTrack.artist, 
-          currentTrack.title, 
-          currentTrack.albumArtist, 
-          currentTrack.duration
-        );
+        videoId = getDirectYouTubeId(currentTrack);
       }
 
       if (isCancelled) return;
 
       if (videoId) {
-        // 1. Fetch and stream direct lossless audio via HTML5 Audio with Web Audio API analysis
-        fetchDirectAudioStream(videoId).then(directUrl => {
-          if (!isCancelled && directUrl && audioRef.current) {
-            try {
-              audioRef.current.src = directUrl;
-              currentTrack.resolvedStreamUrl = directUrl;
-              if (ytPlayerRef.current?.pauseVideo) {
-                try { ytPlayerRef.current.pauseVideo(); } catch (e) {}
-              }
-              if (usePlayerStore.getState().isPlaying) {
-                audioRef.current.currentTime = ytPlayerRef.current?.getCurrentTime?.() || usePlayerStore.getState().currentTime || 0;
-                audioRef.current.play().catch(() => {});
-              }
-            } catch (e) {}
-          }
-        }).catch(() => {});
-
-        // 2. Play via YouTube Iframe initially as instant starter
+        // Play via YouTube Iframe continuously without mid-playback stream swapping
         if (ytReadyRef.current && ytPlayerRef.current?.loadVideoById) {
           if (currentVideoIdRef.current !== videoId) {
             currentVideoIdRef.current = videoId;
@@ -432,18 +414,23 @@ export const AudioPlayer = () => {
         if (next2) prefetchTrackVideoId(next2);
       }
 
-      // Background Auto-Mix Pre-Generation (Instant 200ms so queue always has upcoming stream)
+      // Background Auto-Mix Pre-Generation for the queue session
       setTimeout(() => {
         if (isCancelled) return;
-        const queuedIds = new Set(activeQueue.map(t => t.id));
-        fetchUpNextMix(currentTrack, favorites, playHistory, queuedIds)
-          .then(mix => {
-            if (!isCancelled && mix && mix.length > 0) {
-              setRecommendedUpNext(mix);
-              prefetchTrackVideoId(mix[0]);
-            }
-          })
-          .catch(() => {});
+        const currentRecommended = usePlayerStore.getState().recommendedUpNext;
+        if (!currentRecommended || currentRecommended.length < 3) {
+          const queuedIds = new Set(activeQueue.map(t => t.id));
+          fetchUpNextMix(activeQueue.length > 0 ? activeQueue : currentTrack, favorites, playHistory, queuedIds)
+            .then(mix => {
+              if (!isCancelled && mix && mix.length > 0) {
+                setRecommendedUpNext(mix);
+                prefetchTrackVideoId(mix[0]);
+              }
+            })
+            .catch(() => {});
+        } else if (currentRecommended[0]) {
+          prefetchTrackVideoId(currentRecommended[0]);
+        }
       }, 200);
     }
 

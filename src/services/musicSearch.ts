@@ -18,15 +18,81 @@ const suggestionsCache = new Map<string, SearchSuggestionsResult>();
 /**
  * Accurately parses a duration string (e.g. "1:52", "03:45", "1:02:15", or "Song • bunii • 1:52 • 289K plays") into seconds.
  */
-export function parseDurationString(text?: string): number {
-  if (!text) return 0;
-  // Match hh:mm:ss or mm:ss
-  const match = text.match(/\b(?:(\d+):)?(\d{1,2}):(\d{2})\b/);
+export function parseDurationString(durationStr: string | undefined): number {
+  if (!durationStr) return 0;
+  const match = durationStr.match(/(?:(\d+):)?(\d+):(\d+)/);
   if (!match) return 0;
   const hours = match[1] ? parseInt(match[1], 10) : 0;
   const mins = parseInt(match[2], 10);
   const secs = parseInt(match[3], 10);
   return hours * 3600 + mins * 60 + secs;
+}
+
+export function isMatchingArtist(itemArtist: string | undefined, targetArtist: string | undefined): boolean {
+  if (!itemArtist || !targetArtist) return false;
+  const a = itemArtist.toLowerCase().replace(/\s*-\s*topic$/i, '').replace(/\s*official\s*(artist\s*)?channel$/i, '').trim();
+  const t = targetArtist.toLowerCase().replace(/\s*-\s*topic$/i, '').replace(/\s*official\s*(artist\s*)?channel$/i, '').trim();
+  
+  if (a === t) return true;
+
+  // Exact word boundary matching for collabs / features
+  // e.g. "bunii & other", "other & bunii", "bunii feat. other", "other ft. bunii", "other, bunii"
+  const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const wordBoundaryRegex = new RegExp(`(^|[&,+/]|\\bfeat\\.?|\\bft\\.?|\\bwith\\b)\\s*${escaped}\\b`, 'i');
+  const reverseBoundaryRegex = new RegExp(`\\b${escaped}\\s*([&,+/]|\\bfeat\\.?|\\bft\\.?|\\bwith\\b|$)`, 'i');
+  
+  return wordBoundaryRegex.test(a) || reverseBoundaryRegex.test(a);
+}
+
+function extractAlbumInfoFromYTMItem(r: any): { albumName?: string; albumId?: string } {
+  if (!r) return {};
+  const allFlex = r.flexColumns || [];
+  
+  // 1. Check all flex columns runs for direct album browseId (MPREb_, OLAK, MPAD, etc.)
+  for (const col of allFlex) {
+    const runs = col.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+    for (const run of runs) {
+      const bId = run.navigationEndpoint?.browseEndpoint?.browseId;
+      if (bId && (bId.startsWith('MPREb_') || bId.startsWith('OLAK') || bId.startsWith('MPAD') || bId.startsWith('VLOLAK') || bId.startsWith('FEmusic_'))) {
+        return {
+          albumName: run.text?.trim(),
+          albumId: bId
+        };
+      }
+    }
+  }
+
+  // 2. Check for album runs (runs with browseIds that are not artist channels)
+  for (let i = 1; i < allFlex.length; i++) {
+    const runs = allFlex[i].musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+    for (const run of runs) {
+      const text = run.text?.trim();
+      const bId = run.navigationEndpoint?.browseEndpoint?.browseId;
+      if (bId && !bId.startsWith('UC') && !bId.startsWith('FEuser')) {
+        return {
+          albumName: text,
+          albumId: bId
+        };
+      }
+    }
+  }
+
+  // 3. Fallback: parse 3+ part text runs "Song • Artist • Album • 1:30"
+  const flex1Runs = allFlex[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+  if (flex1Runs.length >= 3) {
+    const textRuns = flex1Runs.filter((r: any) => r.text && r.text.trim() !== '•');
+    if (textRuns.length >= 3) {
+      const cand = textRuns[1];
+      if (cand && cand.text) {
+        return {
+          albumName: cand.text.trim(),
+          albumId: cand.navigationEndpoint?.browseEndpoint?.browseId
+        };
+      }
+    }
+  }
+
+  return {};
 }
 
 /**
@@ -265,7 +331,7 @@ export async function resolveAlbumPlaylist(artistName: string, albumName: string
 export function extractOfficialAudioTrackId(renderer: any, fallbackVideoId?: string): string | null {
   if (!renderer) return fallbackVideoId || null;
 
-  // 1. Check Track Credits browse endpoint (MPTC...)
+  // 1. Priority 1: Check Track Credits browse endpoint (MPTC...) which guarantees pure distributor audio
   const menuItems = renderer.menu?.menuRenderer?.items || [];
   for (const mi of menuItems) {
     const browseId = mi?.menuNavigationItemRenderer?.navigationEndpoint?.browseEndpoint?.browseId;
@@ -277,9 +343,69 @@ export function extractOfficialAudioTrackId(renderer: any, fallbackVideoId?: str
     }
   }
 
-  // 2. Check direct watchEndpoint videoId if already an ATV or fallback
+  // 2. Extract potential musicVideoType flags from watchEndpoints
+  const endpointsToCheck = [
+    renderer.title?.runs?.[0]?.navigationEndpoint?.watchEndpoint,
+    renderer.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint,
+    renderer.buttons?.[0]?.buttonRenderer?.command?.watchEndpoint,
+    renderer.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint,
+    renderer.onTap?.watchEndpoint
+  ].filter(Boolean);
+
+  let isExplicitOMV = false;
+  let isExplicitATV = false;
+
+  for (const ep of endpointsToCheck) {
+    const mvType = ep?.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig?.musicVideoType;
+    if (mvType === 'MUSIC_VIDEO_TYPE_OMV') {
+      isExplicitOMV = true;
+    }
+    if (mvType === 'MUSIC_VIDEO_TYPE_ATV') {
+      isExplicitATV = true;
+    }
+  }
+
+  // If YouTube Music explicitly labeled this as an Official Music Video (OMV), reject it
+  if (isExplicitOMV && !isExplicitATV) {
+    return null;
+  }
+
+  // 3. Inspect title text for music video keywords
+  const titleText = (
+    renderer.title?.runs?.[0]?.text ||
+    renderer.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text ||
+    ''
+  ).toLowerCase();
+
+  const isMVTitle = [
+    'official music video',
+    'official video',
+    'music video',
+    ' mv',
+    '[mv]',
+    '(mv)',
+    'video clip'
+  ].some(kw => titleText.includes(kw));
+
+  if (isMVTitle) {
+    return null;
+  }
+
+  // 4. Inspect subtitle runs (in YTM search, videos have subtitle starting with "Video •")
+  const subtitleRuns = renderer.subtitle?.runs || 
+                       renderer.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || 
+                       [];
+  const firstSubText = (subtitleRuns[0]?.text || '').trim().toLowerCase();
+  if (firstSubText === 'video') {
+    return null;
+  }
+
+  // 5. Extract videoId if safe
   const watchId = renderer.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
                   renderer.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+                  renderer.title?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+                  renderer.onTap?.watchEndpoint?.videoId ||
+                  renderer.buttons?.[0]?.buttonRenderer?.command?.watchEndpoint?.videoId ||
                   renderer.playlistItemData?.videoId ||
                   fallbackVideoId;
 
@@ -487,13 +613,18 @@ export async function searchFreeMusic(query: string, signal?: AbortSignal): Prom
                 }
               }
 
+              const albInfo = extractAlbumInfoFromYTMItem(r);
+              const trackAlbum = albInfo.albumName || (targetArtist ? targetTitle : 'Official Release');
+              const trackAlbumId = albInfo.albumId || undefined;
+
               if (!resultsMap.has(key)) {
                 resultsMap.set(key, {
                   id: `piped-${videoId}`,
                   title: title,
                   artist: trackArtist,
                   albumArtist: trackArtist,
-                  album: 'Official Audio',
+                  album: trackAlbum,
+                  albumId: trackAlbumId,
                   duration: itemDuration,
                   cover: cleanGoogleImageUrl(rawThumb, 500),
                   streamUrl: `https://www.youtube.com/watch?v=${videoId}`,
@@ -877,13 +1008,14 @@ export async function fetchArtistProfileFromYTM(
   let avatar = rawBanner ? cleanGoogleImageUrl(rawBanner, 500) : 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
 
   let topTracks: Track[] = [];
-  const albums: Album[] = [];
+  let albums: Album[] = [];
   let singlesAndEPs: Album[] = [];
   const similarArtists: SimilarArtist[] = [];
 
   const contents = browseData?.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
 
   let topSongsPlaylistId: string | null = null;
+  let albumsMoreEndpoint: { browseId: string; params: string } | null = null;
   let singlesMoreEndpoint: { browseId: string; params: string } | null = null;
 
   for (const sec of contents) {
@@ -917,12 +1049,17 @@ export async function fetchArtistProfileFromYTM(
         }
 
         if (trackTitle && videoId) {
+          const albInfo = extractAlbumInfoFromYTMItem(r);
+          const trackAlbum = albInfo.albumName || trackTitle;
+          const trackAlbumId = albInfo.albumId || undefined;
+
           topTracks.push({
             id: `piped-${videoId}`,
             title: trackTitle,
             artist: artistName,
             albumArtist: artistName,
-            album: 'Top Track',
+            album: trackAlbum,
+            albumId: trackAlbumId,
             duration: duration,
             cover: thumb,
             streamUrl: `${artistName} - ${trackTitle}`,
@@ -935,7 +1072,12 @@ export async function fetchArtistProfileFromYTM(
     }
 
     // 2. Albums
-    if (title === 'albums') {
+    if (title.includes('album')) {
+      const moreBtn = shelf?.header?.musicCarouselShelfBasicHeaderRenderer?.moreContentButton?.buttonRenderer?.navigationEndpoint?.browseEndpoint;
+      if (moreBtn && moreBtn.browseId && moreBtn.params) {
+        albumsMoreEndpoint = { browseId: moreBtn.browseId, params: moreBtn.params };
+      }
+
       const items = shelf?.contents || [];
       items.forEach((item: any) => {
         const card = item.musicTwoRowItemRenderer;
@@ -1053,12 +1195,17 @@ export async function fetchArtistProfileFromYTM(
             }
 
             if (trackTitle && videoId) {
+              const albInfo = extractAlbumInfoFromYTMItem(r);
+              const trackAlbum = albInfo.albumName || trackTitle;
+              const trackAlbumId = albInfo.albumId || undefined;
+
               exactTracks.push({
                 id: `piped-${videoId}`,
                 title: trackTitle,
                 artist: artistName,
                 albumArtist: artistName,
-                album: 'Top Track',
+                album: trackAlbum,
+                albumId: trackAlbumId,
                 duration: duration,
                 cover: thumb,
                 streamUrl: `${artistName} - ${trackTitle}`,
@@ -1081,6 +1228,54 @@ export async function fetchArtistProfileFromYTM(
   // If no official header avatar was found on the artist page, fallback to top track cover
   if (!rawBanner && topTracks.length > 0 && topTracks[0].cover) {
     avatar = topTracks[0].cover;
+  }
+
+  // Fetch complete list of Albums if pagination endpoint exists
+  if (albumsMoreEndpoint) {
+    try {
+      const moreRes = await fetch(`${usedBase}/browse`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
+          browseId: albumsMoreEndpoint.browseId,
+          params: albumsMoreEndpoint.params
+        })
+      });
+      if (moreRes.ok) {
+        const moreData = await moreRes.json();
+        const gridItems = moreData?.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.gridRenderer?.items || [];
+        if (gridItems.length > 0) {
+          const completeAlbums: Album[] = [];
+          gridItems.forEach((item: any) => {
+            const card = item.musicTwoRowItemRenderer;
+            if (!card) return;
+            const aTitle = card.title?.runs?.[0]?.text;
+            const aBrowseId = card.navigationEndpoint?.browseEndpoint?.browseId;
+            const aSubtitle = card.subtitle?.runs?.map((s: any) => s.text).join('') || 'Album';
+            const rawThumb = card.thumbnailRenderer?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
+                          card.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
+            const thumb = cleanGoogleImageUrl(rawThumb || avatar);
+
+            if (aTitle && aBrowseId) {
+              completeAlbums.push({
+                id: aBrowseId,
+                name: aTitle,
+                artist: artistName,
+                cover: thumb,
+                releaseDate: aSubtitle,
+                channelId: targetBrowseId
+              });
+            }
+          });
+          if (completeAlbums.length > 0) {
+            albums = completeAlbums;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch full albums:", e);
+    }
   }
 
   // Fetch complete list of Singles & EPs if pagination endpoint exists
@@ -1314,34 +1509,169 @@ export async function fetchAlbumDetails(
     }
   }
 
-  const isGenericName = !albumName || albumName.toLowerCase() === 'web stream' || albumName.toLowerCase() === 'single' || albumName.toLowerCase() === 'official release';
+  const isGenericName = !albumName || 
+    albumName.toLowerCase() === 'web stream' || 
+    albumName.toLowerCase() === 'single' || 
+    albumName.toLowerCase() === 'official release' || 
+    albumName.toLowerCase() === 'official audio' || 
+    albumName.toLowerCase() === 'top track' || 
+    albumName.toLowerCase() === 'top songs' || 
+    albumName.toLowerCase() === 'youtube music';
   const effectiveAlbumName = isGenericName ? (cleanId.replace(/^album-/, '').replace(/^single-/, '') || 'Official Release') : albumName;
 
   let resolvedReleaseName = effectiveAlbumName;
   let resolvedCollectionId = !isNaN(Number(cleanId)) ? cleanId : '';
 
-  // Step A: Universal Parent Album / Collection Discovery via iTunes Track Search
-  // If the query is a song title (or single track), discover its true parent Album or EP name!
+  // -------------------------------------------------------------
+  // LAYER 1: Direct YouTube Music Browse ID (MPREb_ / OLAK / MPAD)
+  // -------------------------------------------------------------
+  if (albumId.startsWith('MPREb_') || albumId.startsWith('MPAD') || albumId.startsWith('VLOLAK') || cleanId.startsWith('MPREb_') || cleanId.startsWith('OLAK') || cleanId.startsWith('VLOLAK')) {
+    try {
+      const ytmDetail = await fetchAlbumDetailsFromYTM(cleanId, resolvedReleaseName, artistName, fallbackCover);
+      if (ytmDetail && ytmDetail.tracks.length > 0 && isMatchingArtist(ytmDetail.artist, artistName)) {
+        return ytmDetail;
+      }
+    } catch (e) {
+      console.warn('YouTube Music album browse direct failed:', e);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // LAYER 2: YouTube Music InnerTube Search for Track's Parent Album
+  // -------------------------------------------------------------
+  if (artistName && effectiveAlbumName) {
+    const ytmEndpoints = [
+      '/api/ytmusic/youtubei/v1/search',
+      'https://music.youtube.com/youtubei/v1/search'
+    ];
+
+    for (const ep of ytmEndpoints) {
+      try {
+        const searchRes = await fetch(ep, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
+            query: `${artistName} ${effectiveAlbumName}`.trim()
+          })
+        });
+        if (searchRes.ok) {
+          const searchData = await searchRes.json();
+          const sections = searchData?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+          for (const sec of sections) {
+            const items = sec.musicShelfRenderer?.contents || sec.itemSectionRenderer?.contents || [];
+            for (const it of items) {
+              const r = it.musicResponsiveListItemRenderer;
+              if (r) {
+                const itemArtist = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
+                if (!isMatchingArtist(itemArtist, artistName)) {
+                  continue; // Do NOT pick an album from an unrelated artist!
+                }
+
+                const albInfo = extractAlbumInfoFromYTMItem(r);
+                if (albInfo.albumId && albInfo.albumId.startsWith('MPREb_')) {
+                  const ytmDetail = await fetchAlbumDetailsFromYTM(albInfo.albumId, albInfo.albumName || resolvedReleaseName, artistName, fallbackCover);
+                  if (ytmDetail && ytmDetail.tracks.length > 0 && isMatchingArtist(ytmDetail.artist, artistName)) {
+                    return ytmDetail;
+                  }
+                }
+                if (albInfo.albumName && !isGenericName) {
+                  resolvedReleaseName = albInfo.albumName;
+                }
+              }
+            }
+          }
+          break;
+        }
+      } catch (e) {
+        console.warn('YouTube Music search album resolution warning:', e);
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // LAYER 3: Official Artist Discography (Multi-track Albums FIRST)
+  // -------------------------------------------------------------
+  if (artistName) {
+    try {
+      const profile = await fetchArtistProfileFromYTM(artistName);
+      if (profile && isMatchingArtist(profile.name, artistName)) {
+        const candidates = [resolvedReleaseName, effectiveAlbumName, albumName].filter(Boolean);
+        
+        // 1. Pass 1: Direct title match in full studio albums
+        for (const alb of (profile.albums || [])) {
+          const albNameLower = (alb.name || '').trim().toLowerCase();
+          for (const cand of candidates) {
+            const candLower = cand.trim().toLowerCase();
+            if (albNameLower === candLower || albNameLower.includes(candLower) || candLower.includes(albNameLower)) {
+              const matchedBrowseId = alb.id.replace('album-', '').replace('album-derived-', '');
+              const ytmDetail = await fetchAlbumDetailsFromYTM(matchedBrowseId, alb.name || resolvedReleaseName, artistName, alb.cover || fallbackCover);
+              if (ytmDetail && ytmDetail.tracks.length > 0 && isMatchingArtist(ytmDetail.artist, artistName)) {
+                return ytmDetail;
+              }
+            }
+          }
+        }
+
+        // 2. Pass 2: Deep Tracklist Inspection (Checks if this song is a track inside any studio album!)
+        // e.g. "gown" is Track 7 inside the studio album "bastard"!
+        for (const alb of (profile.albums || [])) {
+          const matchedBrowseId = alb.id.replace('album-', '').replace('album-derived-', '');
+          const ytmDetail = await fetchAlbumDetailsFromYTM(matchedBrowseId, alb.name, artistName, alb.cover || fallbackCover);
+          if (ytmDetail && ytmDetail.tracks.length > 0) {
+            const targetTrackLower = effectiveAlbumName.trim().toLowerCase();
+            const hasTrack = ytmDetail.tracks.some(t => {
+              const tTitle = (t.title || '').trim().toLowerCase();
+              return tTitle === targetTrackLower || tTitle.startsWith(targetTrackLower + ' ') || tTitle.includes(`(${targetTrackLower})`);
+            });
+            if (hasTrack) {
+              return ytmDetail; // Found parent album containing this song!
+            }
+          }
+        }
+
+        // 3. Pass 3: Singles & EPs fallback
+        for (const single of (profile.singlesAndEPs || [])) {
+          const sNameLower = (single.name || '').trim().toLowerCase();
+          for (const cand of candidates) {
+            const candLower = cand.trim().toLowerCase();
+            if (sNameLower === candLower || sNameLower.includes(candLower) || candLower.includes(sNameLower)) {
+              const matchedBrowseId = single.id.replace('album-', '').replace('album-derived-', '');
+              const ytmDetail = await fetchAlbumDetailsFromYTM(matchedBrowseId, single.name || resolvedReleaseName, artistName, single.cover || fallbackCover);
+              if (ytmDetail && ytmDetail.tracks.length > 0 && isMatchingArtist(ytmDetail.artist, artistName)) {
+                return ytmDetail;
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Artist discography album lookup failed:', e);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // LAYER 4: Universal Parent Album Discovery via iTunes Track Search
+  // -------------------------------------------------------------
   if (artistName && effectiveAlbumName) {
     try {
       const itunesTrackSearch = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' ' + effectiveAlbumName)}&entity=song&limit=10`
+        `https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' ' + effectiveAlbumName)}&entity=song&limit=25`
       ).then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] }));
 
       if (itunesTrackSearch.results && itunesTrackSearch.results.length > 0) {
         const qTrackLower = effectiveAlbumName.toLowerCase().trim();
-        const qArtistLower = artistName.toLowerCase().trim();
 
         const exactTrack = itunesTrackSearch.results.find((item: any) => {
           const tLower = (item.trackName || '').toLowerCase().trim();
           const aLower = (item.artistName || '').toLowerCase().trim();
-          return (tLower === qTrackLower || tLower.includes(qTrackLower) || qTrackLower.includes(tLower)) &&
-                 (aLower === qArtistLower || aLower.includes(qArtistLower) || qArtistLower.includes(aLower));
-        }) || itunesTrackSearch.results[0];
+          const artistMatches = isMatchingArtist(aLower, artistName);
+          const titleMatches = tLower === qTrackLower || tLower.startsWith(qTrackLower + ' ') || tLower.includes(`(${qTrackLower})`);
+          return artistMatches && titleMatches;
+        });
 
-        if (exactTrack?.collectionName) {
-          const cleanCollectionName = exactTrack.collectionName.replace(/ - (EP|Single|Album|LP)$/i, '').trim();
-          resolvedReleaseName = cleanCollectionName;
+        if (exactTrack?.collectionName && isMatchingArtist(exactTrack.artistName, artistName)) {
+          resolvedReleaseName = exactTrack.collectionName.replace(/ - (EP|Single|Album|LP)$/i, '').trim();
           if (exactTrack.collectionId) {
             resolvedCollectionId = String(exactTrack.collectionId);
           }
@@ -1352,51 +1682,40 @@ export async function fetchAlbumDetails(
     }
   }
 
-  // Step B: Direct Official Discography Lookup (Matches discovered or provided album name against YouTube Music official releases)
-  if (artistName) {
+  // -------------------------------------------------------------
+  // LAYER 5: Direct iTunes Album Tracklist Lookup by ID
+  // -------------------------------------------------------------
+  const targetItunesId = resolvedCollectionId || (!isNaN(Number(cleanId)) ? cleanId : '');
+  if (targetItunesId) {
     try {
-      const profile = await fetchArtistProfileFromYTM(artistName);
-      if (profile) {
-        const candidates = [resolvedReleaseName, effectiveAlbumName, albumName].filter(Boolean);
-        const allReleases = [...(profile.albums || []), ...(profile.singlesAndEPs || [])];
-        
-        let match: any = null;
-        for (const cand of candidates) {
-          const candLower = cand.trim().toLowerCase();
-          match = allReleases.find(r => {
-            const rLower = (r.name || '').trim().toLowerCase();
-            return rLower === candLower || rLower.includes(candLower) || candLower.includes(rLower);
-          });
-          if (match) break;
-        }
+      const res = await fetch(`https://itunes.apple.com/lookup?id=${targetItunesId}&entity=song`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.results && data.results.length > 1) {
+          const collection = data.results[0];
+          // STRICT artist matching: only accept if collection artist matches target artist!
+          if (isMatchingArtist(collection.artistName, artistName)) {
+            albumCover = collection.artworkUrl100
+              ? collection.artworkUrl100.replace('100x100bb', '600x600bb')
+              : albumCover;
+            releaseDateStr = collection.releaseDate
+              ? new Date(collection.releaseDate).getFullYear().toString()
+              : undefined;
+            resolvedReleaseName = collection.collectionName || resolvedReleaseName;
 
-        if (match && match.id) {
-          const matchedBrowseId = match.id.replace('album-', '').replace('album-derived-', '');
-          const ytmDetail = await fetchAlbumDetailsFromYTM(matchedBrowseId, match.name || resolvedReleaseName, artistName, match.cover || fallbackCover);
-          if (ytmDetail && ytmDetail.tracks.length > 0) {
-            return ytmDetail;
+            rawTracks = data.results.slice(1).filter((item: any) => isMatchingArtist(item.artistName || collection.artistName, artistName));
           }
         }
       }
-    } catch (e) {
-      console.warn('Artist discography album lookup failed:', e);
+    } catch (err) {
+      console.warn('iTunes direct album fetch failed:', err);
     }
   }
 
-  // Step C: Direct YouTube Music Browse ID (MPREb_... / MPAD... / VLOLAK...)
-  if (albumId.startsWith('MPREb_') || albumId.startsWith('MPAD') || albumId.startsWith('VLOLAK') || cleanId.startsWith('MPREb_') || cleanId.startsWith('OLAK') || cleanId.startsWith('VLOLAK')) {
-    try {
-      const ytmDetail = await fetchAlbumDetailsFromYTM(cleanId, resolvedReleaseName, artistName, fallbackCover);
-      if (ytmDetail && ytmDetail.tracks.length > 0) {
-        return ytmDetail;
-      }
-    } catch (e) {
-      console.warn('YouTube Music album browse failed:', e);
-    }
-  }
-
-  // Step D: YouTube / Invidious Playlist Handler (Parallel Racing)
-  if (isNaN(Number(cleanId)) && (cleanId.startsWith('PL') || cleanId.startsWith('OLAK') || cleanId.startsWith('RD'))) {
+  // -------------------------------------------------------------
+  // LAYER 6: YouTube / Invidious Playlist Handler
+  // -------------------------------------------------------------
+  if (rawTracks.length === 0 && isNaN(Number(cleanId)) && (cleanId.startsWith('PL') || cleanId.startsWith('OLAK') || cleanId.startsWith('RD'))) {
     try {
       const playlistPromises = INVIDIOUS_INSTANCES.map(inst =>
         fetch(`${inst}/api/v1/playlists/${cleanId}`, { signal: AbortSignal.timeout(2200) })
@@ -1423,36 +1742,9 @@ export async function fetchAlbumDetails(
     }
   }
 
-  // Step E: Direct iTunes Album Lookup by ID
-  const targetItunesId = resolvedCollectionId || (!isNaN(Number(cleanId)) ? cleanId : '');
-  if (targetItunesId) {
-    try {
-      let targetCollectionId = targetItunesId;
-      const initialLookup = await fetch(`https://itunes.apple.com/lookup?id=${targetItunesId}`).then(r => r.ok ? r.json() : { results: [] });
-      if (initialLookup.results && initialLookup.results.length > 0) {
-        const item = initialLookup.results[0];
-        if (item.wrapperType === 'track' && item.collectionId) {
-          targetCollectionId = String(item.collectionId);
-        }
-      }
-
-      const albumRes = await fetch(`https://itunes.apple.com/lookup?id=${targetCollectionId}&entity=song`).then(r => r.ok ? r.json() : { results: [] });
-      if (albumRes.results && albumRes.results.length > 0) {
-        const albumMeta = albumRes.results.find((item: any) => item.wrapperType === 'collection') || albumRes.results[0];
-        if (albumMeta.artworkUrl100) {
-          albumCover = albumMeta.artworkUrl100.replace('100x100bb', '600x600bb');
-        }
-        if (albumMeta.releaseDate) {
-          releaseDateStr = albumMeta.releaseDate.substring(0, 4);
-        }
-        rawTracks = albumRes.results.filter((item: any) => item.wrapperType === 'track');
-      }
-    } catch (e) {
-      console.warn('Direct album lookup failed, attempting search:', e);
-    }
-  }
-
-  // Step F: Comprehensive Search by Artist & Album Name across iTunes
+  // -------------------------------------------------------------
+  // LAYER 7: Comprehensive Search by Artist & Album Name across iTunes
+  // -------------------------------------------------------------
   if (rawTracks.length === 0 && artistName) {
     try {
       const searchTerms = [resolvedReleaseName, effectiveAlbumName].filter(Boolean);
@@ -1461,6 +1753,8 @@ export async function fetchAlbumDetails(
         if (res.results && res.results.length > 0) {
           const albumCleanKey = term.toLowerCase().replace(/[^a-z0-9]/g, '');
           const matched = res.results.filter((item: any) => {
+            // STRICT artist matching: Never allow a different artist!
+            if (!isMatchingArtist(item.artistName, artistName)) return false;
             const itemAlbumKey = (item.collectionName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             return itemAlbumKey === albumCleanKey || itemAlbumKey.includes(albumCleanKey) || albumCleanKey.includes(itemAlbumKey);
           });
@@ -1930,198 +2224,220 @@ export function prefetchTrackVideoId(track: Track): void {
 /**
  * YouTube Music Algorithmic "Up Next / Auto-Mix" generator.
  * Strictly generates:
- * 1. Top and deep-cut tracks by the same artist
+* 1. Top and deep-cut tracks by the same artist
  * 2. Songs featuring the artist & artist collaborations (e.g. Bunii & ...)
  * 3. Songs by verified musical collaborators
  * 4. Music the user actually listens to (from favorites & playHistory)
  * 
  * NEVER queries raw album names or random keywords that introduce unrelated tracks.
  */
+/**
+ * Canonical track deduplication signature.
+ * Unifies tracks regardless of iTunes vs YouTube title formatting, topic endings, feat tags, etc.
+ */
+function getCanonicalSignature(title: string, artist: string): string {
+  const cleanTitle = (title || '')
+    .toLowerCase()
+    .replace(/(\(|\[)(feat\.?|ft\.?|prod\.?|official|audio|video|lyrics|remix|version|hq|hd|topic).*/gi, '')
+    .replace(/[^a-z0-9]/g, '');
+  const cleanArtist = (artist || '')
+    .toLowerCase()
+    .replace(/ - topic$/i, '')
+    .replace(/(\(|\[)(feat\.?|ft\.).*/gi, '')
+    .replace(/[^a-z0-9]/g, '');
+  return `${cleanArtist}___${cleanTitle}`;
+}
+
 export async function fetchUpNextMix(
-  seedTrack: Track,
+  seed: Track | Track[],
   userFavorites: Track[] = [],
   playHistory: Record<string, { track: Track; playCount: number }> = {},
   excludeIds: Set<string> = new Set()
 ): Promise<Track[]> {
-  if (!seedTrack) return [];
+  const seedList: Track[] = Array.isArray(seed) ? seed.filter(Boolean) : (seed ? [seed] : []);
+  if (seedList.length === 0) return [];
 
   const seenKeys = new Set<string>();
-  const trackKey = (t: { artist: string; title: string }) =>
-    `${t.artist}-${t.title}`.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-  seenKeys.add(trackKey(seedTrack));
+  // Exclude all tracks currently in the queue/seed list
+  seedList.forEach(s => {
+    seenKeys.add(getCanonicalSignature(s.title, s.artist));
+    excludeIds.add(s.id);
+  });
 
-  // Extract clean primary artist name (e.g. "Bunii" from "Bunii & Crayon" or "Bunii feat. XYZ")
-  const primaryArtist = (seedTrack.artist || '')
-    .split(/[,&/]| feat\.? | ft\.? /i)[0]
-    .trim();
-  const primaryArtistLower = primaryArtist.toLowerCase();
+  // Extract all unique primary artists from the queue (preserving queue appearance order)
+  const uniqueArtists: string[] = [];
+  seedList.forEach(s => {
+    const raw = (s.artist || '').split(/[,&/]| feat\.? | ft\.? | with /i)[0].trim();
+    if (raw && !uniqueArtists.some(a => a.toLowerCase() === raw.toLowerCase())) {
+      uniqueArtists.push(raw);
+    }
+  });
 
-  const artistPool: Track[] = [];
-  const collabPool: Track[] = [];
-  const collaboratorNames = new Set<string>();
+  // Limit seed artists to top 4 to maintain fast parallel search times
+  const activeSeedArtists = uniqueArtists.slice(0, 4);
 
-  // 1. Fetch deep catalog by primary artist on iTunes + YouTube
-  try {
-    const [artistTermRes, generalSongRes, ytTopicItems] = await Promise.allSettled([
-      fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(primaryArtist)}&attribute=artistTerm&entity=song&limit=40`)
-        .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
-      fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(primaryArtist + ' feat')}&entity=song&limit=25`)
-        .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
-      fetchFastFromInvidious(`${primaryArtist} Topic`)
-    ]);
+  // For each seed artist, fetch their deep catalog, collabs, and related tracks
+  const artistPools: Map<string, Track[]> = new Map();
+  const collabPools: Map<string, Track[]> = new Map();
+  const similarArtistPools: Map<string, Track[]> = new Map();
 
-    const itunesTracks = [
-      ...(artistTermRes.status === 'fulfilled' && artistTermRes.value.results ? artistTermRes.value.results : []),
-      ...(generalSongRes.status === 'fulfilled' && generalSongRes.value.results ? generalSongRes.value.results : [])
-    ];
+  const artistFetches = activeSeedArtists.map(async (artistName) => {
+    const artistLower = artistName.toLowerCase().trim();
+    const artistTracks: Track[] = [];
+    const collabTracks: Track[] = [];
 
-    itunesTracks.forEach((item: any) => {
-      if (!item.trackName || !item.artistName) return;
-      const key = `${item.artistName}-${item.trackName}`.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const id = `track-${item.trackId}`;
+    // Parallel fetch: iTunes Exact Artist Catalog + YouTube Topic Catalog + Real YouTube Music Similar Artists
+    try {
+      const [artistTermRes, generalSongRes, ytTopicItems, similarArtists] = await Promise.allSettled([
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&attribute=artistTerm&entity=song&limit=35`)
+          .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' feat')}&entity=song&limit=15`)
+          .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
+        fetchFastFromInvidious(`${artistName} Topic`),
+        fetchSimilarArtists(artistName, seedList[0]?.id)
+      ]);
 
-      if (seenKeys.has(key) || excludeIds.has(id)) return;
+      const itunesTracks = [
+        ...(artistTermRes.status === 'fulfilled' && artistTermRes.value.results ? artistTermRes.value.results : []),
+        ...(generalSongRes.status === 'fulfilled' && generalSongRes.value.results ? generalSongRes.value.results : [])
+      ];
 
-      const aLower = item.artistName.toLowerCase().trim();
-      const tLower = item.trackName.toLowerCase().trim();
-
-      const trackObj: Track = {
-        id,
-        title: item.trackName,
-        artist: item.artistName,
-        albumArtist: item.collectionArtistName || item.artistName,
-        album: item.collectionName || 'Single',
-        duration: Math.round((item.trackTimeMillis || 210000) / 1000),
-        cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : seedTrack.cover,
-        streamUrl: `${item.artistName} - ${item.trackName}`,
-        source: 'youtube',
-        category: 'song'
-      };
-
-      // Exact primary artist track
-      if (aLower === primaryArtistLower) {
-        seenKeys.add(key);
-        artistPool.push(trackObj);
-      }
-      // Collaboration or Feature involving primary artist
-      else if (
-        aLower.includes(primaryArtistLower) || 
-        tLower.includes(`feat. ${primaryArtistLower}`) || 
-        tLower.includes(`ft. ${primaryArtistLower}`) ||
-        tLower.includes(`feat ${primaryArtistLower}`)
-      ) {
-        seenKeys.add(key);
-        collabPool.push(trackObj);
-
-        // Extract the collaborating artist name
-        const cleanCollabArtist = item.artistName
-          .replace(new RegExp(primaryArtist, 'gi'), '')
-          .replace(/[&,]/g, '')
-          .replace(/feat\..*$/i, '')
-          .trim();
-        if (cleanCollabArtist && cleanCollabArtist.length > 1) {
-          collaboratorNames.add(cleanCollabArtist);
-        }
-      }
-    });
-
-    // YouTube Topic Tracks
-    if (ytTopicItems.status === 'fulfilled' && Array.isArray(ytTopicItems.value)) {
-      ytTopicItems.value.forEach((item: any) => {
-        if (!item.title || !item.videoId) return;
-        const author = item.author ? item.author.replace(' - Topic', '').trim() : primaryArtist;
-        const key = `${author}-${item.title}`.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const id = `piped-${item.videoId}`;
+      itunesTracks.forEach((item: any) => {
+        if (!item.trackName || !item.artistName) return;
+        const key = getCanonicalSignature(item.trackName, item.artistName);
+        const id = `track-${item.trackId}`;
 
         if (seenKeys.has(key) || excludeIds.has(id)) return;
 
-        const aLower = author.toLowerCase().trim();
-        if (aLower === primaryArtistLower) {
+        const aLower = item.artistName.toLowerCase().trim();
+        const tLower = item.trackName.toLowerCase().trim();
+
+        const trackObj: Track = {
+          id,
+          title: item.trackName,
+          artist: item.artistName,
+          albumArtist: item.collectionArtistName || item.artistName,
+          album: item.collectionName || 'Single',
+          duration: Math.round((item.trackTimeMillis || 210000) / 1000),
+          cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : seedList[0].cover,
+          streamUrl: `${item.artistName} - ${item.trackName}`,
+          source: 'youtube',
+          category: 'song'
+        };
+
+        // 1. Exact artist match ONLY (rejects false positives like "Angel Slayr")
+        if (aLower === artistLower) {
           seenKeys.add(key);
-          artistPool.push({
-            id,
-            title: item.title,
-            artist: author,
-            albumArtist: author,
-            album: item.title,
-            duration: item.lengthSeconds || 180,
-            cover: item.videoThumbnails?.find((t: any) => t.quality === 'medium')?.url || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
-            streamUrl: `${author} - ${item.title}`,
-            source: 'youtube',
-            category: 'song'
-          });
+          artistTracks.push(trackObj);
+        }
+        // 2. Strict Collaboration match (must contain explicit conjunction with artist)
+        else {
+          const hasExplicitFeatInTitle = tLower.includes(`feat. ${artistLower}`) || 
+                                       tLower.includes(`ft. ${artistLower}`) || 
+                                       tLower.includes(`feat ${artistLower}`) ||
+                                       tLower.includes(`with ${artistLower}`);
+          
+          const hasConjunctionInArtist = (aLower.startsWith(`${artistLower} &`) ||
+                                          aLower.startsWith(`${artistLower} x`) ||
+                                          aLower.startsWith(`${artistLower} +`) ||
+                                          aLower.startsWith(`${artistLower},`) ||
+                                          aLower.endsWith(`& ${artistLower}`) ||
+                                          aLower.endsWith(`x ${artistLower}`) ||
+                                          aLower.endsWith(`+ ${artistLower}`) ||
+                                          aLower.endsWith(`, ${artistLower}`) ||
+                                          aLower.includes(`feat. ${artistLower}`) ||
+                                          aLower.includes(`ft. ${artistLower}`));
+
+          if (hasExplicitFeatInTitle || hasConjunctionInArtist) {
+            seenKeys.add(key);
+            collabTracks.push(trackObj);
+          }
         }
       });
-    }
-  } catch (e) {}
 
-  // 2. Fetch tracks by real collaborating artists
-  const collaboratorPool: Track[] = [];
-  const topCollabs = Array.from(collaboratorNames).slice(0, 3);
-  if (topCollabs.length > 0) {
-    try {
-      const collabFetches = topCollabs.map(collabName =>
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(collabName)}&attribute=artistTerm&entity=song&limit=10`)
-          .then(r => r.ok ? r.json() : { results: [] })
-          .catch(() => ({ results: [] }))
-      );
+      // YouTube Topic Tracks
+      if (ytTopicItems.status === 'fulfilled' && Array.isArray(ytTopicItems.value)) {
+        ytTopicItems.value.forEach((item: any) => {
+          if (!item.title || !item.videoId) return;
+          const author = item.author ? item.author.replace(' - Topic', '').trim() : artistName;
+          const key = getCanonicalSignature(item.title, author);
+          const id = `piped-${item.videoId}`;
 
-      const collabResults = await Promise.allSettled(collabFetches);
-      collabResults.forEach(res => {
-        if (res.status === 'fulfilled' && res.value.results) {
-          res.value.results.forEach((item: any) => {
-            if (!item.trackName || !item.artistName) return;
-            const key = `${item.artistName}-${item.trackName}`.toLowerCase().replace(/[^a-z0-9]/g, '');
-            const id = `track-${item.trackId}`;
-            if (!seenKeys.has(key) && !excludeIds.has(id)) {
-              seenKeys.add(key);
-              collaboratorPool.push({
-                id,
-                title: item.trackName,
-                artist: item.artistName,
-                albumArtist: item.collectionArtistName || item.artistName,
-                album: item.collectionName || 'Single',
-                duration: Math.round((item.trackTimeMillis || 210000) / 1000),
-                cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : seedTrack.cover,
-                streamUrl: `${item.artistName} - ${item.trackName}`,
-                source: 'youtube',
-                category: 'song'
-              });
-            }
-          });
-        }
-      });
+          if (seenKeys.has(key) || excludeIds.has(id)) return;
+
+          if (author.toLowerCase().trim() === artistLower) {
+            seenKeys.add(key);
+            artistTracks.push({
+              id,
+              title: item.title,
+              artist: author,
+              albumArtist: author,
+              album: item.title,
+              duration: item.lengthSeconds || 180,
+              cover: item.videoThumbnails?.find((t: any) => t.quality === 'medium')?.url || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
+              streamUrl: `${author} - ${item.title}`,
+              source: 'youtube',
+              category: 'song'
+            });
+          }
+        });
+      }
+
+      // Fetch top tracks for real similar/peer artists from YouTube Music
+      const similarTracks: Track[] = [];
+      if (similarArtists.status === 'fulfilled' && Array.isArray(similarArtists.value) && similarArtists.value.length > 0) {
+        const topPeers = similarArtists.value.slice(0, 4);
+        const peerFetches = topPeers.map(peer =>
+          fetchArtistDeepTracks(peer.name).catch(() => [])
+        );
+        const peerResults = await Promise.allSettled(peerFetches);
+        peerResults.forEach(pr => {
+          if (pr.status === 'fulfilled' && Array.isArray(pr.value)) {
+            pr.value.forEach(pTrack => {
+              const key = getCanonicalSignature(pTrack.title, pTrack.artist);
+              if (!seenKeys.has(key) && !excludeIds.has(pTrack.id)) {
+                seenKeys.add(key);
+                similarTracks.push(pTrack);
+              }
+            });
+          }
+        });
+      }
+      similarArtistPools.set(artistName, similarTracks);
+
     } catch (e) {}
-  }
 
-  // 3. User taste pool: tracks from user's favorite tracks & most-played artists
+    artistPools.set(artistName, artistTracks);
+    collabPools.set(artistName, collabTracks);
+  });
+
+  await Promise.allSettled(artistFetches);
+
+  // User Taste Pool (matching mood/vibe)
   const userTastePool: Track[] = [];
-  
-  // A. User's explicitly liked favorites
   userFavorites.forEach(fav => {
-    const key = trackKey(fav);
-    if (!seenKeys.has(key) && !excludeIds.has(fav.id) && fav.id !== seedTrack.id) {
+    const key = getCanonicalSignature(fav.title, fav.artist);
+    if (!seenKeys.has(key) && !excludeIds.has(fav.id)) {
       seenKeys.add(key);
       userTastePool.push(fav);
     }
   });
 
-  // B. Tracks by user's top played artists in playHistory
   const topHistoryArtists = Object.values(playHistory)
     .sort((a, b) => b.playCount - a.playCount)
     .map(h => h.track)
-    .filter(t => t && t.id !== seedTrack.id);
+    .filter(t => t && !excludeIds.has(t.id));
 
   topHistoryArtists.forEach(histTrack => {
-    const key = trackKey(histTrack);
+    const key = getCanonicalSignature(histTrack.title, histTrack.artist);
     if (!seenKeys.has(key) && !excludeIds.has(histTrack.id)) {
       seenKeys.add(key);
       userTastePool.push(histTrack);
     }
   });
 
-  // 4. Shuffle each sub-pool so each session gets a fresh, dynamic mix
+  // Shuffle individual pools
   const shuffle = <T>(arr: T[]) => {
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -2129,36 +2445,50 @@ export async function fetchUpNextMix(
     }
   };
 
-  shuffle(artistPool);
-  shuffle(collabPool);
-  shuffle(collaboratorPool);
+  artistPools.forEach(pool => shuffle(pool));
+  collabPools.forEach(pool => shuffle(pool));
+  similarArtistPools.forEach(pool => shuffle(pool));
   shuffle(userTastePool);
 
-  // 5. Interleave in a true YouTube Music algorithmic pattern:
-  // - Starts with 2-3 tracks by the same artist
-  // - Followed by artist collabs & features
-  // - Followed by collaborator circle tracks & user taste tracks
+  // Interleave recommendations across ALL seed artists and their scene
   const finalMix: Track[] = [];
-  
-  // Lead with same artist
-  while (artistPool.length > 0 && finalMix.length < 3) {
-    finalMix.push(artistPool.shift()!);
-  }
 
-  // Then blend: 1 Collab / Feature, 1 Same Artist, 1 User Taste / Collaborator
-  while (finalMix.length < 30 && (artistPool.length > 0 || collabPool.length > 0 || collaboratorPool.length > 0 || userTastePool.length > 0)) {
-    if (collabPool.length > 0) {
-      finalMix.push(collabPool.shift()!);
+  // Round-robin blend across all seed artists in the queue
+  let addedInRound = true;
+  while (finalMix.length < 32 && addedInRound) {
+    addedInRound = false;
+
+    // A. One track per seed artist in the queue
+    for (const artistName of activeSeedArtists) {
+      const pool = artistPools.get(artistName);
+      if (pool && pool.length > 0) {
+        finalMix.push(pool.shift()!);
+        addedInRound = true;
+      }
     }
-    if (artistPool.length > 0) {
-      finalMix.push(artistPool.shift()!);
+
+    // B. One collaboration / feature per seed artist
+    for (const artistName of activeSeedArtists) {
+      const collabs = collabPools.get(artistName);
+      if (collabs && collabs.length > 0) {
+        finalMix.push(collabs.shift()!);
+        addedInRound = true;
+      }
     }
+
+    // C. One real scene peer / similar artist track from YouTube Music
+    for (const artistName of activeSeedArtists) {
+      const peers = similarArtistPools.get(artistName);
+      if (peers && peers.length > 0) {
+        finalMix.push(peers.shift()!);
+        addedInRound = true;
+      }
+    }
+
+    // D. One user taste track
     if (userTastePool.length > 0) {
       finalMix.push(userTastePool.shift()!);
-    } else if (collaboratorPool.length > 0) {
-      finalMix.push(collaboratorPool.shift()!);
-    } else if (artistPool.length > 0) {
-      finalMix.push(artistPool.shift()!);
+      addedInRound = true;
     }
   }
 

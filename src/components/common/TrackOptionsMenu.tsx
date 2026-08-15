@@ -167,7 +167,14 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     setIsOpen(false);
     closePlayerDrawer();
     const rawAlb = track.album?.trim();
-    const isGenericAlb = !rawAlb || rawAlb.toLowerCase() === 'web stream' || rawAlb.toLowerCase() === 'single' || rawAlb.toLowerCase() === 'official release';
+    const isGenericAlb = !rawAlb || 
+      rawAlb.toLowerCase() === 'web stream' || 
+      rawAlb.toLowerCase() === 'single' || 
+      rawAlb.toLowerCase() === 'official release' || 
+      rawAlb.toLowerCase() === 'official audio' || 
+      rawAlb.toLowerCase() === 'top track' || 
+      rawAlb.toLowerCase() === 'top songs' || 
+      rawAlb.toLowerCase() === 'youtube music';
     const albName = isGenericAlb ? track.title : rawAlb;
     const albId = (track as any).albumId || (track as any).playlistId || `album-${encodeURIComponent(albName)}`;
     const albArtist = track.albumArtist || track.artist;

@@ -1,4 +1,5 @@
 import type { Track } from '../types';
+import { isSameTrack } from '../utils/trackUtils';
 import { Play } from 'lucide-react';
 import { TrackOptionsMenu } from './common/TrackOptionsMenu';
 
@@ -32,7 +33,7 @@ export function SpeedDialGrid({
         }}
       >
         {tracks.slice(0, 8).map((track, index) => {
-          const isActive = currentTrack?.id === track.id;
+          const isActive = isSameTrack(currentTrack, track);
           
           return (
             <div

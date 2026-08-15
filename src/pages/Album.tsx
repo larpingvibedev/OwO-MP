@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { fetchAlbumDetails, fetchArtistProfileFromYTM, cleanGoogleImageUrl, resolveArtistAvatar } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
-import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check } from 'lucide-react';
+import { isSameTrack } from '../utils/trackUtils';
+import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check, Bookmark, BookmarkCheck } from 'lucide-react';
 import type { AlbumDetail, Track, Album as ReleaseItem } from '../types';
 
 function formatTime(seconds: number): string {
@@ -43,7 +44,9 @@ export function Album() {
     togglePlayPause,
     favorites,
     toggleFavorite,
-    addToQueue
+    addToQueue,
+    savedAlbums,
+    toggleSaveAlbum
   } = usePlayerStore();
 
   const albumName = searchParams.get('name') || '';
@@ -130,17 +133,19 @@ export function Album() {
   const displayCover = cleanGoogleImageUrl(album.cover || initialCover, 500);
 
   // Check if currently playing this release
-  const isCurrentReleasePlaying = isPlaying && album.tracks.some(t => t.id === currentTrack?.id);
+  const isCurrentReleasePlaying = isPlaying && album.tracks.some(t => isSameTrack(t, currentTrack));
   const totalSeconds = album.tracks.reduce((acc, t) => acc + (t.duration || 180), 0);
 
-  // Release favorite status
   const isPrimaryFavorited = album.tracks.length > 0 && favorites.some(f => f.id === album.tracks[0]?.id);
+  const isSavedToLibrary = Boolean(album && savedAlbums.some(
+    a => a.id === album.id || (a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase())
+  ));
 
   const handlePlayTrack = (track: Track) => {
-    if (currentTrack?.id === track.id) {
+    if (isSameTrack(currentTrack, track)) {
       togglePlayPause();
     } else {
-      const idx = album.tracks.findIndex(t => t.id === track.id);
+      const idx = album.tracks.findIndex(t => isSameTrack(t, track));
       setQueue(album.tracks, Math.max(0, idx), `${album.name}`);
       setIsPlaying(true);
     }
@@ -392,6 +397,37 @@ export function Album() {
               </button>
             )}
 
+            {/* Save Album to Library Button */}
+            <button 
+              onClick={() => toggleSaveAlbum({
+                id: album.id,
+                name: album.name,
+                artist: album.artist,
+                cover: album.cover || initialCover,
+                releaseDate: album.releaseDate,
+                trackCount: album.tracks.length,
+                artistId: album.artistId
+              })}
+              title={isSavedToLibrary ? "Remove album from Library" : "Save album to Library"}
+              style={{ 
+                width: '44px',
+                height: '44px',
+                borderRadius: '50%',
+                backgroundColor: isSavedToLibrary ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.06)',
+                border: '1px solid var(--border-color)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                color: isSavedToLibrary ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                transition: 'transform 0.15s, color 0.15s, background-color 0.15s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.08)'}
+              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+            >
+              {isSavedToLibrary ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
+            </button>
+
             {/* Add All to Queue Button */}
             <button 
               onClick={handleAddAllToQueue}
@@ -428,7 +464,7 @@ export function Album() {
 
         <div className="top-tracks-list">
           {album.tracks.map((track, idx) => {
-            const isCurrent = currentTrack?.id === track.id;
+            const isCurrent = isSameTrack(currentTrack, track);
             const isFav = favorites.some(f => f.id === track.id);
             const isAdded = addedTrackId === track.id;
 

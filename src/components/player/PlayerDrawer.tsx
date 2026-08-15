@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Sparkles, Music, Play, Plus, Mic2, ListMusic, 
+  Sparkles, Music, Play, Plus,
   Compass, Volume2, Check, ExternalLink, Loader2, Info, Disc, ListPlus,
-  Copy, BookOpen, Search, ChevronDown, Heart
+  Copy, BookOpen, Search, Heart
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -33,11 +33,11 @@ export function PlayerDrawer() {
     autoplay,
     playingFrom,
     recommendedUpNext,
+    queueSessionId,
     activePlayerTab,
     isPlayerDrawerOpen,
     favorites,
     playHistory,
-    setQueue,
     addToQueue,
     removeFromQueue,
     toggleAutoplay,
@@ -64,35 +64,54 @@ export function PlayerDrawer() {
   const [moreFromArtist, setMoreFromArtist] = useState<Track[]>([]);
   const [isMoreFromArtistLoading, setIsMoreFromArtistLoading] = useState(false);
 
-  const lyricsScrollRef = useRef<HTMLDivElement>(null);
+  const contentColRef = useRef<HTMLDivElement>(null);
   const activeLyricRef = useRef<HTMLDivElement>(null);
   const currentQueueItemRef = useRef<HTMLDivElement>(null);
 
   const activeQueue = isShuffle ? shuffledQueue : queue;
 
-  // Auto-scroll to current track in queue
+  // Auto-scroll to current track in queue strictly inside the content column
   useEffect(() => {
-    if (currentQueueItemRef.current && activePlayerTab === 'up_next') {
-      currentQueueItemRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest'
+    if (activePlayerTab !== 'up_next') return;
+    const container = contentColRef.current;
+    const activeElement = currentQueueItemRef.current;
+    if (container && activeElement) {
+      const containerRect = container.getBoundingClientRect();
+      const elementRect = activeElement.getBoundingClientRect();
+      const relativeTop = elementRect.top - containerRect.top + container.scrollTop;
+      const targetScrollTop = relativeTop - 120;
+
+      container.scrollTo({
+        top: Math.max(0, targetScrollTop),
+        behavior: 'smooth'
       });
     }
   }, [queueIndex, activePlayerTab, isPlayerDrawerOpen]);
 
-  // 1. Fetch Dynamic Algorithmic "Up Next / Auto-Mix" when current track changes
+  // 1. Fetch Dynamic Algorithmic "Up Next / Auto-Mix" anchored to the ACTIVE QUEUE SESSION
+  const lastQueueSessionRef = useRef<string>('');
+
   useEffect(() => {
-    if (!currentTrack) return;
+    if (!currentTrack || activeQueue.length === 0) return;
+
+    // Only synthesize when a NEW explicit queue session is started or when recommendations are empty!
+    if (lastQueueSessionRef.current === queueSessionId && recommendedUpNext.length > 0) {
+      return;
+    }
+
+    lastQueueSessionRef.current = queueSessionId;
 
     let isMounted = true;
     setIsLoadingMix(true);
 
     const queuedIds = new Set(activeQueue.map(t => t.id));
 
-    fetchUpNextMix(currentTrack, favorites, playHistory, queuedIds)
+    fetchUpNextMix(activeQueue, favorites, playHistory, queuedIds)
       .then(mix => {
         if (isMounted) {
-          setRecommendedUpNext(mix);
+          if (mix && mix.length > 0) {
+            setRecommendedUpNext(mix);
+          }
           setIsLoadingMix(false);
         }
       })
@@ -103,7 +122,7 @@ export function PlayerDrawer() {
     return () => {
       isMounted = false;
     };
-  }, [currentTrack?.id, favorites.length]);
+  }, [queueSessionId, activeQueue[0]?.id]);
 
   // 2. Fetch Multi-Tier Lyrics from LRCLIB, Genius & Musixmatch
   useEffect(() => {
@@ -135,12 +154,20 @@ export function PlayerDrawer() {
     };
   }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, activePlayerTab]);
 
-  // 3. Auto-Scroll Synced Lyrics
+  // 3. Auto-Scroll Synced Lyrics strictly inside the content column without moving parent screens
   useEffect(() => {
-    if (activeLyricRef.current && activePlayerTab === 'lyrics') {
-      activeLyricRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center'
+    if (activePlayerTab !== 'lyrics') return;
+    const container = contentColRef.current;
+    const activeElement = activeLyricRef.current;
+    if (container && activeElement) {
+      const containerRect = container.getBoundingClientRect();
+      const elementRect = activeElement.getBoundingClientRect();
+      const relativeTop = elementRect.top - containerRect.top + container.scrollTop;
+      const targetScrollTop = relativeTop - (container.clientHeight / 2) + (activeElement.clientHeight / 2);
+
+      container.scrollTo({
+        top: Math.max(0, targetScrollTop),
+        behavior: 'smooth'
       });
     }
   }, [currentTime, activePlayerTab]);
@@ -183,12 +210,28 @@ export function PlayerDrawer() {
     };
   }, [currentTrack?.id, currentTrack?.artist, activePlayerTab]);
 
-  if (!isPlayerDrawerOpen) return null;
+  if (!currentTrack) return null;
 
   const handlePlayRecommendedTrack = (track: Track) => {
-    // Insert into queue right after current track and play
-    const newQueue = [...activeQueue.slice(0, queueIndex + 1), track, ...activeQueue.slice(queueIndex + 1)];
-    setQueue(newQueue, queueIndex + 1, `${track.title} Mix`);
+    // 1. Find index of clicked track in the current recommended mix
+    const clickedIdx = recommendedUpNext.findIndex(t => t.id === track.id);
+    const skippedFromUpNext = clickedIdx >= 0 ? recommendedUpNext.slice(0, clickedIdx) : [];
+    const remainingUpNext = clickedIdx >= 0 ? recommendedUpNext.slice(clickedIdx + 1) : recommendedUpNext.filter(t => t.id !== track.id);
+
+    // 2. Append skipped items and clicked track into the active queue
+    const newQueue = [...queue, ...skippedFromUpNext, track];
+    const newShuffled = isShuffle ? [...shuffledQueue, ...skippedFromUpNext, track] : newQueue;
+
+    // 3. Keep playingFrom, queueSessionId, and remaining Up Next recommendations intact
+    usePlayerStore.setState({
+      queue: newQueue,
+      shuffledQueue: newShuffled,
+      queueIndex: newQueue.length - 1,
+      currentTrack: track,
+      recommendedUpNext: remainingUpNext,
+      currentTime: 0,
+      isPlaying: true
+    });
   };
 
   const handleAddRecommendedToQueue = (track: Track) => {
@@ -211,7 +254,7 @@ export function PlayerDrawer() {
   const isFavorite = currentTrack && favorites.some(f => f.id === currentTrack.id);
 
   return (
-    <div className="player-drawer-container">
+    <div className={`player-drawer-container ${isPlayerDrawerOpen ? 'open' : 'closed'}`}>
       {/* Dynamic Ambient Blur Glow (Matching Album Artwork) */}
       <div 
         style={{
@@ -227,109 +270,6 @@ export function PlayerDrawer() {
           zIndex: 0
         }}
       />
-
-      {/* Header with Dropdown Collapse Arrow and Navigation Tabs */}
-      <div style={{
-        padding: '12px 24px',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: 'rgba(10, 12, 16, 0.85)',
-        backdropFilter: 'blur(20px)',
-        zIndex: 10,
-        position: 'relative'
-      }}>
-        {/* Left: Dropdown Collapse Chevron Button */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: '140px' }}>
-          <button
-            onClick={closePlayerDrawer}
-            className="collapse-dropdown-btn"
-            title="Drop down player (Collapse)"
-          >
-            <ChevronDown size={22} />
-          </button>
-
-          <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            Now Playing
-          </span>
-        </div>
-
-        {/* Center: Navigation Tabs */}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <button
-            onClick={() => setActivePlayerTab('up_next')}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: activePlayerTab === 'up_next' ? 'var(--accent-primary)' : 'var(--text-secondary)',
-              fontSize: '0.85rem',
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-              padding: '6px 14px',
-              borderRadius: '20px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              backgroundColor: activePlayerTab === 'up_next' ? 'rgba(52, 152, 219, 0.14)' : 'transparent',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <ListMusic size={15} />
-            <span>UP NEXT</span>
-          </button>
-
-          <button
-            onClick={() => setActivePlayerTab('lyrics')}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: activePlayerTab === 'lyrics' ? 'var(--accent-primary)' : 'var(--text-secondary)',
-              fontSize: '0.85rem',
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-              padding: '6px 14px',
-              borderRadius: '20px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              backgroundColor: activePlayerTab === 'lyrics' ? 'rgba(52, 152, 219, 0.14)' : 'transparent',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <Mic2 size={15} />
-            <span>LYRICS</span>
-          </button>
-
-          <button
-            onClick={() => setActivePlayerTab('related')}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: activePlayerTab === 'related' ? 'var(--accent-primary)' : 'var(--text-secondary)',
-              fontSize: '0.85rem',
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-              padding: '6px 14px',
-              borderRadius: '20px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              backgroundColor: activePlayerTab === 'related' ? 'rgba(52, 152, 219, 0.14)' : 'transparent',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <Compass size={15} />
-            <span>RELATED</span>
-          </button>
-        </div>
-
-        {/* Right: Balanced Empty Spacer */}
-        <div style={{ minWidth: '140px', display: 'flex', justifyContent: 'flex-end' }} />
-      </div>
 
       {/* Expanded Now Playing Body: 2-Column Split */}
       <div className="expanded-now-playing-body">
@@ -456,6 +396,35 @@ export function PlayerDrawer() {
         {/* RIGHT COLUMN: TAB CONTENT (UP NEXT / LYRICS / RELATED)                     */}
         {/* ========================================================================= */}
         <div className="expanded-content-col">
+          {/* Native YouTube Music Fixed Tabs Header */}
+          <div className="expanded-tabs-header">
+            <button
+              onClick={() => setActivePlayerTab('up_next')}
+              className={`expanded-tab-btn ${activePlayerTab === 'up_next' ? 'active' : ''}`}
+            >
+              <span>UP NEXT</span>
+              {activePlayerTab === 'up_next' && <div className="expanded-tab-indicator" />}
+            </button>
+
+            <button
+              onClick={() => setActivePlayerTab('lyrics')}
+              className={`expanded-tab-btn ${activePlayerTab === 'lyrics' ? 'active' : ''}`}
+            >
+              <span>LYRICS</span>
+              {activePlayerTab === 'lyrics' && <div className="expanded-tab-indicator" />}
+            </button>
+
+            <button
+              onClick={() => setActivePlayerTab('related')}
+              className={`expanded-tab-btn ${activePlayerTab === 'related' ? 'active' : ''}`}
+            >
+              <span>RELATED</span>
+              {activePlayerTab === 'related' && <div className="expanded-tab-indicator" />}
+            </button>
+          </div>
+
+          {/* Scrollable Tab Content Container */}
+          <div className="expanded-tab-scroll-body" ref={contentColRef}>
         
         {/* ========================================================================= */}
         {/* TAB 1: UP NEXT                                                            */}
@@ -864,7 +833,7 @@ export function PlayerDrawer() {
         {/* TAB 2: LYRICS (LRCLIB Synced Karaoke, Plain & Genius Integration)          */}
         {/* ========================================================================= */}
         {activePlayerTab === 'lyrics' && (
-          <div ref={lyricsScrollRef} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {currentTrack && (
               <div style={{
                 display: 'flex',
@@ -1604,6 +1573,7 @@ export function PlayerDrawer() {
             </div>
           </div>
         )}
+          </div>
         </div>
       </div>
     </div>

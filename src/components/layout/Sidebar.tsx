@@ -1,79 +1,179 @@
-import { NavLink } from 'react-router-dom';
+import React, { useState } from 'react';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { 
   Home, 
   Search, 
   Library, 
+  Settings, 
+  Disc3, 
+  Menu, 
+  Plus, 
+  Heart, 
   ListMusic, 
-  Settings,
-  Disc3,
-  Heart,
-  Download
+  Sparkles,
+  Check
 } from 'lucide-react';
+import { usePlayerStore } from '../../store/usePlayerStore';
 
 export function Sidebar() {
+  const navigate = useNavigate();
+  const { 
+    isSidebarCollapsed, 
+    toggleSidebar, 
+    playlists, 
+    favorites, 
+    createPlaylist
+  } = usePlayerStore();
+
+  const [showQuickCreate, setShowQuickCreate] = useState(false);
+  const [quickPlaylistName, setQuickPlaylistName] = useState('');
+
+  const handleCreatePlaylist = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickPlaylistName.trim()) return;
+    createPlaylist(quickPlaylistName.trim());
+    setQuickPlaylistName('');
+    setShowQuickCreate(false);
+    navigate('/library?tab=playlists');
+  };
+
   return (
-    <aside className="sidebar">
-      <div className="sidebar-logo">
-        <Disc3 className="icon" size={28} color="var(--accent-primary)" />
-        OwO Player
+    <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : 'expanded'}`}>
+      {/* Top Header: Hamburger Toggle + Brand */}
+      <div className="sidebar-header">
+        <button 
+          className="sidebar-hamburger-btn" 
+          onClick={toggleSidebar}
+          title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label="Toggle navigation"
+        >
+          <Menu size={22} />
+        </button>
+
+        {!isSidebarCollapsed && (
+          <NavLink to="/" className="sidebar-logo">
+            <Disc3 className="brand-disc-icon" size={24} color="var(--accent-primary)" />
+            <span className="brand-text">OwO Music</span>
+          </NavLink>
+        )}
       </div>
-      
+
+      {/* Primary Navigation Icons / Links */}
       <nav className="sidebar-nav">
         <NavLink 
           to="/" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          title="Home"
           end
         >
-          <Home size={20} className="icon" />
-          <span>Dashboard</span>
+          <Home size={22} className="icon" />
+          {!isSidebarCollapsed && <span className="nav-label">Home</span>}
         </NavLink>
+
         <NavLink 
           to="/discover" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          title="Discover"
         >
-          <Search size={20} className="icon" />
-          <span>Discover</span>
+          <Search size={22} className="icon" />
+          {!isSidebarCollapsed && <span className="nav-label">Discover</span>}
         </NavLink>
-        
-        <div className="nav-section-title">Your Library</div>
+
         <NavLink 
-          to="/albums" 
+          to="/library" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          title="Library"
         >
-          <Library size={20} className="icon" />
-          <span>Albums</span>
+          <Library size={22} className="icon" />
+          {!isSidebarCollapsed && <span className="nav-label">Library</span>}
         </NavLink>
-        <NavLink 
-          to="/playlists" 
-          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-        >
-          <ListMusic size={20} className="icon" />
-          <span>Playlists</span>
-        </NavLink>
-        <NavLink 
-          to="/favorites" 
-          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-        >
-          <Heart size={20} className="icon" />
-          <span>Favorites</span>
-        </NavLink>
-        <NavLink 
-          to="/downloads" 
-          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-        >
-          <Download size={20} className="icon" />
-          <span>Downloads</span>
-        </NavLink>
-        
-        <div className="nav-section-title">System</div>
+      </nav>
+
+      {/* Expanded Only: "+ New Playlist" & Scrollable Custom Playlists */}
+      {!isSidebarCollapsed && (
+        <div className="sidebar-library-section">
+          <div className="sidebar-divider" />
+
+          {/* New Playlist Action Button */}
+          <button 
+            className="sidebar-new-playlist-btn"
+            onClick={() => setShowQuickCreate(prev => !prev)}
+            title="Create a new playlist"
+          >
+            <Plus size={18} />
+            <span>New playlist</span>
+          </button>
+
+          {/* Inline Quick Playlist Input */}
+          {showQuickCreate && (
+            <form onSubmit={handleCreatePlaylist} className="sidebar-quick-create-form">
+              <input 
+                type="text" 
+                placeholder="Playlist name..."
+                value={quickPlaylistName}
+                onChange={(e) => setQuickPlaylistName(e.target.value)}
+                autoFocus
+                className="sidebar-quick-input"
+              />
+              <button type="submit" className="sidebar-quick-submit-btn">
+                <Check size={14} />
+              </button>
+            </form>
+          )}
+
+          {/* Scrollable Playlist List (YouTube Music / Spotify Style) */}
+          <div className="sidebar-playlists-scroll">
+            {/* Auto-Playlist: Liked Music */}
+            <NavLink 
+              to="/library?tab=songs"
+              className={({ isActive }) => `sidebar-playlist-item ${isActive ? 'active' : ''}`}
+              title="Liked Music"
+            >
+              <div className="playlist-item-icon-box liked-box">
+                <Heart size={13} fill="#ffffff" color="#ffffff" />
+              </div>
+              <div className="playlist-item-meta">
+                <span className="playlist-name">Liked Music</span>
+                <span className="playlist-sub auto-tag">
+                  <Sparkles size={10} color="var(--accent-primary)" /> Auto playlist • {favorites.length}
+                </span>
+              </div>
+            </NavLink>
+
+            {/* Custom User Playlists */}
+            {playlists.map((pl) => (
+              <NavLink 
+                key={pl.id}
+                to={`/library?tab=playlists`}
+                className="sidebar-playlist-item"
+                title={pl.name}
+              >
+                <div className="playlist-item-icon-box">
+                  <ListMusic size={14} color="var(--text-secondary)" />
+                </div>
+                <div className="playlist-item-meta">
+                  <span className="playlist-name">{pl.name}</span>
+                  <span className="playlist-sub">
+                    Playlist • {pl.tracks.length} {pl.tracks.length === 1 ? 'song' : 'songs'}
+                  </span>
+                </div>
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Bottom System Settings */}
+      <div className="sidebar-footer">
         <NavLink 
           to="/settings" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          title="Settings"
         >
-          <Settings size={20} className="icon" />
-          <span>Settings</span>
+          <Settings size={22} className="icon" />
+          {!isSidebarCollapsed && <span className="nav-label">Settings</span>}
         </NavLink>
-      </nav>
+      </div>
     </aside>
   );
 }

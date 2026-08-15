@@ -1,4 +1,5 @@
-import { Outlet } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { BottomPlayer } from '../player/BottomPlayer';
@@ -9,8 +10,16 @@ import { Toast } from '../common/Toast';
 import { usePlayerStore } from '../../store/usePlayerStore';
 
 export function MainLayout() {
-  const { theme, rustyColor } = usePlayerStore();
+  const location = useLocation();
+  const { theme, rustyColor, isPlayerDrawerOpen, closePlayerDrawer } = usePlayerStore();
   const themeClass = theme === 'rusty' ? `theme-rusty rusty-${rustyColor}` : 'theme-default';
+
+  // Universally close the full viewer player drawer whenever any navigation occurs
+  useEffect(() => {
+    if (isPlayerDrawerOpen) {
+      closePlayerDrawer();
+    }
+  }, [location.pathname, location.search]);
 
   return (
     <div className={`app-container ${themeClass}`}>
@@ -26,9 +35,9 @@ export function MainLayout() {
           <main className="main-scroll-view">
             <Outlet />
           </main>
-        </div>
 
-        <PlayerDrawer />
+          <PlayerDrawer />
+        </div>
       </div>
 
       <Toast />

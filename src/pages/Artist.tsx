@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchArtistProfile } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
+import { isSameTrack } from '../utils/trackUtils';
 import { Play, CheckCircle, Loader2, Heart } from 'lucide-react';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
@@ -22,7 +23,17 @@ export function Artist() {
   const navigate = useNavigate();
   const [profile, setProfile] = useState<ArtistProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const { currentTrack, setQueue, setIsPlaying, favorites, toggleFavorite } = usePlayerStore();
+  const { 
+    currentTrack, 
+    setQueue, 
+    setIsPlaying, 
+    favorites, 
+    toggleFavorite,
+    followedArtists,
+    toggleFollowArtist 
+  } = usePlayerStore();
+
+  const isFollowing = Boolean(profile && followedArtists.some(a => a.name.toLowerCase() === profile.name.toLowerCase()));
 
   useEffect(() => {
     if (artistName) {
@@ -36,7 +47,7 @@ export function Artist() {
 
   const handlePlayTrack = (track: Track) => {
     if (profile && profile.topTracks.length > 0) {
-      const idx = profile.topTracks.findIndex(t => t.id === track.id);
+      const idx = profile.topTracks.findIndex(t => isSameTrack(t, track));
       setQueue(profile.topTracks, Math.max(0, idx));
     } else {
       setQueue([track], 0);
@@ -108,12 +119,54 @@ export function Artist() {
               <h1 className="artist-name-title">{profile.name}</h1>
             </div>
 
-            {profile.topTracks.length > 0 && (
-              <button className="hero-play-btn" onClick={handlePlayAll}>
-                <Play size={18} fill="#000" />
-                <span>Play Top Tracks</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              {profile.topTracks.length > 0 && (
+                <button className="hero-play-btn" onClick={handlePlayAll}>
+                  <Play size={18} fill="#000" />
+                  <span>Play Top Tracks</span>
+                </button>
+              )}
+
+              <button 
+                onClick={() => toggleFollowArtist({
+                  name: profile.name,
+                  cover: profile.cover || (profile.topTracks[0]?.cover) || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+                  channelId: profile.channelId,
+                  artistId: profile.artistId
+                })}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '12px 22px',
+                  borderRadius: '28px',
+                  backgroundColor: isFollowing ? 'rgba(255,255,255,0.1)' : '#ffffff',
+                  color: isFollowing ? '#ffffff' : '#000000',
+                  fontWeight: 700,
+                  fontSize: '0.92rem',
+                  border: isFollowing ? '1px solid rgba(255,255,255,0.2)' : 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  if (isFollowing) e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.16)';
+                  else e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.85)';
+                }}
+                onMouseLeave={(e) => {
+                  if (isFollowing) e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                  else e.currentTarget.style.backgroundColor = '#ffffff';
+                }}
+              >
+                {isFollowing ? (
+                  <>
+                    <CheckCircle size={17} color="var(--accent-primary)" />
+                    <span>Following</span>
+                  </>
+                ) : (
+                  <span>Follow</span>
+                )}
               </button>
-            )}
+            </div>
           </div>
         </div>
       </div>
@@ -129,7 +182,7 @@ export function Artist() {
                 return (
                   <div 
                     key={track.id} 
-                    className={`track-row ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
+                    className={`track-row ${isSameTrack(currentTrack, track) ? 'active-playing' : ''}`}
                     onClick={() => handlePlayTrack(track)}
                   >
                     <span className="track-row-index">{idx + 1}</span>

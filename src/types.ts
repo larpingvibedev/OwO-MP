@@ -46,6 +46,28 @@ export interface Album {
   channelId?: string;
 }
 
+export interface SavedAlbum {
+  id: string;
+  name: string;
+  artist: string;
+  artistId?: string | number;
+  cover: string;
+  releaseDate?: string;
+  trackCount?: number;
+  savedAt: number;
+  lastPlayedAt?: number;
+}
+
+export interface FollowedArtist {
+  name: string;
+  cover: string;
+  subscriberCount?: string;
+  channelId?: string;
+  artistId?: string | number;
+  followedAt: number;
+  lastPlayedAt?: number;
+}
+
 export interface AlbumDetail {
   id: string;
   name: string;
@@ -92,5 +114,6 @@ export interface SearchSuggestionsResult {
   entitySuggestions: SuggestionEntity[];
 }
 
-export type ViewType = 'dashboard' | 'discover' | 'albums' | 'playlists' | 'downloads' | 'settings';
+export type ViewType = 'dashboard' | 'discover' | 'library' | 'albums' | 'playlists' | 'downloads' | 'settings';
+export type LibraryFilterType = 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'downloads';
 export type SearchCategory = 'all' | 'songs' | 'videos' | 'playlists';

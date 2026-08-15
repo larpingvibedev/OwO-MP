@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Track, Playlist, ViewType, ArtistProfile } from '../types';
+import type { Track, Playlist, ViewType, ArtistProfile, SavedAlbum, FollowedArtist } from '../types';
 import { fetchUpNextMix } from '../services/musicSearch';
 
 interface PlayerState {
@@ -22,18 +22,23 @@ interface PlayerState {
   artistProfile: ArtistProfile | null;
   isSearching: boolean;
   
-  // Theme & Appearance
+  // Appearance & Navigation Layout
   theme: 'default' | 'rusty';
   rustyColor: 'green' | 'amber' | 'cyan' | 'rust';
+  isSidebarCollapsed: boolean;
+  libraryFilter: 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'downloads';
   
-  // Library
+  // Library Collections (Spotify & YouTube Music Criteria)
   playlists: Playlist[];
   favorites: Track[];
+  savedAlbums: SavedAlbum[];
+  followedArtists: FollowedArtist[];
   
   // YouTube Music Style Up Next & Drawer State
   autoplay: boolean;
   playingFrom: string;
   recommendedUpNext: Track[];
+  queueSessionId: string;
   activePlayerTab: 'up_next' | 'lyrics' | 'related';
   isPlayerDrawerOpen: boolean;
   
@@ -57,6 +62,9 @@ interface PlayerState {
   // Actions
   setTheme: (theme: 'default' | 'rusty') => void;
   setRustyColor: (color: 'green' | 'amber' | 'cyan' | 'rust') => void;
+  toggleSidebar: () => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  setLibraryFilter: (filter: 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'downloads') => void;
   setCurrentTrack: (track: Track) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   togglePlayPause: () => void;
@@ -96,9 +104,14 @@ interface PlayerState {
   addRecentSearchedTrack: (track: Track) => void;
   removeRecentSearchedTrack: (trackId: string) => void;
   clearRecentSearchedTracks: () => void;
+  clearListeningHistoryAndPreferences: () => void;
   
   toggleFavorite: (track: Track) => void;
+  toggleSaveAlbum: (album: { id: string; name: string; artist: string; cover: string; releaseDate?: string; trackCount?: number; artistId?: string | number }) => void;
+  toggleFollowArtist: (artist: { name: string; cover: string; subscriberCount?: string; channelId?: string; artistId?: string | number }) => void;
   playNext: (track: Track) => void;
+  createPlaylist: (name: string) => string;
+  deletePlaylist: (playlistId: string) => void;
   addToPlaylist: (playlistId: string, track: Track) => void;
   createPlaylistWithTrack: (name: string, track: Track) => void;
   saveQueueAsPlaylist: (customName?: string) => void;
@@ -121,6 +134,7 @@ export const usePlayerStore = create<PlayerState>()(
   autoplay: true,
   playingFrom: 'Auto Mix',
   recommendedUpNext: [],
+  queueSessionId: '',
   activePlayerTab: 'up_next',
   isPlayerDrawerOpen: false,
 
@@ -135,9 +149,13 @@ export const usePlayerStore = create<PlayerState>()(
 
   theme: 'default',
   rustyColor: 'green',
+  isSidebarCollapsed: false,
+  libraryFilter: 'all',
   
   playlists: [],
   favorites: [],
+  savedAlbums: [],
+  followedArtists: [],
 
   isShuffle: false,
   repeatMode: 'off',
@@ -152,6 +170,9 @@ export const usePlayerStore = create<PlayerState>()(
 
   setTheme: (theme) => set({ theme }),
   setRustyColor: (rustyColor) => set({ rustyColor }),
+  toggleSidebar: () => set((state) => ({ isSidebarCollapsed: !state.isSidebarCollapsed })),
+  setSidebarCollapsed: (isSidebarCollapsed) => set({ isSidebarCollapsed }),
+  setLibraryFilter: (libraryFilter) => set({ libraryFilter }),
   setCurrentTrack: (track) => {
     const context = `${track.title} Mix`;
     set({ 
@@ -225,6 +246,7 @@ export const usePlayerStore = create<PlayerState>()(
 
     const cur = isShuffle ? shuffled[newIndex] : tracks[newIndex];
     const sourceContext = playingFrom || (cur ? `${cur.title} Mix` : 'Queue');
+    const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     set({
       queue: tracks,
@@ -232,11 +254,22 @@ export const usePlayerStore = create<PlayerState>()(
       queueIndex: newIndex,
       currentTrack: cur,
       playingFrom: sourceContext,
+      queueSessionId: sessionId,
       currentTime: 0,
       duration: cur?.duration || 0,
       isPlaying: true,
       isPlayerDrawerOpen: true
     });
+
+    // Synthesize multi-track radio mix for this entire queue session
+    const queuedIds = new Set(tracks.map(t => t.id));
+    fetchUpNextMix(tracks, get().favorites, get().playHistory, queuedIds)
+      .then(mix => {
+        if (mix && mix.length > 0) {
+          set({ recommendedUpNext: mix });
+        }
+      })
+      .catch(() => {});
   },
 
   
@@ -330,10 +363,11 @@ export const usePlayerStore = create<PlayerState>()(
           isPlaying: true
         });
 
-        // Replenish stream in background when low
+        // Replenish stream in background when low (anchored to recent queue context)
         if (remainingMix.length < 5) {
           const queuedIds = new Set(newQueue.map(t => t.id));
-          fetchUpNextMix(autoTrack, favorites, playHistory, queuedIds)
+          const recentSeeds = newQueue.slice(-4);
+          fetchUpNextMix(recentSeeds, favorites, playHistory, queuedIds)
             .then(fresh => {
               if (fresh && fresh.length > 0) {
                 const existingIds = new Set([...newQueue, ...remainingMix].map(t => t.id));
@@ -346,11 +380,12 @@ export const usePlayerStore = create<PlayerState>()(
         return;
       }
 
-      // 2. If recommendedUpNext is empty, fetch on the fly instantly
+      // 2. If recommendedUpNext is empty, fetch on the fly from the entire active queue
       if (currentTrack) {
         try {
           const queuedIds = new Set(activeQueue.map(t => t.id));
-          const freshMix = await fetchUpNextMix(currentTrack, favorites, playHistory, queuedIds);
+          const seedContext = activeQueue.length > 0 ? activeQueue.slice(-4) : currentTrack;
+          const freshMix = await fetchUpNextMix(seedContext, favorites, playHistory, queuedIds);
           if (freshMix && freshMix.length > 0) {
             const autoTrack = freshMix[0];
             const remainingMix = freshMix.slice(1);
@@ -436,12 +471,27 @@ export const usePlayerStore = create<PlayerState>()(
   recordPlay: (track) => {
     if (!track || !track.id) return;
     set((state) => {
-      const existing = state.playHistory[track.id] || { track, playCount: 0, lastPlayedAt: 0 };
+      const cleanTitle = (track.title || '').trim().toLowerCase();
+      const cleanArtist = (track.artist || '').trim().toLowerCase().replace(/\s*-\s*topic$/i, '');
+      
+      // Find existing entry by canonical track signature
+      const existingKey = Object.keys(state.playHistory || {}).find(k => {
+        const item = state.playHistory[k];
+        if (!item?.track) return false;
+        const itemTitle = (item.track.title || '').trim().toLowerCase();
+        const itemArtist = (item.track.artist || '').trim().toLowerCase().replace(/\s*-\s*topic$/i, '');
+        return itemTitle === cleanTitle && (itemArtist === cleanArtist || itemArtist.includes(cleanArtist) || cleanArtist.includes(itemArtist));
+      });
+
+      const key = existingKey || track.id;
+      const existing = (state.playHistory || {})[key] || { track, playCount: 0, lastPlayedAt: 0 };
+      const bestTrack = (track.album && !existing.track?.album) ? track : (existing.track || track);
+
       return {
         playHistory: {
-          ...state.playHistory,
-          [track.id]: {
-            track,
+          ...(state.playHistory || {}),
+          [key]: {
+            track: bestTrack,
             playCount: existing.playCount + 1,
             lastPlayedAt: Date.now()
           }
@@ -499,14 +549,98 @@ export const usePlayerStore = create<PlayerState>()(
   },
 
   clearRecentSearchedTracks: () => set({ recentSearchedTracks: [] }),
+
+  clearListeningHistoryAndPreferences: () => {
+    // 1. Clear recommendation caches from localStorage
+    const dashCacheKeys = [
+      'owo_dash_rec_tracks',
+      'owo_dash_rec_artist',
+      'owo_dash_covers_remixes',
+      'owo_dash_albums',
+      'owo_dash_community',
+      'owo_dash_similar',
+      'owo_dash_seed_pl_name',
+    ];
+    dashCacheKeys.forEach(k => {
+      try { localStorage.removeItem(k); } catch (e) {}
+    });
+
+    // 2. Reset history and recommendation store state to a clean slate
+    set({
+      playHistory: {},
+      recentSearchQueries: [],
+      recentSearchedTracks: [],
+      recommendedUpNext: [],
+      queueSessionId: '',
+      queue: [],
+      shuffledQueue: [],
+      queueIndex: 0,
+      currentTrack: null,
+      isPlaying: false,
+      currentTime: 0,
+      duration: 0,
+      toastMessage: 'Listening history & recommendations cleared (Clean Slate)'
+    });
+  },
   
   toggleFavorite: (track) => set((state) => {
     const isFav = state.favorites.some((t) => t.id === track.id);
     return {
       favorites: isFav 
         ? state.favorites.filter((t) => t.id !== track.id)
-        : [...state.favorites, track]
+        : [{ ...track, savedAt: Date.now() }, ...state.favorites]
     };
+  }),
+
+  toggleSaveAlbum: (album) => set((state) => {
+    const cleanId = album.id.replace('album-', '').replace('album-derived-', '');
+    const isSaved = state.savedAlbums.some(
+      a => a.id === album.id || a.id.replace('album-', '') === cleanId || 
+           (a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase())
+    );
+    if (isSaved) {
+      return {
+        savedAlbums: state.savedAlbums.filter(
+          a => a.id !== album.id && a.id.replace('album-', '') !== cleanId && 
+               !(a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase())
+        ),
+        toastMessage: `Removed "${album.name}" from Library`
+      };
+    } else {
+      const newAlbum: SavedAlbum = {
+        ...album,
+        savedAt: Date.now(),
+        lastPlayedAt: Date.now()
+      };
+      return {
+        savedAlbums: [newAlbum, ...state.savedAlbums],
+        toastMessage: `Saved "${album.name}" to Library`
+      };
+    }
+  }),
+
+  toggleFollowArtist: (artist) => set((state) => {
+    const isFollowed = state.followedArtists.some(
+      a => a.name.toLowerCase() === artist.name.toLowerCase()
+    );
+    if (isFollowed) {
+      return {
+        followedArtists: state.followedArtists.filter(
+          a => a.name.toLowerCase() !== artist.name.toLowerCase()
+        ),
+        toastMessage: `Unfollowed ${artist.name}`
+      };
+    } else {
+      const newArtist: FollowedArtist = {
+        ...artist,
+        followedAt: Date.now(),
+        lastPlayedAt: Date.now()
+      };
+      return {
+        followedArtists: [newArtist, ...state.followedArtists],
+        toastMessage: `Followed ${artist.name}`
+      };
+    }
   }),
 
   saveQueueAsPlaylist: (customName) => {
@@ -523,6 +657,32 @@ export const usePlayerStore = create<PlayerState>()(
     set({
       playlists: [...state.playlists, newPl],
       toastMessage: `Saved "${name}" to Playlists`
+    });
+  },
+
+  createPlaylist: (name: string) => {
+    const trimmed = name.trim() || 'New Playlist';
+    const newId = `pl-${Date.now()}`;
+    const newPl: Playlist = {
+      id: newId,
+      name: trimmed,
+      tracks: [],
+      createdAt: Date.now()
+    };
+    set((state) => ({
+      playlists: [newPl, ...state.playlists],
+      toastMessage: `Created playlist "${trimmed}"`
+    }));
+    return newId;
+  },
+
+  deletePlaylist: (playlistId: string) => {
+    set((state) => {
+      const pl = state.playlists.find(p => p.id === playlistId);
+      return {
+        playlists: state.playlists.filter(p => p.id !== playlistId),
+        toastMessage: pl ? `Deleted "${pl.name}"` : 'Deleted playlist'
+      };
     });
   },
 

@@ -7,9 +7,7 @@ import { SyncModal } from './components/SyncModal';
 
 import { Artist } from './pages/Artist';
 import { Album } from './pages/Album';
-import { Favorites } from './pages/Favorites';
-import { Albums } from './pages/Albums';
-import { Playlists } from './pages/Playlists';
+import { Library } from './pages/Library';
 import { Settings } from './pages/Settings';
 import './App.css';
 
@@ -24,10 +22,11 @@ function App() {
         <Route path="/" element={<MainLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="discover" element={<Discover />} />
-          <Route path="albums" element={<Albums />} />
-          <Route path="playlists" element={<Playlists />} />
-          <Route path="favorites" element={<Favorites />} />
-          <Route path="downloads" element={<Favorites />} />
+          <Route path="library" element={<Library />} />
+          <Route path="albums" element={<Library />} />
+          <Route path="playlists" element={<Library />} />
+          <Route path="favorites" element={<Library />} />
+          <Route path="downloads" element={<Library />} />
           <Route path="settings" element={<Settings />} />
           <Route path="artist/:artistName" element={<Artist />} />
           <Route path="album/:albumId" element={<Album />} />

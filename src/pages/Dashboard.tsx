@@ -14,6 +14,7 @@ import { Carousel } from '../components/Carousel';
 import { SpeedDialGrid } from '../components/SpeedDialGrid';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
+import { isSameTrack } from '../utils/trackUtils';
 import type { Track, PublicPlaylist } from '../types';
 import { 
   fetchArtistDeepTracks, 
@@ -91,10 +92,43 @@ export function Dashboard() {
   const lastAlbumsFetchRef = useRef<string>('');
   const lastSimilarFetchRef = useRef<string>('');
 
+  // When play history is cleared (Clean Slate), immediately clear all local carousel states
+  useEffect(() => {
+    if (!playHistory || Object.keys(playHistory).length === 0) {
+      setRecommendedTracks([]);
+      setCoversAndRemixes([]);
+      setAlbumsForYou([]);
+      setCommunityPlaylists([]);
+      setSimilarPlaylists([]);
+      setRecommendedArtist('');
+      setSeedPlaylistName('');
+      lastArtistFetchRef.current = '';
+      lastCoversFetchRef.current = '';
+      lastAlbumsFetchRef.current = '';
+      lastSimilarFetchRef.current = '';
+    }
+  }, [playHistory]);
 
-  // 1. Get Speed Dial tracks (frequently played)
+
+  // 1. Get Speed Dial & Quick Picks tracks (deduplicated by Title + Artist)
   const historyArray = Object.values(playHistory || {});
-  const speedDialTracks = [...historyArray]
+  const uniqueHistoryMap = new Map<string, { track: Track; playCount: number; lastPlayedAt: number }>();
+  historyArray.forEach(h => {
+    if (!h.track?.title || !h.track?.artist) return;
+    const key = `${h.track.title.toLowerCase().trim()}___${h.track.artist.toLowerCase().trim().replace(/\s*-\s*topic$/i, '')}`;
+    const existing = uniqueHistoryMap.get(key);
+    if (!existing) {
+      uniqueHistoryMap.set(key, h);
+    } else {
+      uniqueHistoryMap.set(key, {
+        track: (h.track.album && !existing.track.album) ? h.track : existing.track,
+        playCount: existing.playCount + h.playCount,
+        lastPlayedAt: Math.max(existing.lastPlayedAt, h.lastPlayedAt)
+      });
+    }
+  });
+
+  const speedDialTracks = Array.from(uniqueHistoryMap.values())
     .sort((a, b) => b.playCount - a.playCount || b.lastPlayedAt - a.lastPlayedAt)
     .slice(0, 9)
     .map(h => h.track);
@@ -103,7 +137,7 @@ export function Dashboard() {
   const defaultSpeedDial = speedDialTracks.length > 0 ? speedDialTracks : favorites.slice(0, 9);
 
   // 2. Get Quick Picks (recent listening habits)
-  const quickPicksTracks = historyArray
+  const quickPicksTracks = Array.from(uniqueHistoryMap.values())
     .sort((a, b) => b.lastPlayedAt - a.lastPlayedAt)
     .slice(0, 20)
     .map(h => h.track);
@@ -332,7 +366,7 @@ export function Dashboard() {
             </button>
           }
           renderItem={(track) => {
-            const isPlayingThis = currentTrack?.id === track.id;
+            const isPlayingThis = isSameTrack(currentTrack, track);
             const isFav = favorites.some(f => f.id === track.id);
             
             return (
@@ -676,7 +710,7 @@ export function Dashboard() {
               <div 
                 key={`lib-pl-${pl.id}`}
                 className="album-card"
-                onClick={() => navigate('/playlists')}
+                onClick={() => navigate('/library?tab=playlists')}
               >
                 <div 
                   className="album-art" 
@@ -698,7 +732,7 @@ export function Dashboard() {
             {favorites.length > 0 && (
               <div 
                 className="album-card"
-                onClick={() => navigate('/favorites')}
+                onClick={() => navigate('/library?tab=songs')}
               >
                 <div 
                   className="album-art" 

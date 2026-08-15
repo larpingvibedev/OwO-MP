@@ -20,6 +20,7 @@ import {
   Heart
 } from 'lucide-react';
 import type { SearchCategory, Track, PublicPlaylist } from '../types';
+import { isSameTrack } from '../utils/trackUtils';
 import { searchPublicPlaylists, fetchPublicPlaylistTracks } from '../services/musicSearch';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
@@ -300,7 +301,7 @@ export function Discover() {
 
             <div className="cards-grid">
               {recentSearchedTracks.map((track) => {
-                const isCurrent = currentTrack?.id === track.id;
+                const isCurrent = isSameTrack(currentTrack, track);
                 return (
                   <div 
                     key={`rec-track-${track.id}`} 
@@ -947,7 +948,7 @@ export function Discover() {
               ) : activePlaylistDetail.tracks.length > 0 ? (
                 <div className="top-tracks-list">
                   {activePlaylistDetail.tracks.map((track, idx) => {
-                    const isCurrent = currentTrack?.id === track.id;
+                    const isCurrent = isSameTrack(currentTrack, track);
                     return (
                       <div 
                         key={`pl-track-${track.id}-${idx}`}
