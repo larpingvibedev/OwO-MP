@@ -1,10 +1,12 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface CarouselProps<T> {
   items: T[];
   renderItem: (item: T, index: number) => React.ReactNode;
   rows?: number;
+  columnWidth?: string;
+  gap?: string;
   title?: string;
   subtitle?: string;
   icon?: React.ReactNode;
@@ -15,19 +17,45 @@ export function Carousel<T>({
   items,
   renderItem,
   rows = 1,
+  columnWidth,
+  gap = '14px',
   title,
   subtitle,
   icon,
   actionButton
 }: CarouselProps<T>) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(true);
+
+  const checkScrollability = useCallback(() => {
+    if (scrollContainerRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = scrollContainerRef.current;
+      setCanScrollLeft(scrollLeft > 10);
+      setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 10);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkScrollability();
+    const el = scrollContainerRef.current;
+    if (el) {
+      el.addEventListener('scroll', checkScrollability, { passive: true });
+      window.addEventListener('resize', checkScrollability);
+      return () => {
+        el.removeEventListener('scroll', checkScrollability);
+        window.removeEventListener('resize', checkScrollability);
+      };
+    }
+  }, [items, checkScrollability]);
 
   const scroll = (direction: 'left' | 'right') => {
     if (scrollContainerRef.current) {
       const { scrollLeft, clientWidth } = scrollContainerRef.current;
+      const scrollAmount = clientWidth * 0.75;
       const scrollTo = direction === 'left' 
-        ? scrollLeft - clientWidth * 0.75 
-        : scrollLeft + clientWidth * 0.75;
+        ? scrollLeft - scrollAmount 
+        : scrollLeft + scrollAmount;
       
       scrollContainerRef.current.scrollTo({
         left: scrollTo,
@@ -38,6 +66,9 @@ export function Carousel<T>({
 
   if (!items || items.length === 0) return null;
 
+  const defaultColWidth = rows > 1 ? 'minmax(340px, 380px)' : 'minmax(180px, 200px)';
+  const effectiveColWidth = columnWidth || defaultColWidth;
+
   return (
     <div className="carousel-section" style={{ marginBottom: '40px', position: 'relative' }}>
       {/* Header */}
@@ -46,14 +77,14 @@ export function Carousel<T>({
         justifyContent: 'space-between', 
         alignItems: 'flex-end', 
         marginBottom: '16px',
-        paddingRight: '12px'
+        paddingRight: '8px'
       }}>
         <div>
           {subtitle && (
             <span style={{ 
               fontSize: '0.75rem', 
               textTransform: 'uppercase', 
-              letterSpacing: '0.05em', 
+              letterSpacing: '0.06em', 
               color: 'var(--text-secondary)',
               fontWeight: 600,
               display: 'block',
@@ -64,54 +95,80 @@ export function Carousel<T>({
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {icon && <span style={{ display: 'flex', alignItems: 'center' }}>{icon}</span>}
-            <h3 className="section-header" style={{ margin: 0, fontSize: '1.5rem', fontWeight: 800 }}>
+            <h3 className="section-header" style={{ margin: 0, fontSize: '1.45rem', fontWeight: 800 }}>
               {title}
             </h3>
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {actionButton}
           
-          {/* Scroll Navigation Buttons (Desktop only-ish, hidden on mobile via native touch scroll) */}
-          <div className="carousel-nav-buttons" style={{ display: 'flex', gap: '8px' }}>
+          {/* Scroll Navigation Buttons */}
+          <div className="carousel-nav-buttons" style={{ display: 'flex', gap: '6px' }}>
             <button 
               onClick={() => scroll('left')}
+              disabled={!canScrollLeft}
+              title="Scroll left"
               style={{
                 width: '32px',
                 height: '32px',
                 borderRadius: '50%',
-                backgroundColor: 'var(--bg-card)',
-                border: '1px solid var(--border-color)',
+                backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
                 color: 'var(--text-primary)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                cursor: 'pointer',
-                transition: 'background-color 0.2s'
+                cursor: canScrollLeft ? 'pointer' : 'default',
+                opacity: canScrollLeft ? 1 : 0.35,
+                transition: 'all 0.2s ease'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
-              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card)'}
+              onMouseEnter={(e) => {
+                if (canScrollLeft) {
+                  e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.14)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.25)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (canScrollLeft) {
+                  e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.06)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                }
+              }}
             >
               <ChevronLeft size={16} />
             </button>
             <button 
               onClick={() => scroll('right')}
+              disabled={!canScrollRight}
+              title="Scroll right"
               style={{
                 width: '32px',
                 height: '32px',
                 borderRadius: '50%',
-                backgroundColor: 'var(--bg-card)',
-                border: '1px solid var(--border-color)',
+                backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
                 color: 'var(--text-primary)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                cursor: 'pointer',
-                transition: 'background-color 0.2s'
+                cursor: canScrollRight ? 'pointer' : 'default',
+                opacity: canScrollRight ? 1 : 0.35,
+                transition: 'all 0.2s ease'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
-              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card)'}
+              onMouseEnter={(e) => {
+                if (canScrollRight) {
+                  e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.14)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.25)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (canScrollRight) {
+                  e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.06)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                }
+              }}
             >
               <ChevronRight size={16} />
             </button>
@@ -127,12 +184,13 @@ export function Carousel<T>({
           display: 'grid',
           gridTemplateRows: `repeat(${rows}, auto)`,
           gridAutoFlow: 'column',
-          gridAutoColumns: 'minmax(180px, 200px)',
-          gap: '16px',
+          gridAutoColumns: effectiveColWidth,
+          gap: gap,
           overflowX: 'auto',
           paddingBottom: '8px',
-          scrollbarWidth: 'none', // Firefox
-          msOverflowStyle: 'none' // IE/Edge
+          scrollSnapType: 'x mandatory',
+          scrollbarWidth: 'none',
+          msOverflowStyle: 'none'
         }}
       >
         {items.map((item, index) => renderItem(item, index))}
@@ -147,3 +205,4 @@ export function Carousel<T>({
     </div>
   );
 }
+

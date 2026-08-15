@@ -5,6 +5,7 @@ export interface Track {
   artistId?: string | number;
   albumArtist?: string;
   album?: string;
+  albumId?: string;
   duration: number; // in seconds
   cover: string;
   streamUrl: string;

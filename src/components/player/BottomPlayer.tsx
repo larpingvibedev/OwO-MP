@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { 
-  Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Heart, ListMusic, Mic2
+  Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Heart, ListMusic, Mic2,
+  ChevronDown, ChevronUp
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -268,7 +269,7 @@ export function BottomPlayer() {
             {currentTrack?.artist || 'OwO Music Player'}
           </div>
         </div>
-        {currentTrack && (
+        {currentTrack && !isPlayerDrawerOpen && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px' }}>
             <button 
               className="secondary-btn" 
@@ -399,7 +400,22 @@ export function BottomPlayer() {
             </div>
           </div>
         </div>
+
+        {/* Dropdown / Collapse Button (YouTube Music / RMPC Chevron) */}
+        <button 
+          className="secondary-btn dropdown-collapse-btn" 
+          onClick={() => togglePlayerDrawer(activePlayerTab || 'up_next')}
+          style={{ 
+            color: isPlayerDrawerOpen ? 'var(--accent-primary)' : 'var(--text-secondary)',
+            marginLeft: '8px',
+            padding: '4px'
+          }}
+          title={isPlayerDrawerOpen ? "Drop down player (Collapse)" : "Expand full player view"}
+        >
+          {isPlayerDrawerOpen ? <ChevronDown size={22} /> : <ChevronUp size={22} />}
+        </button>
       </div>
     </footer>
   );
 }
+

@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   MoreVertical, Radio, ListPlus, Plus, Heart, FolderPlus, 
   User, Disc, Info, Share2, Check, ExternalLink, Music2,
@@ -33,7 +34,8 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     addToPlaylist,
     createPlaylistWithTrack,
     generateRadio,
-    showToast
+    showToast,
+    closePlayerDrawer
   } = usePlayerStore();
 
   const [isOpen, setIsOpen] = useState(false);
@@ -47,41 +49,53 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
 
   const isFav = favorites.some(f => f.id === track.id);
 
-  // Calculate smart menu coordinates when opened
+  // Calculate smart menu coordinates relative to viewport
+  const calculatePosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const menuWidth = 240;
+    const menuHeight = 420;
+
+    let left = rect.right - menuWidth;
+    let top = rect.bottom + 6;
+
+    // Prevent clipping right
+    if (left + menuWidth > window.innerWidth - 12) {
+      left = window.innerWidth - menuWidth - 12;
+    }
+    // Prevent clipping left
+    if (left < 12) {
+      left = 12;
+    }
+    // If near bottom, flip menu upwards
+    if (top + menuHeight > window.innerHeight - 12) {
+      top = Math.max(12, rect.top - menuHeight - 6);
+    }
+
+    setMenuCoords({ top, left });
+  }, []);
+
   const toggleMenu = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
 
-    if (!isOpen && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      const menuWidth = 240;
-      const menuHeight = 420;
-
-      let left = rect.right - menuWidth;
-      let top = rect.bottom + 6;
-
-      // Prevent clipping right
-      if (left + menuWidth > window.innerWidth - 12) {
-        left = window.innerWidth - menuWidth - 12;
-      }
-      // Prevent clipping left
-      if (left < 12) {
-        left = 12;
-      }
-      // If near bottom, flip menu upwards
-      if (top + menuHeight > window.innerHeight - 12) {
-        top = Math.max(12, rect.top - menuHeight - 6);
-      }
-
-      setMenuCoords({ top, left });
+    if (!isOpen) {
+      calculatePosition();
+      setShowPlaylistPicker(false);
+      setIsOpen(true);
+    } else {
+      setIsOpen(false);
       setShowPlaylistPicker(false);
     }
-    setIsOpen(!isOpen);
   };
 
-  // Close when clicking outside
+  // Re-calculate position or handle outside clicks
   useEffect(() => {
     if (!isOpen) return;
+
+    const handleScrollOrResize = () => {
+      calculatePosition();
+    };
 
     const handleOutsideClick = (e: MouseEvent) => {
       if (
@@ -103,19 +117,24 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
       }
     };
 
+    window.addEventListener('resize', handleScrollOrResize);
+    window.addEventListener('scroll', handleScrollOrResize, true);
     document.addEventListener('mousedown', handleOutsideClick);
     document.addEventListener('keydown', handleKeyDown);
 
     return () => {
+      window.removeEventListener('resize', handleScrollOrResize);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen]);
+  }, [isOpen, calculatePosition]);
 
   const handleStartMix = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(false);
     generateRadio(track);
+    showToast(`Started mix for ${track.title}`);
   };
 
   const handlePlayNext = (e: React.MouseEvent) => {
@@ -139,17 +158,21 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
   const handleGoToArtist = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(false);
+    closePlayerDrawer();
     navigate(`/artist/${encodeURIComponent(track.artist)}${track.artistId ? `?artistId=${encodeURIComponent(track.artistId)}` : (track.channelId ? `?channelId=${encodeURIComponent(track.channelId)}` : '')}`);
   };
 
   const handleGoToAlbum = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(false);
-    if (track.album) {
-      navigate(`/album/${encodeURIComponent(track.album)}`);
-    } else {
-      navigate(`/artist/${encodeURIComponent(track.artist)}`);
-    }
+    closePlayerDrawer();
+    const rawAlb = track.album?.trim();
+    const isGenericAlb = !rawAlb || rawAlb.toLowerCase() === 'web stream' || rawAlb.toLowerCase() === 'single' || rawAlb.toLowerCase() === 'official release';
+    const albName = isGenericAlb ? track.title : rawAlb;
+    const albId = (track as any).albumId || (track as any).playlistId || `album-${encodeURIComponent(albName)}`;
+    const albArtist = track.albumArtist || track.artist;
+    const albCover = track.cover || '';
+    navigate(`/album/${encodeURIComponent(albId)}?name=${encodeURIComponent(albName)}&artist=${encodeURIComponent(albArtist)}&cover=${encodeURIComponent(albCover)}`);
   };
 
   const handleShare = (e: React.MouseEvent) => {
@@ -217,8 +240,8 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
         <MoreVertical size={16} />
       </button>
 
-      {/* Floating Glassmorphic Context Menu Overlay */}
-      {isOpen && (
+      {/* Floating Glassmorphic Context Menu Overlay (Portaled directly to document.body) */}
+      {isOpen && createPortal(
         <div
           ref={menuRef}
           className="track-options-dropdown"
@@ -231,10 +254,11 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
             backgroundColor: '#18181c',
             border: '1px solid rgba(255, 255, 255, 0.14)',
             borderRadius: '12px',
-            boxShadow: '0 16px 40px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05)',
-            zIndex: 99999,
+            boxShadow: '0 16px 40px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05)',
+            zIndex: 999999,
             padding: '6px 0',
             backdropFilter: 'blur(24px)',
+            WebkitBackdropFilter: 'blur(24px)',
             animation: 'fadeIn 0.15s ease-out'
           }}
         >
@@ -431,21 +455,23 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
               </form>
             </div>
           )}
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Song Details Modal */}
-      {showDetailsModal && (
+      {/* Song Details Modal (Portaled directly to document.body) */}
+      {showDetailsModal && createPortal(
         <div
           style={{
             position: 'fixed',
             inset: 0,
             backgroundColor: 'rgba(0, 0, 0, 0.75)',
             backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 100000,
+            zIndex: 1000000,
             padding: '20px'
           }}
           onClick={() => setShowDetailsModal(false)}
@@ -560,8 +586,10 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
 };
+

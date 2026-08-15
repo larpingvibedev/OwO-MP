@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
-  X, Sparkles, Music, Play, Plus, Mic2, ListMusic, 
+  Sparkles, Music, Play, Plus, Mic2, ListMusic, 
   Compass, Volume2, Check, ExternalLink, Loader2, Info, Disc, ListPlus,
-  Copy, BookOpen, Search
+  Copy, BookOpen, Search, ChevronDown, Heart
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -10,6 +10,7 @@ import { fetchUpNextMix, fetchSimilarArtists, fetchArtistDeepTracks } from '../.
 import { fetchLyrics, type LyricsResult } from '../../services/lyricsService';
 import type { Track, SimilarArtist } from '../../types';
 import { TrackOptionsMenu } from '../common/TrackOptionsMenu';
+import { AudioVisualizer } from './AudioVisualizer';
 
 function formatDuration(seconds: number): string {
   if (!seconds || isNaN(seconds) || seconds <= 0) return '--:--';
@@ -44,7 +45,8 @@ export function PlayerDrawer() {
     setActivePlayerTab,
     closePlayerDrawer,
     setCurrentTime,
-    saveQueueAsPlaylist
+    saveQueueAsPlaylist,
+    toggleFavorite
   } = usePlayerStore();
 
   const [isLoadingMix, setIsLoadingMix] = useState(false);
@@ -206,31 +208,54 @@ export function PlayerDrawer() {
     window.dispatchEvent(new CustomEvent('music:seek', { detail: { time } }));
   };
 
+  const isFavorite = currentTrack && favorites.some(f => f.id === currentTrack.id);
+
   return (
-    <div 
-      className="player-drawer-container"
-      style={{
-        width: '380px',
-        backgroundColor: 'var(--bg-card)',
-        borderLeft: '1px solid var(--border-color)',
-        display: 'flex',
-        flexDirection: 'column',
-        zIndex: 25,
-        height: '100%',
-        boxShadow: '-8px 0 32px rgba(0,0,0,0.4)',
-        position: 'relative'
-      }}
-    >
-      {/* Header with YouTube Music Tabs */}
+    <div className="player-drawer-container">
+      {/* Dynamic Ambient Blur Glow (Matching Album Artwork) */}
+      <div 
+        style={{
+          position: 'absolute',
+          inset: 0,
+          backgroundImage: currentTrack ? `url(${currentTrack.cover})` : 'none',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          filter: 'blur(90px) saturate(1.8) brightness(0.2)',
+          opacity: 0.85,
+          transform: 'scale(1.2)',
+          pointerEvents: 'none',
+          zIndex: 0
+        }}
+      />
+
+      {/* Header with Dropdown Collapse Arrow and Navigation Tabs */}
       <div style={{
-        padding: '16px 20px',
-        borderBottom: '1px solid var(--border-color)',
+        padding: '12px 24px',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        backgroundColor: 'var(--bg-secondary)'
+        backgroundColor: 'rgba(10, 12, 16, 0.85)',
+        backdropFilter: 'blur(20px)',
+        zIndex: 10,
+        position: 'relative'
       }}>
-        {/* Navigation Tabs */}
+        {/* Left: Dropdown Collapse Chevron Button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: '140px' }}>
+          <button
+            onClick={closePlayerDrawer}
+            className="collapse-dropdown-btn"
+            title="Drop down player (Collapse)"
+          >
+            <ChevronDown size={22} />
+          </button>
+
+          <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Now Playing
+          </span>
+        </div>
+
+        {/* Center: Navigation Tabs */}
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button
             onClick={() => setActivePlayerTab('up_next')}
@@ -241,13 +266,13 @@ export function PlayerDrawer() {
               fontSize: '0.85rem',
               fontWeight: 700,
               letterSpacing: '0.04em',
-              padding: '6px 10px',
-              borderRadius: '6px',
+              padding: '6px 14px',
+              borderRadius: '20px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              backgroundColor: activePlayerTab === 'up_next' ? 'rgba(52, 152, 219, 0.1)' : 'transparent',
+              backgroundColor: activePlayerTab === 'up_next' ? 'rgba(52, 152, 219, 0.14)' : 'transparent',
               transition: 'all 0.15s ease'
             }}
           >
@@ -264,13 +289,13 @@ export function PlayerDrawer() {
               fontSize: '0.85rem',
               fontWeight: 700,
               letterSpacing: '0.04em',
-              padding: '6px 10px',
-              borderRadius: '6px',
+              padding: '6px 14px',
+              borderRadius: '20px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              backgroundColor: activePlayerTab === 'lyrics' ? 'rgba(52, 152, 219, 0.1)' : 'transparent',
+              backgroundColor: activePlayerTab === 'lyrics' ? 'rgba(52, 152, 219, 0.14)' : 'transparent',
               transition: 'all 0.15s ease'
             }}
           >
@@ -287,13 +312,13 @@ export function PlayerDrawer() {
               fontSize: '0.85rem',
               fontWeight: 700,
               letterSpacing: '0.04em',
-              padding: '6px 10px',
-              borderRadius: '6px',
+              padding: '6px 14px',
+              borderRadius: '20px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              backgroundColor: activePlayerTab === 'related' ? 'rgba(52, 152, 219, 0.1)' : 'transparent',
+              backgroundColor: activePlayerTab === 'related' ? 'rgba(52, 152, 219, 0.14)' : 'transparent',
               transition: 'all 0.15s ease'
             }}
           >
@@ -302,17 +327,135 @@ export function PlayerDrawer() {
           </button>
         </div>
 
-        <button 
-          onClick={closePlayerDrawer}
-          className="secondary-btn"
-          style={{ padding: '6px', borderRadius: '50%' }}
-        >
-          <X size={18} />
-        </button>
+        {/* Right: Balanced Empty Spacer */}
+        <div style={{ minWidth: '140px', display: 'flex', justifyContent: 'flex-end' }} />
       </div>
 
-      {/* Drawer Body */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* Expanded Now Playing Body: 2-Column Split */}
+      <div className="expanded-now-playing-body">
+        
+        {/* ========================================================================= */}
+        {/* LEFT COLUMN: COVER ART & RMPC SPECTRUM VISUALIZER                         */}
+        {/* ========================================================================= */}
+        <div className="expanded-cover-col">
+          {/* Main Album Artwork (Large, Centered, High Impact) */}
+          <div 
+            style={{
+              width: 'min(480px, 90%)',
+              aspectRatio: '1',
+              maxHeight: 'min(480px, 50vh)',
+              borderRadius: '16px',
+              backgroundImage: currentTrack ? `url(${currentTrack.cover})` : 'none',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+              boxShadow: '0 28px 70px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.12)',
+              position: 'relative',
+              flexShrink: 0
+            }}
+          />
+
+          {/* Track Info & Controls */}
+          <div style={{ width: '100%', maxWidth: '480px', marginTop: '22px', textAlign: 'left' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ 
+                  fontSize: '1.55rem', 
+                  fontWeight: 900, 
+                  color: 'var(--text-primary)', 
+                  letterSpacing: '-0.02em',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  lineHeight: '1.2'
+                }}>
+                  {currentTrack?.title || 'No Track Selected'}
+                </div>
+                <div 
+                  onClick={() => {
+                    if (currentTrack) {
+                      navigate(`/artist/${encodeURIComponent(currentTrack.artist)}${currentTrack.artistId ? `?artistId=${encodeURIComponent(currentTrack.artistId)}` : (currentTrack.channelId ? `?channelId=${encodeURIComponent(currentTrack.channelId)}` : '')}`);
+                      closePlayerDrawer();
+                    }
+                  }}
+                  style={{ 
+                    fontSize: '1.08rem', 
+                    fontWeight: 600,
+                    color: 'var(--text-secondary)', 
+                    marginTop: '5px',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    cursor: 'pointer'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
+                  onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
+                >
+                  {currentTrack?.artist || 'OwO Music Player'}
+                </div>
+                {currentTrack?.album && (
+                  <div style={{ fontSize: '0.86rem', color: 'var(--accent-primary)', marginTop: '3px', opacity: 0.9 }}>
+                    {currentTrack.album}
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              {currentTrack && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                  <button 
+                    className="secondary-btn" 
+                    onClick={() => toggleFavorite(currentTrack)}
+                    style={{ color: isFavorite ? 'var(--accent-primary)' : 'var(--text-secondary)', padding: '8px' }}
+                    title={isFavorite ? "Remove from liked" : "Add to liked"}
+                  >
+                    <Heart size={22} fill={isFavorite ? 'currentColor' : 'none'} />
+                  </button>
+                  <TrackOptionsMenu track={currentTrack} variant="row" />
+                </div>
+              )}
+            </div>
+
+            {/* RMPC Dynamic Equalizer Audio Spectrum Visualizer */}
+            <div style={{ 
+              marginTop: '18px', 
+              width: '100%', 
+              backgroundColor: 'rgba(0,0,0,0.4)', 
+              padding: '14px 16px', 
+              borderRadius: '12px', 
+              border: '1px solid rgba(255,255,255,0.08)',
+              boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.5)'
+            }}>
+              <AudioVisualizer isPlaying={isPlaying} height={68} barCount={42} />
+              
+              {/* RMPC Retro Status Line */}
+              <div style={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center', 
+                marginTop: '10px',
+                fontSize: '0.75rem', 
+                fontFamily: 'monospace',
+                color: 'var(--text-secondary)',
+                letterSpacing: '0.02em',
+                borderTop: '1px solid rgba(255,255,255,0.06)',
+                paddingTop: '8px'
+              }}>
+                <span style={{ color: isPlaying ? 'var(--accent-primary)' : 'var(--text-secondary)', fontWeight: 700 }}>
+                  [{isPlaying ? 'Playing' : 'Paused'}] {formatDuration(currentTime)} / {formatDuration(duration)}
+                </span>
+                <span style={{ color: '#2ecc71', fontWeight: 700 }}>
+                  160 kbps Lossless Opus (HQ)
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+
+        {/* ========================================================================= */}
+        {/* RIGHT COLUMN: TAB CONTENT (UP NEXT / LYRICS / RELATED)                     */}
+        {/* ========================================================================= */}
+        <div className="expanded-content-col">
         
         {/* ========================================================================= */}
         {/* TAB 1: UP NEXT                                                            */}
@@ -1430,12 +1573,13 @@ export function PlayerDrawer() {
                 {/* Official Release Page Link (Within the Player) */}
                 <button
                   onClick={() => {
-                    const releaseTargetId = currentTrack.album 
-                      ? (currentTrack.id.startsWith('profile-') ? `album-derived-${currentTrack.id.replace('profile-', '')}` : currentTrack.id)
-                      : (currentTrack.id.startsWith('piped-') ? currentTrack.id.replace('piped-', '') : currentTrack.id);
-                    const releaseName = currentTrack.album || currentTrack.title;
+                    const rawAlb = currentTrack.album?.trim();
+                    const isGenericAlb = !rawAlb || rawAlb.toLowerCase() === 'web stream' || rawAlb.toLowerCase() === 'single' || rawAlb.toLowerCase() === 'official release';
+                    const releaseName = isGenericAlb ? currentTrack.title : rawAlb;
+                    const releaseTargetId = (currentTrack as any).albumId || `album-${encodeURIComponent(releaseName)}`;
+                    const releaseArtist = currentTrack.albumArtist || currentTrack.artist;
                     
-                    navigate(`/album/${encodeURIComponent(releaseTargetId)}?name=${encodeURIComponent(releaseName)}&artist=${encodeURIComponent(currentTrack.artist)}&cover=${encodeURIComponent(currentTrack.cover || '')}`);
+                    navigate(`/album/${encodeURIComponent(releaseTargetId)}?name=${encodeURIComponent(releaseName)}&artist=${encodeURIComponent(releaseArtist)}&cover=${encodeURIComponent(currentTrack.cover || '')}`);
                     closePlayerDrawer();
                   }}
                   className="hero-play-btn"
@@ -1458,10 +1602,12 @@ export function PlayerDrawer() {
                 </button>
               </div>
             </div>
-
           </div>
         )}
+        </div>
       </div>
     </div>
   );
 }
+
+

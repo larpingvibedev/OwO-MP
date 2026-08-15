@@ -3,12 +3,14 @@ import { usePlayerStore } from '../store/usePlayerStore';
 import { 
   getDirectYouTubeId,
   resolveYouTubeVideoId, 
-  resolveYouTubeMusicATV,
+  resolveAlternativeVideoId,
   getFallbackVideoId, 
   invalidateVideoId, 
   prefetchTrackVideoId,
-  fetchUpNextMix 
+  fetchUpNextMix,
+  fetchDirectAudioStream
 } from '../services/musicSearch';
+import { audioEngine } from '../services/audioEngine';
 
 declare global {
   interface Window {
@@ -27,6 +29,8 @@ export const AudioPlayer = () => {
   const pendingVideoIdRef = useRef<string | null>(null);
   const isSwitchingRef = useRef<boolean>(false);
   const activeLoadedTrackIdRef = useRef<string | null>(null);
+  const trackStartTimeRef = useRef<number>(0);
+  const trackFailedCountRef = useRef<Map<string, number>>(new Map());
 
   const {
     currentTrack,
@@ -48,14 +52,32 @@ export const AudioPlayer = () => {
     setRecommendedUpNext
   } = usePlayerStore();
 
-  // 1. Initialize YouTube IFrame API
+  const isYouTubeTrack = (t: typeof currentTrack) => {
+    if (!t) return false;
+    if (t.resolvedStreamUrl?.startsWith('http')) return false;
+    return true;
+  };
+
+  // 1. Initialize Web Audio API engine & YouTube IFrame API
   useEffect(() => {
+    if (audioRef.current) {
+      audioEngine.init(audioRef.current);
+    }
+
+    const handleUserInteraction = () => {
+      audioEngine.resume();
+    };
+
+    window.addEventListener('click', handleUserInteraction, { once: true });
+    window.addEventListener('keydown', handleUserInteraction, { once: true });
+
     function createYTPlayer() {
       if (ytPlayerRef.current || !window.YT || !window.YT.Player) return;
 
       ytPlayerRef.current = new window.YT.Player('yt-audio-player', {
         height: '200',
         width: '200',
+        host: 'https://www.youtube.com',
         playerVars: {
           autoplay: 1,
           controls: 0,
@@ -63,7 +85,7 @@ export const AudioPlayer = () => {
           fs: 0,
           playsinline: 1,
           enablejsapi: 1,
-          origin: window.location.origin
+          rel: 0
         },
         events: {
           onReady: () => {
@@ -78,8 +100,13 @@ export const AudioPlayer = () => {
                 const vid = pendingVideoIdRef.current;
                 pendingVideoIdRef.current = null;
                 currentVideoIdRef.current = vid;
+                trackStartTimeRef.current = Date.now();
+                isSwitchingRef.current = true;
                 try {
-                  ytPlayerRef.current.loadVideoById(vid);
+                  ytPlayerRef.current.loadVideoById({
+                    videoId: vid,
+                    startSeconds: 0
+                  });
                 } catch (err) {
                   console.warn('Error playing pending video:', err);
                 }
@@ -89,9 +116,19 @@ export const AudioPlayer = () => {
           onStateChange: (event: any) => {
             // 0 = ENDED
             if (event.data === 0) {
-              if (!isSwitchingRef.current) {
+              const state = usePlayerStore.getState();
+              const dur = ytPlayerRef.current?.getDuration?.() || state.duration || 0;
+              const curTime = ytPlayerRef.current?.getCurrentTime?.() || state.currentTime || 0;
+              const elapsedSinceLoad = (Date.now() - trackStartTimeRef.current) / 1000;
+
+              // Guard against premature / spurious ENDED events during initial buffering / cueing
+              const isLegitimateEnd = dur > 0 
+                ? (curTime >= Math.max(5, dur - 4) || elapsedSinceLoad >= Math.max(5, dur - 4))
+                : (elapsedSinceLoad > 10);
+
+              if (isLegitimateEnd && !isSwitchingRef.current) {
                 isSwitchingRef.current = true;
-                const currentRepeat = usePlayerStore.getState().repeatMode;
+                const currentRepeat = state.repeatMode;
                 if (currentRepeat === 'one') {
                   if (ytPlayerRef.current) {
                     try {
@@ -101,13 +138,16 @@ export const AudioPlayer = () => {
                     } catch (e) {}
                   }
                 } else {
-                  usePlayerStore.getState().nextTrack();
+                  state.nextTrack();
                 }
               }
             }
             // 1 = PLAYING
             if (event.data === 1) {
-              isSwitchingRef.current = false;
+              setTimeout(() => {
+                isSwitchingRef.current = false;
+              }, 600);
+
               if (!usePlayerStore.getState().isPlaying) {
                 setIsPlaying(true);
               }
@@ -120,23 +160,47 @@ export const AudioPlayer = () => {
               }
             }
           },
-          onError: (event: any) => {
+          onError: async (event: any) => {
             console.warn('YouTube Player Error code:', event.data);
             isSwitchingRef.current = false;
             const state = usePlayerStore.getState();
             const curTrack = state.currentTrack;
-            if (curTrack) {
-              invalidateVideoId(curTrack.artist, curTrack.title);
-              const fallbackId = getFallbackVideoId(curTrack.artist, curTrack.title);
-              if (fallbackId && ytPlayerRef.current?.loadVideoById) {
-                console.log('Attempting fallback audio candidate:', fallbackId);
-                currentVideoIdRef.current = fallbackId;
-                ytPlayerRef.current.loadVideoById(fallbackId);
-                return;
-              }
+            if (!curTrack) return;
+
+            invalidateVideoId(curTrack.artist, curTrack.title);
+
+            // Attempt to resolve an alternative video candidate for the SAME song instead of skipping
+            let fallbackId = getFallbackVideoId(curTrack.artist, curTrack.title);
+            if (!fallbackId || fallbackId === currentVideoIdRef.current) {
+              try {
+                fallbackId = await resolveAlternativeVideoId(curTrack.artist, curTrack.title, currentVideoIdRef.current);
+              } catch (e) {}
             }
-            // If error is unrecoverable, smoothly advance to next track
-            usePlayerStore.getState().nextTrack();
+
+            if (fallbackId && ytPlayerRef.current?.loadVideoById && fallbackId !== currentVideoIdRef.current) {
+              console.log('Switching to alternative candidate for same track:', fallbackId);
+              currentVideoIdRef.current = fallbackId;
+              trackStartTimeRef.current = Date.now();
+              isSwitchingRef.current = true;
+              try {
+                ytPlayerRef.current.loadVideoById({
+                  videoId: fallbackId,
+                  startSeconds: 0
+                });
+              } catch (err) {
+                console.warn('Error loading fallback video candidate:', err);
+              }
+              return;
+            }
+
+            // Only if multiple alternative video candidates for this track failed completely
+            const failCount = (trackFailedCountRef.current.get(curTrack.id) || 0) + 1;
+            trackFailedCountRef.current.set(curTrack.id, failCount);
+
+            if (failCount >= 2) {
+              state.showToast(`Unable to stream "${curTrack.title}"`);
+              usePlayerStore.getState().nextTrack();
+            }
           }
         }
       });
@@ -159,13 +223,6 @@ export const AudioPlayer = () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, []);
-
-  const isYouTubeTrack = (t: typeof currentTrack) => {
-    if (!t) return false;
-    if (t.source === 'youtube') return true;
-    if (t.resolvedStreamUrl?.startsWith('http')) return false;
-    return true;
-  };
 
   // 2. Sync Time & Duration tracking & Seamless End-of-Track Autoplay Trigger
   useEffect(() => {
@@ -191,8 +248,8 @@ export const AudioPlayer = () => {
             setCurrentTime(clampedTime);
           }
 
-          // Fallback end-of-track trigger ONLY when the audio has reached 100% of its full duration
-          if (ytDur > 5 && time >= ytDur && !isSwitchingRef.current) {
+          // Fallback end-of-track trigger ONLY when the audio has legitimately reached 100% of its full duration
+          if (ytDur > 10 && time > 10 && time >= (ytDur - 0.5) && !isSwitchingRef.current) {
             isSwitchingRef.current = true;
             setTimeout(() => { isSwitchingRef.current = false; }, 3500);
 
@@ -280,7 +337,7 @@ export const AudioPlayer = () => {
     return () => window.removeEventListener('music:seek', handleSeek);
   }, [currentTrack?.id]);
 
-  // 5. Track Change & Stream Resolution
+  // 6. Track Change & Stream Resolution
   useEffect(() => {
     let isCancelled = false;
 
@@ -293,6 +350,7 @@ export const AudioPlayer = () => {
       }
       activeLoadedTrackIdRef.current = currentTrack.id;
       isSwitchingRef.current = true;
+      trackStartTimeRef.current = Date.now();
 
       recordPlay(currentTrack);
 
@@ -316,16 +374,7 @@ export const AudioPlayer = () => {
       // 1. Direct YouTube Video ID (If track already comes from YouTube search/suggestions/profile)
       let videoId: string | null = getDirectYouTubeId(currentTrack);
 
-      // 2. If no direct videoId (e.g. iTunes or imported track), resolve via ATV & scoring search
-      if (!videoId) {
-        try {
-          const atvId = await resolveYouTubeMusicATV(currentTrack.artist, currentTrack.title);
-          if (atvId) {
-            videoId = atvId;
-          }
-        } catch (e) {}
-      }
-
+      // 2. Resolve via comprehensive YouTube scoring search (populates fallbacks automatically)
       if (!videoId) {
         videoId = await resolveYouTubeVideoId(
           currentTrack.artist, 
@@ -338,15 +387,35 @@ export const AudioPlayer = () => {
       if (isCancelled) return;
 
       if (videoId) {
+        // 1. Fetch and stream direct lossless audio via HTML5 Audio with Web Audio API analysis
+        fetchDirectAudioStream(videoId).then(directUrl => {
+          if (!isCancelled && directUrl && audioRef.current) {
+            try {
+              audioRef.current.src = directUrl;
+              currentTrack.resolvedStreamUrl = directUrl;
+              if (ytPlayerRef.current?.pauseVideo) {
+                try { ytPlayerRef.current.pauseVideo(); } catch (e) {}
+              }
+              if (usePlayerStore.getState().isPlaying) {
+                audioRef.current.currentTime = ytPlayerRef.current?.getCurrentTime?.() || usePlayerStore.getState().currentTime || 0;
+                audioRef.current.play().catch(() => {});
+              }
+            } catch (e) {}
+          }
+        }).catch(() => {});
+
+        // 2. Play via YouTube Iframe initially as instant starter
         if (ytReadyRef.current && ytPlayerRef.current?.loadVideoById) {
-          currentVideoIdRef.current = videoId;
-          try {
-            ytPlayerRef.current.loadVideoById({
-              videoId,
-              startSeconds: 0
-            });
-          } catch (err) {
-            console.warn('Error loading video by ID:', err);
+          if (currentVideoIdRef.current !== videoId) {
+            currentVideoIdRef.current = videoId;
+            try {
+              ytPlayerRef.current.loadVideoById({
+                videoId,
+                startSeconds: 0
+              });
+            } catch (err) {
+              console.warn('Error loading video by ID:', err);
+            }
           }
         } else {
           // If player is still preparing, stash videoId to play when onReady fires
@@ -354,7 +423,7 @@ export const AudioPlayer = () => {
         }
       }
 
-      // 6. Prefetch upcoming tracks in queue for instant 0ms switching
+      // Prefetch upcoming tracks in queue for instant switching
       const activeQueue = isShuffle ? shuffledQueue : queue;
       if (activeQueue.length > 0) {
         const next1 = activeQueue[queueIndex + 1];
@@ -363,7 +432,7 @@ export const AudioPlayer = () => {
         if (next2) prefetchTrackVideoId(next2);
       }
 
-      // 7. Background Auto-Mix Pre-Generation (Instant 200ms so queue always has upcoming stream)
+      // Background Auto-Mix Pre-Generation (Instant 200ms so queue always has upcoming stream)
       setTimeout(() => {
         if (isCancelled) return;
         const queuedIds = new Set(activeQueue.map(t => t.id));
@@ -371,7 +440,6 @@ export const AudioPlayer = () => {
           .then(mix => {
             if (!isCancelled && mix && mix.length > 0) {
               setRecommendedUpNext(mix);
-              // Pre-resolve first auto-mix song so autoplay starts with 0ms latency!
               prefetchTrackVideoId(mix[0]);
             }
           })
@@ -410,18 +478,19 @@ export const AudioPlayer = () => {
       {/* HTML5 Audio Player for Direct Full-Length Streams */}
       <audio
         ref={audioRef}
+        crossOrigin="anonymous"
         onTimeUpdate={() => {
-          if (audioRef.current && currentTrack?.source !== 'youtube') {
+          if (audioRef.current && !isYouTubeTrack(currentTrack)) {
             setCurrentTime(audioRef.current.currentTime);
           }
         }}
         onLoadedMetadata={() => {
-          if (audioRef.current && currentTrack?.source !== 'youtube') {
+          if (audioRef.current && !isYouTubeTrack(currentTrack)) {
             setDuration(audioRef.current.duration);
           }
         }}
         onEnded={() => {
-          if (currentTrack?.source !== 'youtube') {
+          if (!isYouTubeTrack(currentTrack)) {
             if (repeatMode === 'one') {
               if (audioRef.current) {
                 audioRef.current.currentTime = 0;
@@ -453,3 +522,5 @@ export const AudioPlayer = () => {
     </>
   );
 };
+
+

@@ -1314,10 +1314,79 @@ export async function fetchAlbumDetails(
     }
   }
 
-  // 2. YouTube Music Browse ID (MPREb_... / MPAD... / VLOLAK...)
-  if (albumId.startsWith('MPREb_') || albumId.startsWith('MPAD') || albumId.startsWith('VLOLAK') || cleanId.startsWith('MPREb_')) {
+  const isGenericName = !albumName || albumName.toLowerCase() === 'web stream' || albumName.toLowerCase() === 'single' || albumName.toLowerCase() === 'official release';
+  const effectiveAlbumName = isGenericName ? (cleanId.replace(/^album-/, '').replace(/^single-/, '') || 'Official Release') : albumName;
+
+  let resolvedReleaseName = effectiveAlbumName;
+  let resolvedCollectionId = !isNaN(Number(cleanId)) ? cleanId : '';
+
+  // Step A: Universal Parent Album / Collection Discovery via iTunes Track Search
+  // If the query is a song title (or single track), discover its true parent Album or EP name!
+  if (artistName && effectiveAlbumName) {
     try {
-      const ytmDetail = await fetchAlbumDetailsFromYTM(cleanId, albumName, artistName, fallbackCover);
+      const itunesTrackSearch = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' ' + effectiveAlbumName)}&entity=song&limit=10`
+      ).then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] }));
+
+      if (itunesTrackSearch.results && itunesTrackSearch.results.length > 0) {
+        const qTrackLower = effectiveAlbumName.toLowerCase().trim();
+        const qArtistLower = artistName.toLowerCase().trim();
+
+        const exactTrack = itunesTrackSearch.results.find((item: any) => {
+          const tLower = (item.trackName || '').toLowerCase().trim();
+          const aLower = (item.artistName || '').toLowerCase().trim();
+          return (tLower === qTrackLower || tLower.includes(qTrackLower) || qTrackLower.includes(tLower)) &&
+                 (aLower === qArtistLower || aLower.includes(qArtistLower) || qArtistLower.includes(aLower));
+        }) || itunesTrackSearch.results[0];
+
+        if (exactTrack?.collectionName) {
+          const cleanCollectionName = exactTrack.collectionName.replace(/ - (EP|Single|Album|LP)$/i, '').trim();
+          resolvedReleaseName = cleanCollectionName;
+          if (exactTrack.collectionId) {
+            resolvedCollectionId = String(exactTrack.collectionId);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('iTunes parent album discovery warning:', e);
+    }
+  }
+
+  // Step B: Direct Official Discography Lookup (Matches discovered or provided album name against YouTube Music official releases)
+  if (artistName) {
+    try {
+      const profile = await fetchArtistProfileFromYTM(artistName);
+      if (profile) {
+        const candidates = [resolvedReleaseName, effectiveAlbumName, albumName].filter(Boolean);
+        const allReleases = [...(profile.albums || []), ...(profile.singlesAndEPs || [])];
+        
+        let match: any = null;
+        for (const cand of candidates) {
+          const candLower = cand.trim().toLowerCase();
+          match = allReleases.find(r => {
+            const rLower = (r.name || '').trim().toLowerCase();
+            return rLower === candLower || rLower.includes(candLower) || candLower.includes(rLower);
+          });
+          if (match) break;
+        }
+
+        if (match && match.id) {
+          const matchedBrowseId = match.id.replace('album-', '').replace('album-derived-', '');
+          const ytmDetail = await fetchAlbumDetailsFromYTM(matchedBrowseId, match.name || resolvedReleaseName, artistName, match.cover || fallbackCover);
+          if (ytmDetail && ytmDetail.tracks.length > 0) {
+            return ytmDetail;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Artist discography album lookup failed:', e);
+    }
+  }
+
+  // Step C: Direct YouTube Music Browse ID (MPREb_... / MPAD... / VLOLAK...)
+  if (albumId.startsWith('MPREb_') || albumId.startsWith('MPAD') || albumId.startsWith('VLOLAK') || cleanId.startsWith('MPREb_') || cleanId.startsWith('OLAK') || cleanId.startsWith('VLOLAK')) {
+    try {
+      const ytmDetail = await fetchAlbumDetailsFromYTM(cleanId, resolvedReleaseName, artistName, fallbackCover);
       if (ytmDetail && ytmDetail.tracks.length > 0) {
         return ytmDetail;
       }
@@ -1326,33 +1395,8 @@ export async function fetchAlbumDetails(
     }
   }
 
-  // 2. Single Release Handler
-  if (albumId.startsWith('single-')) {
-    const videoId = albumId.replace('single-', '');
-    const singleCover = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-    return {
-      id: albumId,
-      name: albumName,
-      artist: artistName,
-      cover: singleCover,
-      releaseDate: 'Single',
-      tracks: [{
-        id: `piped-${videoId}`,
-        title: albumName,
-        artist: artistName,
-        albumArtist: artistName,
-        album: albumName,
-        duration: 180,
-        cover: singleCover,
-        streamUrl: `${artistName} - ${albumName}`,
-        source: 'youtube',
-        category: 'song'
-      }]
-    };
-  }
-
-  // 3. YouTube / Invidious Playlist Handler (Parallel Racing)
-  if (isNaN(Number(cleanId))) {
+  // Step D: YouTube / Invidious Playlist Handler (Parallel Racing)
+  if (isNaN(Number(cleanId)) && (cleanId.startsWith('PL') || cleanId.startsWith('OLAK') || cleanId.startsWith('RD'))) {
     try {
       const playlistPromises = INVIDIOUS_INSTANCES.map(inst =>
         fetch(`${inst}/api/v1/playlists/${cleanId}`, { signal: AbortSignal.timeout(2200) })
@@ -1368,7 +1412,7 @@ export async function fetchAlbumDetails(
           trackId: v.videoId,
           trackName: v.title,
           artistName: v.author || artistName,
-          collectionName: data.title || albumName,
+          collectionName: data.title || resolvedReleaseName,
           trackTimeMillis: (v.lengthSeconds || 180) * 1000,
           trackNumber: index + 1,
           artworkUrl100: data.playlistThumbnail || `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`
@@ -1379,10 +1423,12 @@ export async function fetchAlbumDetails(
     }
   }
 
-  if (!isNaN(Number(cleanId))) {
+  // Step E: Direct iTunes Album Lookup by ID
+  const targetItunesId = resolvedCollectionId || (!isNaN(Number(cleanId)) ? cleanId : '');
+  if (targetItunesId) {
     try {
-      let targetCollectionId = cleanId;
-      const initialLookup = await fetch(`https://itunes.apple.com/lookup?id=${cleanId}`).then(r => r.ok ? r.json() : { results: [] });
+      let targetCollectionId = targetItunesId;
+      const initialLookup = await fetch(`https://itunes.apple.com/lookup?id=${targetItunesId}`).then(r => r.ok ? r.json() : { results: [] });
       if (initialLookup.results && initialLookup.results.length > 0) {
         const item = initialLookup.results[0];
         if (item.wrapperType === 'track' && item.collectionId) {
@@ -1406,20 +1452,28 @@ export async function fetchAlbumDetails(
     }
   }
 
-  if (rawTracks.length === 0 && !isNaN(Number(cleanId))) {
+  // Step F: Comprehensive Search by Artist & Album Name across iTunes
+  if (rawTracks.length === 0 && artistName) {
     try {
-      const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' ' + albumName)}&entity=song&limit=50`).then(r => r.ok ? r.json() : { results: [] });
-      if (res.results) {
-        const albumCleanKey = albumName.toLowerCase().replace(/[^a-z0-9]/g, '');
-        rawTracks = res.results.filter((item: any) => {
-          const itemAlbumKey = (item.collectionName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-          return itemAlbumKey === albumCleanKey || itemAlbumKey.includes(albumCleanKey);
-        });
-        if (rawTracks[0]?.artworkUrl100) {
-          albumCover = rawTracks[0].artworkUrl100.replace('100x100bb', '600x600bb');
-        }
-        if (rawTracks[0]?.releaseDate) {
-          releaseDateStr = rawTracks[0].releaseDate.substring(0, 4);
+      const searchTerms = [resolvedReleaseName, effectiveAlbumName].filter(Boolean);
+      for (const term of searchTerms) {
+        const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' ' + term)}&entity=song&limit=50`).then(r => r.ok ? r.json() : { results: [] });
+        if (res.results && res.results.length > 0) {
+          const albumCleanKey = term.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const matched = res.results.filter((item: any) => {
+            const itemAlbumKey = (item.collectionName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            return itemAlbumKey === albumCleanKey || itemAlbumKey.includes(albumCleanKey) || albumCleanKey.includes(itemAlbumKey);
+          });
+          if (matched.length > 0) {
+            rawTracks = matched;
+            if (rawTracks[0]?.artworkUrl100) {
+              albumCover = rawTracks[0].artworkUrl100.replace('100x100bb', '600x600bb');
+            }
+            if (rawTracks[0]?.releaseDate) {
+              releaseDateStr = rawTracks[0].releaseDate.substring(0, 4);
+            }
+            break;
+          }
         }
       }
     } catch (e) {
@@ -1437,7 +1491,7 @@ export async function fetchAlbumDetails(
         title: item.trackName,
         artist: item.artistName || artistName,
         albumArtist: item.collectionArtistName || item.artistName || artistName,
-        album: item.collectionName || albumName,
+        album: item.collectionName || resolvedReleaseName || albumName,
         duration: Math.round((item.trackTimeMillis || 210000) / 1000),
         cover: item.artworkUrl100 || albumCover,
         streamUrl: `${item.artistName || artistName} - ${item.trackName}`,
@@ -1454,13 +1508,13 @@ export async function fetchAlbumDetails(
     
     orderedTracks.push({
       id: trackId,
-      title: albumName,
+      title: resolvedReleaseName || albumName,
       artist: artistName,
       albumArtist: artistName,
-      album: albumName,
+      album: resolvedReleaseName || albumName,
       duration: 180,
       cover: albumCover,
-      streamUrl: directVideoId ? `https://www.youtube.com/watch?v=${directVideoId}` : `${artistName} - ${albumName}`,
+      streamUrl: directVideoId ? `https://www.youtube.com/watch?v=${directVideoId}` : `${artistName} - ${resolvedReleaseName || albumName}`,
       source: 'youtube',
       category: 'song'
     });
@@ -1468,7 +1522,7 @@ export async function fetchAlbumDetails(
 
   return {
     id: albumId,
-    name: albumName,
+    name: resolvedReleaseName || albumName,
     artist: artistName,
     cover: albumCover,
     releaseDate: releaseDateStr || 'Official Release',
@@ -1633,11 +1687,24 @@ export async function resolveYouTubeVideoId(
     .replace(/(\(|\[)(feat|ft|prod).*/gi, '')
     .trim();
 
-  // 1. Absolute Priority: Direct YouTube Music InnerTube ATV resolution (100% pure distributor audio)
+  // 1. Priority: Direct YouTube Music InnerTube ATV resolution (100% pure distributor audio)
   try {
     const atvId = await resolveYouTubeMusicATV(primaryArtist, cleanTitle);
     if (atvId) {
       videoIdCache.set(cacheKey, atvId);
+
+      // Concurrently populate backup candidates so we have instant fallbacks if ATV has embed restrictions
+      fetchFastFromInvidious(`${primaryArtist} ${cleanTitle}`)
+        .then(raw => {
+          if (Array.isArray(raw)) {
+            const valid = raw.filter((r: any) => r.videoId && r.videoId !== atvId).map((r: any) => r.videoId);
+            if (valid.length > 0) {
+              fallbackCandidatesCache.set(cacheKey, valid);
+            }
+          }
+        })
+        .catch(() => {});
+
       return atvId;
     }
   } catch (e) {}
@@ -1749,6 +1816,73 @@ export async function resolveYouTubeVideoId(
   }
 
   return bestId;
+}
+
+/**
+ * Dynamically resolves an alternative playable YouTube Video ID for a given artist and title.
+ * Used when a primary video ID encounters embed restrictions (error 150/101) to keep playing the same song.
+ */
+export async function resolveAlternativeVideoId(
+  artist: string,
+  title: string,
+  excludeVideoId?: string | null
+): Promise<string | null> {
+  const cacheKey = getTrackCacheKey(artist, title);
+  
+  // 1. Check existing fallback candidate cache
+  const cachedFallbacks = fallbackCandidatesCache.get(cacheKey) || [];
+  const validCached = cachedFallbacks.filter(id => id && id !== excludeVideoId);
+  if (validCached.length > 0) {
+    const nextId = validCached.shift()!;
+    fallbackCandidatesCache.set(cacheKey, validCached);
+    videoIdCache.set(cacheKey, nextId);
+    return nextId;
+  }
+
+  const cleanArtist = artist.trim();
+  const cleanTitle = title.toLowerCase().replace(/(\(|\[)(feat|ft|prod).*/gi, '').trim();
+
+  // 2. Search for audio / lyrics / visualizer versions
+  const searchQueries = [
+    `${cleanArtist} ${cleanTitle} audio`,
+    `${cleanArtist} ${cleanTitle} lyric video`,
+    `${cleanArtist} ${cleanTitle}`
+  ];
+
+  const searchResultsBatches = await Promise.allSettled(
+    searchQueries.map(q => fetchFastFromInvidious(q))
+  );
+
+  const rawCandidates: any[] = [];
+  searchResultsBatches.forEach(res => {
+    if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+      rawCandidates.push(...res.value);
+    }
+  });
+
+  const uniqueCandidates = Array.from(
+    new Map(rawCandidates.map(item => [item.videoId, item])).values()
+  );
+
+  const DISQUALIFIED_KEYWORDS = [
+    'reaction', 'review', 'tutorial', 'how to', 'instrumental', 'guitar cover', 'piano cover'
+  ];
+
+  const validCandidates = uniqueCandidates.filter((item: any) => {
+    const vTitle = (item.title || '').toLowerCase();
+    return item.videoId && item.videoId !== excludeVideoId && !DISQUALIFIED_KEYWORDS.some(kw => vTitle.includes(kw));
+  });
+
+  if (validCandidates.length === 0) {
+    return null;
+  }
+
+  const best = validCandidates[0].videoId;
+  const remaining = validCandidates.slice(1).map((c: any) => c.videoId);
+  fallbackCandidatesCache.set(cacheKey, remaining);
+  videoIdCache.set(cacheKey, best);
+
+  return best;
 }
 
 /**
@@ -1910,7 +2044,7 @@ export async function fetchUpNextMix(
             title: item.title,
             artist: author,
             albumArtist: author,
-            album: 'Web Stream',
+            album: item.title,
             duration: item.lengthSeconds || 180,
             cover: item.videoThumbnails?.find((t: any) => t.quality === 'medium')?.url || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
             streamUrl: `${author} - ${item.title}`,
@@ -2250,7 +2384,7 @@ export async function fetchArtistDeepTracks(artistName: string): Promise<Track[]
               title: item.title,
               artist: cleanArtist,
               albumArtist: cleanArtist,
-              album: isArchive ? "Archive Uploads" : 'Web Stream',
+              album: item.title,
               duration: item.lengthSeconds || 180,
               cover: item.videoThumbnails?.find((t: any) => t.quality === 'medium')?.url || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
               streamUrl: `${cleanArtist} - ${item.title}`,
@@ -2778,3 +2912,67 @@ export async function fetchSimilarArtists(artistName: string, videoIdOrTrackId?:
 
   return results.slice(0, 14);
 }
+
+/**
+ * Resolves a direct playable audio stream URL from Piped / Invidious for real HTML5 Audio and Web Audio API spectrum analysis.
+ */
+const directStreamCache = new Map<string, string>();
+
+export async function fetchDirectAudioStream(videoId: string): Promise<string | null> {
+  if (!videoId) return null;
+  if (directStreamCache.has(videoId)) {
+    return directStreamCache.get(videoId)!;
+  }
+
+  const endpoints = [
+    `https://pipedapi.kavin.rocks/streams/${videoId}`,
+    `https://api.piped.yt/streams/${videoId}`,
+    `https://pipedapi.tokhmi.xyz/streams/${videoId}`,
+    `https://invidious.nerdvpn.de/api/v1/videos/${videoId}`,
+    `https://inv.tux.pizza/api/v1/videos/${videoId}`,
+    `https://invidious.jing.rocks/api/v1/videos/${videoId}`,
+    `https://inv.nadeko.net/api/v1/videos/${videoId}`,
+    `https://iv.ggtyler.dev/api/v1/videos/${videoId}`
+  ];
+
+  // Race endpoints in parallel batches of 3 for fast resolution (~200ms)
+  for (let i = 0; i < endpoints.length; i += 3) {
+    const batch = endpoints.slice(i, i + 3);
+    try {
+      const results = await Promise.all(
+        batch.map(async (ep) => {
+          try {
+            const res = await fetch(ep, { signal: AbortSignal.timeout(2200) });
+            if (!res.ok) return null;
+            const data = await res.json();
+
+            // 1. Piped audio stream extraction
+            if (Array.isArray(data.audioStreams) && data.audioStreams.length > 0) {
+              const best = data.audioStreams.find((s: any) => s.bitrate >= 128000) || data.audioStreams[0];
+              if (best?.url) return best.url;
+            }
+
+            // 2. Invidious adaptive formats audio extraction
+            if (Array.isArray(data.adaptiveFormats)) {
+              const audioOnly = data.adaptiveFormats.filter((f: any) => (f.type && f.type.includes('audio')) || (f.mimeType && f.mimeType.includes('audio')));
+              if (audioOnly.length > 0) {
+                const best = audioOnly.find((f: any) => f.bitrate >= 128000) || audioOnly[0];
+                if (best?.url) return best.url;
+              }
+            }
+          } catch (e) {}
+          return null;
+        })
+      );
+
+      const found = results.find(Boolean);
+      if (found) {
+        directStreamCache.set(videoId, found);
+        return found;
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+

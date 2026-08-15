@@ -8,9 +8,7 @@ import {
   Heart, 
   ListMusic, 
   Radio, 
-  Music, 
-  Plus, 
-  Check 
+  Music 
 } from 'lucide-react';
 import { Carousel } from '../components/Carousel';
 import { SpeedDialGrid } from '../components/SpeedDialGrid';
@@ -57,8 +55,8 @@ export function Dashboard() {
     currentTrack, 
     setQueue, 
     setIsPlaying,
-    generateRadio,
-    generateMultiRadio
+    toggleFavorite,
+    showToast
   } = usePlayerStore();
   
   const navigate = useNavigate();
@@ -73,7 +71,6 @@ export function Dashboard() {
   const [coversAndRemixes, setCoversAndRemixes] = useState<Track[]>(() => 
     getLocalCache<Track[]>(CACHE_KEYS.COVERS, [])
   );
-  const [isRadioLoading, setIsRadioLoading] = useState(false);
   
   const [albumsForYou, setAlbumsForYou] = useState<PublicPlaylist[]>(() => 
     getLocalCache<PublicPlaylist[]>(CACHE_KEYS.ALBUMS, [])
@@ -94,8 +91,6 @@ export function Dashboard() {
   const lastAlbumsFetchRef = useRef<string>('');
   const lastSimilarFetchRef = useRef<string>('');
 
-  // State for multi-seed custom radio selection
-  const [selectedSeedTracks, setSelectedSeedTracks] = useState<Track[]>([]);
 
   // 1. Get Speed Dial tracks (frequently played)
   const historyArray = Object.values(playHistory || {});
@@ -278,35 +273,6 @@ export function Dashboard() {
     };
   }, [playlists, favorites, playHistory, topArtists]);
 
-  // Handle single track instant radio playback
-  const handleStartRadio = async (track: Track) => {
-    setIsRadioLoading(true);
-    await generateRadio(track);
-    setIsRadioLoading(false);
-  };
-
-  // Toggle selection of seed tracks
-  const toggleSeedTrack = (track: Track) => {
-    setSelectedSeedTracks(prev => {
-      const isSelected = prev.some(t => t.id === track.id);
-      if (isSelected) {
-        return prev.filter(t => t.id !== track.id);
-      } else {
-        if (prev.length >= 5) return prev; // Limit to 5 seeds
-        return [...prev, track];
-      }
-    });
-  };
-
-  // Launch multi-seed custom radio
-  const handleLaunchMultiRadio = async () => {
-    if (selectedSeedTracks.length === 0) return;
-    setIsRadioLoading(true);
-    await generateMultiRadio(selectedSeedTracks);
-    setSelectedSeedTracks([]);
-    setIsRadioLoading(false);
-  };
-
   return (
     <div style={{ paddingBottom: '100px', position: 'relative' }}>
       
@@ -342,154 +308,150 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Quick Picks Carousel (2 Rows, Scrollable) */}
+      {/* Quick Picks Carousel (4 Rows, YouTube Music High-Density Compact Layout) */}
       {displayQuickPicks.length > 0 && (
         <Carousel 
-          title="Quick Picks"
+          title="Quick picks"
           subtitle="Start radio or pick a favorite track"
           icon={<Radio size={20} color="var(--accent-primary)" />}
           items={displayQuickPicks}
-          rows={2}
+          rows={4}
+          columnWidth="minmax(340px, 380px)"
+          gap="6px"
           actionButton={
-            selectedSeedTracks.length > 0 && (
-              <button 
-                onClick={handleLaunchMultiRadio}
-                disabled={isRadioLoading}
-                className="hero-play-btn"
-                style={{ padding: '8px 16px', fontSize: '0.85rem', opacity: isRadioLoading ? 0.7 : 1 }}
-              >
-                <Sparkles size={16} />
-                <span>{isRadioLoading ? 'Loading Radio...' : `Radio from ${selectedSeedTracks.length} seeds`}</span>
-              </button>
-            )
+            <button 
+              onClick={() => {
+                setQueue(displayQuickPicks, 0, 'Quick Picks');
+                setIsPlaying(true);
+              }}
+              className="play-all-pill-btn"
+              title="Play all tracks in Quick Picks"
+            >
+              <Play size={13} fill="currentColor" />
+              <span>Play all</span>
+            </button>
           }
           renderItem={(track) => {
-            const isSelected = selectedSeedTracks.some(t => t.id === track.id);
             const isPlayingThis = currentTrack?.id === track.id;
+            const isFav = favorites.some(f => f.id === track.id);
             
             return (
               <div 
                 key={`quick-pick-${track.id}`}
-                className="carousel-track-item"
+                className={`quick-pick-row ${isPlayingThis ? 'playing' : ''}`}
+                onClick={() => {
+                  setQueue([track], 0, `${track.title} Mix`);
+                  setIsPlaying(true);
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
-                  padding: '8px',
-                  borderRadius: '6px',
-                  backgroundColor: isSelected ? 'rgba(52, 152, 219, 0.1)' : 'transparent',
-                  border: `1px solid ${isSelected ? 'var(--accent-primary)' : 'transparent'}`,
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  backgroundColor: isPlayingThis ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
                   cursor: 'pointer',
-                  transition: 'background-color 0.2s'
+                  transition: 'background-color 0.15s ease',
+                  position: 'relative'
                 }}
               >
-                {/* Image Cover */}
+                {/* Image Cover with Hover Play Icon */}
                 <div 
-                  onClick={() => {
-                    setQueue([track], 0, `${track.title} Mix`);
-                    setIsPlaying(true);
-                  }}
                   style={{
                     width: '48px',
                     height: '48px',
-                    borderRadius: '4px',
+                    borderRadius: '6px',
                     backgroundImage: `url(${track.cover})`,
                     backgroundSize: 'cover',
                     backgroundPosition: 'center',
                     position: 'relative',
-                    flexShrink: 0
+                    flexShrink: 0,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                    overflow: 'hidden'
                   }}
                 >
                   <div 
+                    className="quick-pick-play-overlay"
                     style={{
-                    position: 'absolute',
+                      position: 'absolute',
                       top: 0, left: 0, right: 0, bottom: 0,
-                      backgroundColor: 'rgba(0,0,0,0.4)',
-                      borderRadius: '4px',
+                      backgroundColor: 'rgba(0,0,0,0.5)',
                       display: isPlayingThis ? 'flex' : 'none',
                       alignItems: 'center',
                       justifyContent: 'center'
                     }}
-                    className="play-overlay-always"
                   >
-                    <Play size={14} fill="white" color="white" />
+                    <Play size={16} fill="white" color="white" />
                   </div>
                 </div>
 
                 {/* Track Info */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div 
-                    onClick={() => {
-                      setQueue([track], 0, `${track.title} Mix`);
-                      setIsPlaying(true);
-                    }}
                     style={{ 
                       fontWeight: 600, 
-                      fontSize: '0.85rem',
+                      fontSize: '0.88rem',
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                      color: isPlayingThis ? 'var(--accent-primary)' : 'var(--text-primary)'
+                      color: isPlayingThis ? 'var(--accent-primary)' : 'var(--text-primary)',
+                      lineHeight: '1.2'
                     }}
                   >
                     {track.title}
                   </div>
                   <div 
-                    onClick={() => navigate(`/artist/${encodeURIComponent(track.artist)}${track.artistId ? `?artistId=${encodeURIComponent(track.artistId)}` : (track.channelId ? `?channelId=${encodeURIComponent(track.channelId)}` : '')}`)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/artist/${encodeURIComponent(track.artist)}${track.artistId ? `?artistId=${encodeURIComponent(track.artistId)}` : (track.channelId ? `?channelId=${encodeURIComponent(track.channelId)}` : '')}`);
+                    }}
                     style={{ 
-                      fontSize: '0.75rem', 
+                      fontSize: '0.78rem', 
                       color: 'var(--text-secondary)',
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                      marginTop: '2px',
+                      marginTop: '3px',
                       cursor: 'pointer'
                     }}
+                    onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
+                    onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
                   >
                     {track.artist}
                   </div>
                 </div>
 
-                {/* Quick Radio & Seed Select & Options Menu */}
-                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                  <TrackOptionsMenu track={track} variant="row" />
+                {/* Right Actions: Favorite Heart + 3-Dots Menu */}
+                <div 
+                  className="quick-pick-actions"
+                  style={{ display: 'flex', gap: '2px', alignItems: 'center', flexShrink: 0 }}
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <button
-                    onClick={() => handleStartRadio(track)}
-                    title="Start Radio"
+                    onClick={() => {
+                      toggleFavorite(track);
+                      showToast(isFav ? 'Removed from Liked Songs' : 'Added to Liked Songs');
+                    }}
+                    title={isFav ? 'Remove from liked songs' : 'Like'}
                     style={{
                       background: 'none',
                       border: 'none',
-                      color: 'var(--text-secondary)',
-                      padding: '4px',
+                      color: isFav ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                      padding: '6px',
                       cursor: 'pointer',
                       borderRadius: '50%',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center'
+                      justifyContent: 'center',
+                      opacity: isFav ? 1 : 0,
+                      transition: 'opacity 0.15s ease, color 0.15s ease'
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-primary)'}
-                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+                    className="quick-pick-heart-btn"
                   >
-                    <Radio size={14} />
+                    <Heart size={16} fill={isFav ? 'var(--accent-primary)' : 'none'} />
                   </button>
 
-                  <button
-                    onClick={() => toggleSeedTrack(track)}
-                    title={isSelected ? 'Deselect seed' : 'Select seed for Radio'}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: isSelected ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                      padding: '4px',
-                      cursor: 'pointer',
-                      borderRadius: '50%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  >
-                    {isSelected ? <Check size={14} /> : <Plus size={14} />}
-                  </button>
+                  <TrackOptionsMenu track={track} variant="row" className="quick-pick-menu-btn" />
                 </div>
               </div>
             );

@@ -51,25 +51,39 @@ export function Album() {
   const initialCover = searchParams.get('cover') || '';
 
   useEffect(() => {
-    if (albumId && albumName && artistName) {
-      setLoading(true);
-      fetchAlbumDetails(albumId, albumName, artistName, initialCover).then(data => {
+    if (!albumId) {
+      setLoading(false);
+      return;
+    }
+
+    const resolvedAlbumName = albumName || decodeURIComponent(albumId).replace('album-', '').replace('single-', '');
+    const resolvedArtistName = artistName || '';
+
+    setLoading(true);
+    fetchAlbumDetails(albumId, resolvedAlbumName, resolvedArtistName, initialCover)
+      .then(data => {
         setAlbum(data);
+      })
+      .catch(err => {
+        console.warn('Error loading album details:', err);
+      })
+      .finally(() => {
         setLoading(false);
       });
 
+    if (resolvedArtistName) {
       // Fetch artist avatar for header
-      resolveArtistAvatar(artistName).then(avatar => {
+      resolveArtistAvatar(resolvedArtistName).then(avatar => {
         if (avatar) setArtistAvatar(avatar);
       });
 
       // Fetch more releases by the artist for the bottom shelf
-      fetchArtistProfileFromYTM(artistName).then(profile => {
+      fetchArtistProfileFromYTM(resolvedArtistName).then(profile => {
         if (profile) {
           const combined = [
             ...(profile.singlesAndEPs || []),
             ...(profile.albums || [])
-          ].filter(r => r.name.toLowerCase() !== albumName.toLowerCase());
+          ].filter(r => r.name.toLowerCase() !== resolvedAlbumName.toLowerCase());
           
           // Deduplicate by name
           const uniqueMap = new Map<string, ReleaseItem>();

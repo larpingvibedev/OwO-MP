@@ -162,7 +162,8 @@ export const usePlayerStore = create<PlayerState>()(
       playingFrom: context,
       queue: [track],
       shuffledQueue: [track],
-      queueIndex: 0
+      queueIndex: 0,
+      isPlayerDrawerOpen: true
     });
   },
   setIsPlaying: (isPlaying) => set({ isPlaying }),
@@ -233,9 +234,11 @@ export const usePlayerStore = create<PlayerState>()(
       playingFrom: sourceContext,
       currentTime: 0,
       duration: cur?.duration || 0,
-      isPlaying: true
+      isPlaying: true,
+      isPlayerDrawerOpen: true
     });
   },
+
   
   addToQueue: (track) => set((state) => {
     if (!state.currentTrack) {
@@ -557,10 +560,10 @@ export const usePlayerStore = create<PlayerState>()(
       const state = get();
       const mix = await fetchUpNextMix(seedTrack, state.favorites, state.playHistory);
       const radioQueue = [seedTrack, ...mix.filter(t => t.id !== seedTrack.id)];
-      get().setQueue(radioQueue, 0, `${seedTrack.artist} Radio`);
+      get().setQueue(radioQueue, 0, `${seedTrack.title} Mix`);
       set({ isPlaying: true });
     } catch (e) {
-      get().setQueue([seedTrack], 0);
+      get().setQueue([seedTrack], 0, `${seedTrack.title} Mix`);
       set({ isPlaying: true });
     }
   },

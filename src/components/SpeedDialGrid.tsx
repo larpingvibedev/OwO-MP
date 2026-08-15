@@ -1,5 +1,6 @@
 import type { Track } from '../types';
 import { Play } from 'lucide-react';
+import { TrackOptionsMenu } from './common/TrackOptionsMenu';
 
 interface SpeedDialGridProps {
   tracks: Track[];
@@ -17,8 +18,8 @@ export function SpeedDialGrid({
   if (!tracks || tracks.length === 0) return null;
 
   return (
-    <div style={{ marginBottom: '40px' }}>
-      <h3 className="section-header" style={{ marginBottom: '16px', fontSize: '1.5rem', fontWeight: 800 }}>
+    <div style={{ marginBottom: '36px' }}>
+      <h3 className="section-header" style={{ marginBottom: '14px', fontSize: '1.45rem', fontWeight: 800 }}>
         Speed Dial
       </h3>
       
@@ -26,82 +27,57 @@ export function SpeedDialGrid({
         className="speed-dial-grid"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-          gap: '12px',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
+          gap: '10px',
         }}
       >
-        {tracks.slice(0, 9).map((track, index) => {
+        {tracks.slice(0, 8).map((track, index) => {
           const isActive = currentTrack?.id === track.id;
           
           return (
             <div
               key={`speed-dial-${track.id}`}
               onClick={() => onTrackClick(track, index)}
+              className={`speed-dial-card ${isActive ? 'active' : ''}`}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '12px',
-                padding: '8px 12px',
+                height: '56px',
                 borderRadius: '8px',
-                backgroundColor: isActive ? 'rgba(52, 152, 219, 0.15)' : 'var(--bg-card)',
-                border: `1px solid ${isActive ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                backgroundColor: isActive ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.05)',
+                border: `1px solid ${isActive ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.08)'}`,
                 cursor: 'pointer',
-                transition: 'background-color 0.2s, transform 0.1s',
-                overflow: 'hidden'
-              }}
-              className="speed-dial-item"
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = isActive ? 'rgba(52, 152, 219, 0.2)' : 'var(--bg-card-hover)';
-                e.currentTarget.style.transform = 'translateY(-1px)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = isActive ? 'rgba(52, 152, 219, 0.15)' : 'var(--bg-card)';
-                e.currentTarget.style.transform = 'none';
+                transition: 'all 0.2s cubic-bezier(0.25, 1, 0.5, 1)',
+                overflow: 'hidden',
+                position: 'relative',
+                paddingRight: '12px'
               }}
             >
-              {/* Cover Art with Hover Play Icon */}
+              {/* Cover Art */}
               <div 
                 style={{
-                  width: '48px',
-                  height: '48px',
-                  borderRadius: '4px',
+                  width: '56px',
+                  height: '56px',
                   backgroundImage: `url(${track.cover})`,
                   backgroundSize: 'cover',
                   backgroundPosition: 'center',
                   flexShrink: 0,
-                  position: 'relative',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+                  boxShadow: '2px 0 8px rgba(0,0,0,0.3)'
                 }}
-              >
-                <div 
-                  className="play-overlay"
-                  style={{
-                    position: 'absolute',
-                    top: 0, left: 0, right: 0, bottom: 0,
-                    backgroundColor: 'rgba(0,0,0,0.5)',
-                    borderRadius: '4px',
-                    display: 'none',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Play size={16} fill="white" color="white" />
-                </div>
-              </div>
+              />
 
               {/* Title & Artist */}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div 
                   style={{ 
-                    fontWeight: 600, 
-                    fontSize: '0.85rem', 
+                    fontWeight: 700, 
+                    fontSize: '0.86rem', 
                     color: isActive ? 'var(--accent-primary)' : 'var(--text-primary)',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
-                    textOverflow: 'ellipsis'
+                    textOverflow: 'ellipsis',
+                    lineHeight: '1.2'
                   }}
                 >
                   {track.title}
@@ -119,7 +95,7 @@ export function SpeedDialGrid({
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
-                    marginTop: '2px'
+                    marginTop: '3px'
                   }}
                   onMouseEnter={(e) => {
                     if (onArtistClick) e.currentTarget.style.textDecoration = 'underline';
@@ -131,15 +107,74 @@ export function SpeedDialGrid({
                   {track.artist}
                 </div>
               </div>
+
+              {/* Hover Actions: 3-Dots Menu & Quick Play Button */}
+              <div 
+                className="speed-dial-actions"
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '6px',
+                  flexShrink: 0
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="speed-dial-menu-btn" style={{ opacity: 0, transition: 'opacity 0.15s ease' }}>
+                  <TrackOptionsMenu track={track} variant="row" />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onTrackClick(track, index)}
+                  className="speed-dial-play-btn"
+                  title="Play"
+                  style={{
+                    width: '34px',
+                    height: '34px',
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--accent-primary)',
+                    color: '#000',
+                    border: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+                    transition: 'all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)'
+                  }}
+                >
+                  <Play size={15} fill="#000" style={{ marginLeft: '2px' }} />
+                </button>
+              </div>
             </div>
           );
         })}
       </div>
+
       <style>{`
-        .speed-dial-item:hover .play-overlay {
-          display: flex !important;
+        .speed-dial-card:hover {
+          background-color: rgba(255, 255, 255, 0.09) !important;
+          border-color: rgba(255, 255, 255, 0.18) !important;
+          transform: translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+        }
+        .speed-dial-card .speed-dial-play-btn {
+          opacity: 0;
+          transform: scale(0.8);
+        }
+        .speed-dial-card:hover .speed-dial-play-btn {
+          opacity: 1;
+          transform: scale(1);
+        }
+        .speed-dial-card:hover .speed-dial-menu-btn {
+          opacity: 1 !important;
+        }
+        .speed-dial-card.active .speed-dial-play-btn {
+          opacity: 1;
+          transform: scale(1);
         }
       `}</style>
     </div>
   );
 }
+
