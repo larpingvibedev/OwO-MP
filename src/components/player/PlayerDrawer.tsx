@@ -831,9 +831,41 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                       });
                     })()}
                   </div>
+                ) : isLoadingMix ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {[1, 2, 3, 4].map(idx => (
+                      <div
+                        key={`upnext-skel-${idx}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '8px',
+                          borderRadius: '6px',
+                          backgroundColor: 'rgba(255,255,255,0.02)',
+                          border: '1px solid var(--border-color)',
+                          opacity: 0.6,
+                          animation: 'pulse 1.5s infinite ease-in-out'
+                        }}
+                      >
+                        <div style={{
+                          width: '38px',
+                          height: '38px',
+                          borderRadius: '4px',
+                          backgroundColor: 'rgba(255,255,255,0.06)',
+                          flexShrink: 0
+                        }} />
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <div style={{ height: '12px', width: `${55 + (idx * 11) % 30}%`, borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.07)' }} />
+                          <div style={{ height: '10px', width: `${30 + (idx * 9) % 25}%`, borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.04)' }} />
+                        </div>
+                        <div style={{ width: '28px', height: '10px', borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.04)' }} />
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', padding: '16px 0', textAlign: 'center' }}>
-                    {isLoadingMix ? 'Generating your personalized auto-mix...' : 'No additional recommendations found.'}
+                    No additional recommendations found.
                   </div>
                 )}
               </div>

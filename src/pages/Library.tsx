@@ -119,9 +119,17 @@ export function Library() {
     return list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }, [playlists, sortBy]);
 
-  // 2. Sort Saved Albums
+  // Filter saved albums to ensure strictly official albums from artists
+  const officialAlbums = useMemo(() => {
+    return savedAlbums.filter(alb => {
+      const isPlaylist = alb.id.startsWith('PL') || alb.id.startsWith('VLPL') || alb.id.startsWith('community-') || alb.id.startsWith('mix-') || (alb.releaseDate && alb.releaseDate.toLowerCase().includes('playlist')) || (alb.releaseDate && alb.releaseDate.toLowerCase().includes('mix'));
+      return !isPlaylist;
+    });
+  }, [savedAlbums]);
+
+  // 2. Sort Saved Albums (Official Releases)
   const sortedAlbums = useMemo(() => {
-    const list = [...savedAlbums];
+    const list = [...officialAlbums];
     if (sortBy === 'alpha') {
       return list.sort((a, b) => a.name.localeCompare(b.name));
     }
@@ -130,7 +138,7 @@ export function Library() {
     }
     // recent
     return list.sort((a, b) => (b.lastPlayedAt || b.savedAt || 0) - (a.lastPlayedAt || a.savedAt || 0));
-  }, [savedAlbums, sortBy]);
+  }, [officialAlbums, sortBy]);
 
   // 3. Sort Followed Artists
   const sortedArtists = useMemo(() => {
@@ -178,22 +186,25 @@ export function Library() {
       });
     }
 
-    // Playlists
+    // Playlists (User created & Saved Community Playlists)
     playlists.forEach(pl => {
+      const subtitle = pl.author 
+        ? `Playlist • ${pl.author}`
+        : `Playlist • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'track' : 'tracks'}`;
       items.push({
         id: pl.id,
         type: 'playlist',
         title: pl.name,
-        subtitle: `Playlist • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'track' : 'tracks'}`,
-        cover: pl.tracks[0]?.cover || '',
+        subtitle,
+        cover: pl.cover || pl.tracks[0]?.cover || '',
         savedAt: pl.createdAt || 0,
         lastPlayedAt: pl.createdAt || 0,
         data: pl
       });
     });
 
-    // Saved Albums
-    savedAlbums.forEach(alb => {
+    // Official Saved Albums
+    officialAlbums.forEach(alb => {
       items.push({
         id: alb.id,
         type: 'album',
@@ -230,7 +241,7 @@ export function Library() {
     }
     // recent
     return items.sort((a, b) => b.lastPlayedAt - a.lastPlayedAt);
-  }, [favorites, playlists, savedAlbums, followedArtists, sortBy]);
+  }, [favorites, playlists, officialAlbums, followedArtists, sortBy]);
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -296,7 +307,7 @@ export function Library() {
     { id: 'all', label: 'All', count: unifiedItems.length },
     { id: 'playlists', label: 'Playlists', count: playlists.length + (favorites.length > 0 ? 1 : 0) },
     { id: 'songs', label: 'Liked Songs', count: favorites.length },
-    { id: 'albums', label: 'Albums', count: savedAlbums.length },
+    { id: 'albums', label: 'Albums', count: officialAlbums.length },
     { id: 'artists', label: 'Artists', count: followedArtists.length },
     { id: 'downloads', label: 'Offline / Cache', count: offlineRecords.length }
   ];
@@ -309,7 +320,7 @@ export function Library() {
           <div>
             <h1 className="library-heading">Your Library</h1>
             <p className="library-subheading">
-              {playlists.length} playlists • {favorites.length} liked tracks • {savedAlbums.length} saved albums • {followedArtists.length} artists
+              {playlists.length} playlists • {favorites.length} liked tracks • {officialAlbums.length} saved albums • {followedArtists.length} artists
             </p>
           </div>
 
@@ -429,7 +440,13 @@ export function Library() {
                 <div 
                   key={item.id} 
                   className="library-card playlist-card"
-                  onClick={() => setSelectedPlaylist(pl)}
+                  onClick={() => {
+                    if (pl.tracks.length === 0 && (pl.id.startsWith('PL') || pl.id.startsWith('VLPL') || pl.id.startsWith('community-') || pl.id.startsWith('mix-'))) {
+                      navigate(`/album/${pl.id}?name=${encodeURIComponent(pl.name)}&artist=${encodeURIComponent(pl.author || '')}&cover=${encodeURIComponent(pl.cover || '')}`);
+                    } else {
+                      setSelectedPlaylist(pl);
+                    }
+                  }}
                 >
                   <div 
                     className="card-cover-wrapper"
@@ -549,24 +566,30 @@ export function Library() {
             </div>
           )}
 
-          {/* Sorted User Playlists */}
+          {/* Sorted User Playlists & Saved Community Playlists */}
           {sortedPlaylists.map(pl => {
-            const firstCover = pl.tracks[0]?.cover;
+            const displayCover = pl.cover || pl.tracks[0]?.cover;
             return (
               <div 
                 key={pl.id} 
                 className="library-card playlist-card"
-                onClick={() => setSelectedPlaylist(pl)}
+                onClick={() => {
+                  if (pl.tracks.length === 0 && (pl.id.startsWith('PL') || pl.id.startsWith('VLPL') || pl.id.startsWith('community-') || pl.id.startsWith('mix-'))) {
+                    navigate(`/album/${pl.id}?name=${encodeURIComponent(pl.name)}&artist=${encodeURIComponent(pl.author || '')}&cover=${encodeURIComponent(pl.cover || '')}`);
+                  } else {
+                    setSelectedPlaylist(pl);
+                  }
+                }}
               >
                 <div 
                   className="card-cover-wrapper"
                   style={{
-                    backgroundImage: firstCover ? `url(${firstCover})` : 'none',
+                    backgroundImage: displayCover ? `url(${displayCover})` : 'none',
                     backgroundSize: 'cover',
                     backgroundPosition: 'center'
                   }}
                 >
-                  {!firstCover && (
+                  {!displayCover && (
                     <div className="empty-cover-placeholder">
                       <ListMusic size={36} color="var(--text-secondary)" />
                     </div>
@@ -585,7 +608,7 @@ export function Library() {
                 <div className="card-meta">
                   <div className="card-title" title={pl.name}>{pl.name}</div>
                   <div className="card-subtitle">
-                    Playlist • {pl.tracks.length} {pl.tracks.length === 1 ? 'track' : 'tracks'}
+                    {pl.author ? `Playlist • ${pl.author}` : `Playlist • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'track' : 'tracks'}`}
                   </div>
                 </div>
               </div>
@@ -1058,7 +1081,7 @@ export function Library() {
       {/* Empty State when no items exist for the active filter */}
       {((activeFilter === 'all' && unifiedItems.length === 0) ||
         (activeFilter === 'playlists' && playlists.length === 0 && favorites.length === 0) ||
-        (activeFilter === 'albums' && savedAlbums.length === 0) ||
+        (activeFilter === 'albums' && officialAlbums.length === 0) ||
         (activeFilter === 'artists' && followedArtists.length === 0)) && (
         <div className="library-empty-view">
           <Music2 size={54} className="empty-icon-pulse" />

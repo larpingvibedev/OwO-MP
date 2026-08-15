@@ -3,7 +3,7 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { fetchAlbumDetails, fetchArtistProfileFromYTM, cleanGoogleImageUrl, resolveArtistAvatar } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { isSameTrack } from '../utils/trackUtils';
-import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check, Download, HardDrive } from 'lucide-react';
+import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check, Download, HardDrive, ListMusic } from 'lucide-react';
 import type { AlbumDetail, Track, Album as ReleaseItem } from '../types';
 
 function formatTime(seconds: number): string {
@@ -45,6 +45,8 @@ export function Album() {
     favorites,
     toggleFavorite,
     addToQueue,
+    playlists,
+    toggleSavePlaylist,
     savedAlbums,
     toggleSaveAlbum,
     downloadedTrackIds,
@@ -126,22 +128,39 @@ export function Album() {
   }
 
   // Derive dynamic release type
+  const cleanId = (albumId || '').replace('album-', '').replace('album-derived-', '');
+  const isPlaylist = Boolean(
+    cleanId.startsWith('PL') || 
+    cleanId.startsWith('VLPL') || 
+    cleanId.startsWith('RD') || 
+    cleanId.startsWith('community-') || 
+    cleanId.startsWith('mix-') ||
+    album.releaseDate === 'Public Playlist' ||
+    album.releaseDate === 'Community Playlist' ||
+    album.releaseDate === 'Curated Mix' ||
+    album.releaseDate === 'Playlist'
+  );
+
   const releaseTypeLower = (album.releaseDate || '').toLowerCase();
-  const isSingle = releaseTypeLower.includes('single') || album.tracks.length === 1;
-  const isEP = releaseTypeLower.includes('ep') || (album.tracks.length > 1 && album.tracks.length <= 6);
-  const isAlbum = releaseTypeLower.includes('album') || album.tracks.length > 6;
+  const isSingle = !isPlaylist && (releaseTypeLower.includes('single') || album.tracks.length === 1);
+  const isEP = !isPlaylist && (releaseTypeLower.includes('ep') || (album.tracks.length > 1 && album.tracks.length <= 6));
+  const isAlbum = !isPlaylist && (releaseTypeLower.includes('album') || album.tracks.length > 6);
   
-  const releaseLabel = isSingle ? 'Single' : (isEP ? 'EP' : (isAlbum ? 'Album' : 'Official Release'));
-  const playButtonText = isSingle ? 'Play Single' : (isEP ? 'Play EP' : (isAlbum ? 'Play Album' : 'Play Release'));
+  const releaseLabel = isPlaylist ? 'Playlist' : (isSingle ? 'Single' : (isEP ? 'EP' : (isAlbum ? 'Album' : 'Official Release')));
+  const playButtonText = isPlaylist ? 'Play Playlist' : (isSingle ? 'Play Single' : (isEP ? 'Play EP' : (isAlbum ? 'Play Album' : 'Play Release')));
   const displayCover = cleanGoogleImageUrl(album.cover || initialCover, 500);
 
   // Check if currently playing this release
   const isCurrentReleasePlaying = isPlaying && album.tracks.some(t => isSameTrack(t, currentTrack));
   const totalSeconds = album.tracks.reduce((acc, t) => acc + (t.duration || 180), 0);
 
-  const isSavedToLibrary = Boolean(album && savedAlbums.some(
-    a => a.id === album.id || (a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase())
-  ));
+  const isSavedToLibrary = Boolean(
+    isPlaylist
+      ? playlists.some(p => p.id === album.id || p.name.toLowerCase() === album.name.toLowerCase())
+      : (album && savedAlbums.some(
+          a => a.id === album.id || (a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase())
+        ))
+  );
   const isAllAlbumDownloaded = Boolean(album && album.tracks.length > 0 && album.tracks.every(t => Boolean(downloadedTrackIds[t.id])));
   const isAlbumDownloading = Boolean(album && album.tracks.some(t => downloadingTrackIds[t.id] !== undefined));
 
@@ -259,7 +278,7 @@ export function Album() {
             color: 'var(--accent-primary)',
             marginBottom: '10px'
           }}>
-            <Disc size={13} />
+            {isPlaylist ? <ListMusic size={13} /> : <Disc size={13} />}
             <span>{releaseLabel}</span>
           </div>
 
@@ -295,7 +314,11 @@ export function Album() {
                 color: 'var(--text-primary)',
                 fontWeight: 700
               }}
-              onClick={() => navigate(`/artist/${encodeURIComponent(album.artist)}${album.artistId ? `?artistId=${encodeURIComponent(album.artistId)}` : (album.channelId ? `?channelId=${encodeURIComponent(album.channelId)}` : '')}`)}
+              onClick={() => {
+                if (!isPlaylist) {
+                  navigate(`/artist/${encodeURIComponent(album.artist)}${album.artistId ? `?artistId=${encodeURIComponent(album.artistId)}` : (album.channelId ? `?channelId=${encodeURIComponent(album.channelId)}` : '')}`);
+                }
+              }}
             >
               {artistAvatar && (
                 <img 
@@ -304,10 +327,10 @@ export function Album() {
                   style={{ width: '24px', height: '24px', borderRadius: '50%', objectFit: 'cover' }} 
                 />
               )}
-              <span style={{ textDecoration: 'underline', textUnderlineOffset: '3px' }}>{album.artist}</span>
+              <span style={{ textDecoration: isPlaylist ? 'none' : 'underline', textUnderlineOffset: '3px' }}>{album.artist}</span>
             </div>
 
-            {album.releaseDate && <span>• {album.releaseDate}</span>}
+            <span>• {isPlaylist ? 'Playlist' : (album.releaseDate || 'Official Release')}</span>
             <span>• {album.tracks.length} {album.tracks.length === 1 ? 'track' : 'tracks'}</span>
             <span>• {formatTotalTime(totalSeconds)}</span>
           </div>
@@ -376,18 +399,30 @@ export function Album() {
               </button>
             )}
 
-            {/* Save Album to Library / Favorite Release Button */}
+            {/* Save Album / Playlist to Library */}
             <button 
-              onClick={() => toggleSaveAlbum({
-                id: album.id,
-                name: album.name,
-                artist: album.artist,
-                cover: album.cover || initialCover,
-                releaseDate: album.releaseDate,
-                trackCount: album.tracks.length,
-                artistId: album.artistId
-              })}
-              title={isSavedToLibrary ? "Remove album from Library" : "Save album to Library"}
+              onClick={() => {
+                if (isPlaylist) {
+                  toggleSavePlaylist({
+                    id: album.id,
+                    name: album.name,
+                    cover: album.cover || initialCover,
+                    tracks: album.tracks,
+                    author: album.artist
+                  });
+                } else {
+                  toggleSaveAlbum({
+                    id: album.id,
+                    name: album.name,
+                    artist: album.artist,
+                    cover: album.cover || initialCover,
+                    releaseDate: album.releaseDate,
+                    trackCount: album.tracks.length,
+                    artistId: album.artistId
+                  });
+                }
+              }}
+              title={isSavedToLibrary ? (isPlaylist ? "Remove playlist from Library" : "Remove album from Library") : (isPlaylist ? "Save playlist to Library" : "Save album to Library")}
               style={{ 
                 width: '44px',
                 height: '44px',

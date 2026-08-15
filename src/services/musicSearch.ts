@@ -1369,6 +1369,9 @@ export async function fetchAlbumDetailsFromYTM(
     'https://music.youtube.com/youtubei/v1'
   ];
 
+  const cleanBrowseId = albumBrowseId.startsWith('VL') ? albumBrowseId : (albumBrowseId.startsWith('PL') || albumBrowseId.startsWith('RD') || albumBrowseId.startsWith('OLAK') ? `VL${albumBrowseId}` : albumBrowseId);
+  const isPlaylist = cleanBrowseId.startsWith('VLPL') || cleanBrowseId.startsWith('PL') || cleanBrowseId.startsWith('VLRD') || cleanBrowseId.startsWith('RD');
+
   let data: any = null;
 
   for (const base of endpoints) {
@@ -1380,7 +1383,7 @@ export async function fetchAlbumDetailsFromYTM(
         },
         body: JSON.stringify({
           context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
-          browseId: albumBrowseId
+          browseId: cleanBrowseId
         })
       });
 
@@ -1394,25 +1397,28 @@ export async function fetchAlbumDetailsFromYTM(
   if (!data) return null;
 
   const twoCol = data?.contents?.twoColumnBrowseResultsRenderer;
-  const secContents = twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+  const secContents = twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || 
+                      data?.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+
   const leftHeader = secContents[0]?.musicResponsiveHeaderRenderer ||
                      data?.header?.musicDetailHeaderRenderer ||
                      data?.header?.musicResponsiveHeaderRenderer ||
                      twoCol?.header?.musicResponsiveHeaderRenderer;
   
   const albumTitle = leftHeader?.title?.runs?.[0]?.text || fallbackAlbumName;
-  const albumSubtitle = leftHeader?.subtitle?.runs?.map((r: any) => r.text).join('') || 'Official Release';
-  const artist = leftHeader?.straplineTextOne?.runs?.[0]?.text || fallbackArtistName;
+  const albumSubtitle = leftHeader?.subtitle?.runs?.map((r: any) => r.text).join('') || (isPlaylist ? 'Playlist' : 'Official Release');
+  const artist = (isPlaylist ? (fallbackArtistName || leftHeader?.straplineTextOne?.runs?.[0]?.text || 'Community') : (leftHeader?.straplineTextOne?.runs?.[0]?.text || fallbackArtistName));
   const rawCover = leftHeader?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
                    leftHeader?.thumbnailRenderer?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
                    leftHeader?.thumbnail?.croppedSquareThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
   const cover = cleanGoogleImageUrl(rawCover || fallbackCover || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80', 500);
 
-  const trackItems = twoCol?.secondaryContents?.sectionListRenderer?.contents?.[0]?.musicShelfRenderer?.contents ||
-                    twoCol?.secondaryContents?.sectionListRenderer?.contents?.[0]?.musicPlaylistShelfRenderer?.contents ||
+  const trackItems = twoCol?.secondaryContents?.sectionListRenderer?.contents?.[0]?.musicPlaylistShelfRenderer?.contents ||
+                    twoCol?.secondaryContents?.sectionListRenderer?.contents?.[0]?.musicShelfRenderer?.contents ||
                     twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[1]?.musicShelfRenderer?.contents ||
                     twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[1]?.musicPlaylistShelfRenderer?.contents ||
                     secContents[1]?.musicPlaylistShelfRenderer?.contents ||
+                    secContents[0]?.musicPlaylistShelfRenderer?.contents ||
                     secContents[1]?.musicShelfRenderer?.contents || [];
 
   const tracks: Track[] = [];
@@ -1421,7 +1427,8 @@ export async function fetchAlbumDetailsFromYTM(
     if (!r) return;
     const trackTitle = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text;
     const rawVideoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
-                    r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
+                    r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+                    r.navigationEndpoint?.watchEndpoint?.videoId;
     const videoId = extractOfficialAudioTrackId(r, rawVideoId);
     const durationStr = r.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text;
     const trackArtist = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((s: any) => s.text).join('') || artist;
@@ -1541,13 +1548,19 @@ export async function fetchAlbumDetails(
   let resolvedCollectionId = !isNaN(Number(cleanId)) ? cleanId : '';
 
   // -------------------------------------------------------------
-  // LAYER 1: Direct YouTube Music Browse ID (MPREb_ / OLAK / MPAD)
+  // LAYER 1: Direct YouTube Music Browse ID (MPREb_ / OLAK / MPAD / VLPL / PL / RD)
   // -------------------------------------------------------------
-  if (albumId.startsWith('MPREb_') || albumId.startsWith('MPAD') || albumId.startsWith('VLOLAK') || cleanId.startsWith('MPREb_') || cleanId.startsWith('OLAK') || cleanId.startsWith('VLOLAK')) {
+  const isPlaylistBrowse = cleanId.startsWith('PL') || cleanId.startsWith('VLPL') || cleanId.startsWith('RD') || cleanId.startsWith('VLRD') || albumId.startsWith('PL') || albumId.startsWith('VLPL') || albumId.startsWith('RD') || albumId.startsWith('VLRD');
+  const isOfficialAlbumBrowse = cleanId.startsWith('MPREb_') || cleanId.startsWith('OLAK') || cleanId.startsWith('VLOLAK') || cleanId.startsWith('MPAD') || albumId.startsWith('MPREb_') || albumId.startsWith('MPAD') || albumId.startsWith('VLOLAK');
+
+  if (isPlaylistBrowse || isOfficialAlbumBrowse) {
     try {
-      const ytmDetail = await fetchAlbumDetailsFromYTM(cleanId, resolvedReleaseName, artistName, fallbackCover);
-      if (ytmDetail && ytmDetail.tracks.length > 0 && isMatchingArtist(ytmDetail.artist, artistName)) {
-        return ytmDetail;
+      const targetBrowseId = isPlaylistBrowse && !cleanId.startsWith('VL') ? `VL${cleanId}` : cleanId;
+      const ytmDetail = await fetchAlbumDetailsFromYTM(targetBrowseId, resolvedReleaseName, artistName, fallbackCover);
+      if (ytmDetail && ytmDetail.tracks.length > 0) {
+        if (isPlaylistBrowse || isMatchingArtist(ytmDetail.artist, artistName)) {
+          return ytmDetail;
+        }
       }
     } catch (e) {
       console.warn('YouTube Music album browse direct failed:', e);
@@ -2272,6 +2285,8 @@ function getCanonicalSignature(title: string, artist: string): string {
   return `${cleanArtist}___${cleanTitle}`;
 }
 
+const upNextMixCache = new Map<string, { timestamp: number; tracks: Track[] }>();
+
 export async function fetchUpNextMix(
   seed: Track | Track[],
   userFavorites: Track[] = [],
@@ -2282,6 +2297,15 @@ export async function fetchUpNextMix(
 ): Promise<Track[]> {
   const seedList: Track[] = Array.isArray(seed) ? seed.filter(Boolean) : (seed ? [seed] : []);
   if (seedList.length === 0) return [];
+
+  // Instant In-Memory Cache (Valid for 10 minutes)
+  const cacheKey = seedList.map(s => s.id || `${s.artist}-${s.title}`).sort().join('::') + 
+    `_blk_${(blockedArtists || []).sort().join(',')}_dis_${(dislikedTracks || []).map(d => d.id).sort().join(',')}`;
+  const cached = upNextMixCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
+    const queueIds = new Set(seedList.map(s => s.id));
+    return cached.tracks.filter(t => !queueIds.has(t.id));
+  }
 
   const seenKeys = new Set<string>();
   const blockedLowerSet = new Set((blockedArtists || []).map(a => a.toLowerCase().trim()));
@@ -2529,6 +2553,14 @@ export async function fetchUpNextMix(
     if (userTastePool.length > 0) {
       finalMix.push(userTastePool.shift()!);
       addedInRound = true;
+    }
+  }
+
+  if (finalMix.length > 0) {
+    upNextMixCache.set(cacheKey, { timestamp: Date.now(), tracks: [...finalMix] });
+    if (upNextMixCache.size > 100) {
+      const oldestKey = upNextMixCache.keys().next().value;
+      if (oldestKey) upNextMixCache.delete(oldestKey);
     }
   }
 

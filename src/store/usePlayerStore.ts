@@ -128,6 +128,7 @@ interface PlayerState {
   
   toggleFavorite: (track: Track) => void;
   toggleSaveAlbum: (album: { id: string; name: string; artist: string; cover: string; releaseDate?: string; trackCount?: number; artistId?: string | number }) => void;
+  toggleSavePlaylist: (playlist: { id: string; name: string; cover?: string; tracks?: Track[]; author?: string }) => void;
   toggleFollowArtist: (artist: { name: string; cover: string; subscriberCount?: string; channelId?: string; artistId?: string | number }) => void;
   playNext: (track: Track) => void;
   createPlaylist: (name: string) => string;
@@ -304,6 +305,7 @@ export const usePlayerStore = create<PlayerState>()(
       currentTime: 0,
       duration: cur?.duration || 0,
       isPlaying: true,
+      recommendedUpNext: [],
       isPlayerDrawerOpen: true,
       playNonce: state.playNonce + 1
     }));
@@ -312,7 +314,7 @@ export const usePlayerStore = create<PlayerState>()(
     const queuedIds = new Set(tracks.map(t => t.id));
     fetchUpNextMix(tracks, get().favorites, get().playHistory, queuedIds, get().dislikedTracks, get().blockedArtists)
       .then(mix => {
-        if (mix && mix.length > 0) {
+        if (mix && mix.length > 0 && get().queueSessionId === sessionId) {
           set({ recommendedUpNext: mix });
         }
       })
@@ -724,7 +726,64 @@ export const usePlayerStore = create<PlayerState>()(
     return { favorites: newFavorites };
   }),
 
+  toggleSavePlaylist: (playlist) => set((state) => {
+    const isSaved = state.playlists.some(
+      p => p.id === playlist.id || p.name.toLowerCase() === playlist.name.toLowerCase()
+    );
+    if (isSaved) {
+      return {
+        playlists: state.playlists.filter(
+          p => p.id !== playlist.id && p.name.toLowerCase() !== playlist.name.toLowerCase()
+        ),
+        toastMessage: `Removed "${playlist.name}" from Playlists`
+      };
+    } else {
+      const newPl: Playlist = {
+        id: playlist.id || `pl-${Date.now()}`,
+        name: playlist.name,
+        cover: playlist.cover,
+        author: playlist.author,
+        tracks: playlist.tracks || [],
+        createdAt: Date.now()
+      };
+      supabaseSync.syncPlaylistUp(newPl);
+      return {
+        playlists: [newPl, ...state.playlists],
+        toastMessage: `Saved playlist "${playlist.name}" to Library`
+      };
+    }
+  }),
+
   toggleSaveAlbum: (album) => set((state) => {
+    const isPlaylist = album.id.startsWith('PL') || album.id.startsWith('VLPL') || album.id.startsWith('community-') || album.id.startsWith('mix-') || (album.releaseDate && album.releaseDate.toLowerCase().includes('playlist')) || (album.releaseDate && album.releaseDate.toLowerCase().includes('mix'));
+    if (isPlaylist) {
+      const isSavedPl = state.playlists.some(
+        p => p.id === album.id || p.name.toLowerCase() === album.name.toLowerCase()
+      );
+      if (isSavedPl) {
+        return {
+          playlists: state.playlists.filter(
+            p => p.id !== album.id && p.name.toLowerCase() !== album.name.toLowerCase()
+          ),
+          toastMessage: `Removed "${album.name}" from Playlists`
+        };
+      } else {
+        const newPl: Playlist = {
+          id: album.id,
+          name: album.name,
+          cover: album.cover,
+          author: album.artist,
+          tracks: [],
+          createdAt: Date.now()
+        };
+        supabaseSync.syncPlaylistUp(newPl);
+        return {
+          playlists: [newPl, ...state.playlists],
+          toastMessage: `Saved playlist "${album.name}" to Library`
+        };
+      }
+    }
+
     const cleanId = album.id.replace('album-', '').replace('album-derived-', '');
     const isSaved = state.savedAlbums.some(
       a => a.id === album.id || a.id.replace('album-', '') === cleanId || 
@@ -1091,6 +1150,8 @@ export const usePlayerStore = create<PlayerState>()(
       partialize: (state) => ({
         favorites: state.favorites,
         playlists: state.playlists,
+        savedAlbums: state.savedAlbums,
+        followedArtists: state.followedArtists,
         volume: state.volume,
         autoplay: state.autoplay,
         isShuffle: state.isShuffle,
@@ -1103,7 +1164,40 @@ export const usePlayerStore = create<PlayerState>()(
         blockedArtists: state.blockedArtists,
         downloadedTrackIds: state.downloadedTrackIds,
         isOfflineOnly: state.isOfflineOnly
-      })
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        // Clean migration: Separate playlists from savedAlbums
+        const currentSavedAlbums = state.savedAlbums || [];
+        const currentPlaylists = state.playlists || [];
+
+        const realAlbums: typeof currentSavedAlbums = [];
+        const playlistsToMigrate: typeof currentPlaylists = [];
+
+        currentSavedAlbums.forEach(item => {
+          const isPlaylist = item.id.startsWith('PL') || item.id.startsWith('VLPL') || item.id.startsWith('community-') || item.id.startsWith('mix-') || (item.releaseDate && item.releaseDate.toLowerCase().includes('playlist')) || (item.releaseDate && item.releaseDate.toLowerCase().includes('mix'));
+          if (isPlaylist) {
+            const alreadyExists = currentPlaylists.some(p => p.id === item.id || p.name.toLowerCase() === item.name.toLowerCase());
+            if (!alreadyExists) {
+              playlistsToMigrate.push({
+                id: item.id,
+                name: item.name,
+                cover: item.cover,
+                author: item.artist,
+                tracks: [],
+                createdAt: item.savedAt || Date.now()
+              });
+            }
+          } else {
+            realAlbums.push(item);
+          }
+        });
+
+        if (playlistsToMigrate.length > 0 || realAlbums.length !== currentSavedAlbums.length) {
+          state.savedAlbums = realAlbums;
+          state.playlists = [...playlistsToMigrate, ...currentPlaylists];
+        }
+      }
     }
   )
 );
