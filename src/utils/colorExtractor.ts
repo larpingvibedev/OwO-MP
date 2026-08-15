@@ -3,6 +3,7 @@ export interface ExtractedPalette {
   secondary: string;     // Bottom / Gradient color (Hex)
   glow: string;          // Neon shadow glow (rgba)
   peakCap: string;       // White / Light tint for peak caps
+  isMonochrome?: boolean;
 }
 
 const DEFAULT_SYNTHWAVE_PALETTE: ExtractedPalette = {
@@ -16,7 +17,7 @@ const paletteCache = new Map<string, ExtractedPalette>();
 
 /**
  * Extracts dominant vibrant colors from an album art image URL.
- * Runs on a 32x32 offscreen canvas for instant 1ms performance.
+ * Automatically recognizes black & white / monochrome artwork and produces a sleek silver/slate palette.
  */
 export async function extractAlbumPalette(imageUrl?: string): Promise<ExtractedPalette> {
   if (!imageUrl) return DEFAULT_SYNTHWAVE_PALETTE;
@@ -43,6 +44,10 @@ export async function extractAlbumPalette(imageUrl?: string): Promise<ExtractedP
 
         const imgData = ctx.getImageData(0, 0, size, size).data;
         const colorBuckets: { r: number; g: number; b: number; score: number; count: number }[] = [];
+        
+        let totalBrightness = 0;
+        let validPixelCount = 0;
+        let totalSaturation = 0;
 
         for (let i = 0; i < imgData.length; i += 4) {
           const r = imgData[i];
@@ -52,15 +57,18 @@ export async function extractAlbumPalette(imageUrl?: string): Promise<ExtractedP
 
           if (a < 128) continue;
 
-          // Calculate brightness and saturation
+          validPixelCount++;
           const max = Math.max(r, g, b);
           const min = Math.min(r, g, b);
           const delta = max - min;
           const brightness = (r * 299 + g * 587 + b * 114) / 1000;
           const saturation = max === 0 ? 0 : delta / max;
 
-          // Filter out extreme blacks, grays, and pure whites to prioritize vibrant music art accents
-          if (brightness < 25 || brightness > 235 || saturation < 0.18) {
+          totalBrightness += brightness;
+          totalSaturation += saturation;
+
+          // Filter out extreme blacks, grays, and pure whites to collect vibrant music art accents
+          if (brightness < 20 || brightness > 240 || saturation < 0.16) {
             continue;
           }
 
@@ -84,9 +92,34 @@ export async function extractAlbumPalette(imageUrl?: string): Promise<ExtractedP
           }
         }
 
-        if (colorBuckets.length === 0) {
-          paletteCache.set(imageUrl, DEFAULT_SYNTHWAVE_PALETTE);
-          resolve(DEFAULT_SYNTHWAVE_PALETTE);
+        const avgBrightness = validPixelCount > 0 ? totalBrightness / validPixelCount : 128;
+        const avgSaturation = validPixelCount > 0 ? totalSaturation / validPixelCount : 0;
+
+        // If no vibrant colors found OR artwork is predominantly black & white / grayscale (avgSaturation < 0.10)
+        if (colorBuckets.length === 0 || avgSaturation < 0.10) {
+          // Pure Black & White / Grayscale Artwork: produce clean, crisp monochrome aesthetic
+          let monoResult: ExtractedPalette;
+          if (avgBrightness > 130) {
+            // Predominantly white cover (e.g. VIRGILIO, the light left my iris, sun girl)
+            monoResult = {
+              primary: '#e2e8f0',     // Crisp Ice Silver White
+              secondary: '#475569',   // Deep Graphite / Slate Base
+              glow: 'rgba(255, 255, 255, 0.45)',
+              peakCap: '#ffffff',
+              isMonochrome: true
+            };
+          } else {
+            // Predominantly dark / black cover
+            monoResult = {
+              primary: '#f8fafc',     // Pure Bright White
+              secondary: '#334155',   // Dark Steel / Slate
+              glow: 'rgba(248, 250, 252, 0.4)',
+              peakCap: '#ffffff',
+              isMonochrome: true
+            };
+          }
+          paletteCache.set(imageUrl, monoResult);
+          resolve(monoResult);
           return;
         }
 
@@ -100,7 +133,7 @@ export async function extractAlbumPalette(imageUrl?: string): Promise<ExtractedP
         );
 
         if (!secondaryRgb) {
-          // If monochromatic artwork, derive aesthetic complementary gradient hue
+          // If single-hue artwork, derive aesthetic complementary gradient hue
           secondaryRgb = {
             r: Math.min(255, Math.max(20, Math.round(primaryRgb.r * 0.55 + 40))),
             g: Math.min(255, Math.max(20, Math.round(primaryRgb.g * 0.45 + 70))),
@@ -118,7 +151,8 @@ export async function extractAlbumPalette(imageUrl?: string): Promise<ExtractedP
           primary: primaryHex,
           secondary: secondaryHex,
           glow,
-          peakCap: '#ffffff'
+          peakCap: '#ffffff',
+          isMonochrome: false
         };
 
         paletteCache.set(imageUrl, result);

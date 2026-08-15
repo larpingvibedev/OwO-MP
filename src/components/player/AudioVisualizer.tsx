@@ -102,11 +102,18 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       // Color scheme based on Dynamic Album Cover Palette
       let gradient: CanvasGradient;
       if (activePalette) {
-        // Dynamic Album Art Palette (Adaptive Vibrant Color Gradient)
         gradient = ctx.createLinearGradient(0, h, 0, 0);
-        gradient.addColorStop(0, activePalette.secondary); // Deep rich bottom accent
-        gradient.addColorStop(0.52, activePalette.primary);  // Vibrant primary artwork color
-        gradient.addColorStop(1, '#ffffff');               // Light treble peak shimmer
+        if (activePalette.isMonochrome) {
+          // Sleek Monochrome / Silver Gradient for Black & White Album Artwork
+          gradient.addColorStop(0, activePalette.secondary); // Deep Charcoal / Slate base (#475569)
+          gradient.addColorStop(0.52, activePalette.primary);  // Crisp Ice Silver (#e2e8f0)
+          gradient.addColorStop(1, '#ffffff');               // Light treble pure white peak
+        } else {
+          // Dynamic Album Art Palette (Adaptive Vibrant Color Gradient)
+          gradient.addColorStop(0, activePalette.secondary); // Deep rich bottom accent
+          gradient.addColorStop(0.52, activePalette.primary);  // Vibrant primary artwork color
+          gradient.addColorStop(1, '#ffffff');               // Light treble peak shimmer
+        }
       } else {
         // Signature Synthwave / RMPC Neon Gradient (Hot Pink -> Violet -> Cyan -> Sky Blue)
         gradient = ctx.createLinearGradient(0, h, 0, 0);
