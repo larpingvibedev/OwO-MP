@@ -41,6 +41,17 @@ class AudioEngineManager {
         this.analyser.connect(this.audioCtx.destination);
         this.isConnected = true;
       }
+
+      // Auto-resume on all audio element events
+      audioEl.addEventListener('play', () => this.resume());
+      audioEl.addEventListener('playing', () => this.resume());
+      audioEl.addEventListener('canplay', () => this.resume());
+      audioEl.addEventListener('canplaythrough', () => this.resume());
+
+      // Auto-resume on user interactions
+      window.addEventListener('pointerdown', () => this.resume());
+      window.addEventListener('click', () => this.resume());
+      window.addEventListener('keydown', () => this.resume());
     } catch (err) {
       console.warn('Web Audio API connection notice:', err);
     }
@@ -56,9 +67,11 @@ class AudioEngineManager {
   /**
    * Resumes AudioContext if suspended by browser autoplay policy.
    */
-  public resume(): void {
-    if (this.audioCtx && (this.audioCtx.state === 'suspended' || this.audioCtx.state === 'interrupted')) {
-      this.audioCtx.resume().catch(() => {});
+  public async resume(): Promise<void> {
+    if (this.audioCtx && this.audioCtx.state !== 'running') {
+      try {
+        await this.audioCtx.resume();
+      } catch (e) {}
     }
   }
 

@@ -13,6 +13,8 @@ export interface Track {
   source?: 'youtube' | 'piped' | 'itunes' | 'soundcloud' | 'jamendo' | 'demo';
   category?: 'song' | 'video' | 'artist' | 'playlist';
   channelId?: string;
+  recommendReason?: string;
+  playCountText?: string;
 }
 
 export interface Playlist {

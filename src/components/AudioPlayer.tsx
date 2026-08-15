@@ -1,73 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { 
   getDirectYouTubeId,
   resolveYouTubeVideoId, 
   resolveAlternativeVideoId,
-  getFallbackVideoId, 
   invalidateVideoId, 
-  prefetchTrackVideoId,
-  fetchUpNextMix
+  prefetchTrackVideoId
 } from '../services/musicSearch';
 import { audioEngine } from '../services/audioEngine';
 import { getOfflineTrackBlobUrl } from '../services/downloadService';
 
-declare global {
-  interface Window {
-    onYouTubeIframeAPIReady?: () => void;
-    YT?: any;
-  }
-}
-
 export const AudioPlayer = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const ytPlayerRef = useRef<any>(null);
-  const ytReadyRef = useRef<boolean>(false);
-  const intervalRef = useRef<any>(null);
-  
-  const currentVideoIdRef = useRef<string | null>(null);
-  const pendingVideoIdRef = useRef<string | null>(null);
-  const isSwitchingRef = useRef<boolean>(false);
   const activeLoadedTrackIdRef = useRef<string | null>(null);
-  const trackStartTimeRef = useRef<number>(0);
+  const isSwitchingRef = useRef<boolean>(false);
   const trackFailedCountRef = useRef<Map<string, number>>(new Map());
-  const isOfflineTrackRef = useRef<boolean>(false);
-  const [useIframeFallback, setUseIframeFallback] = useState<boolean>(false);
 
   const {
     currentTrack,
     isPlaying,
     volume,
+    playNonce,
     queue,
     shuffledQueue,
-    queueIndex,
     isShuffle,
     repeatMode,
-    favorites,
-    playHistory,
-    dislikedTracks,
-    blockedArtists,
     nextTrack,
     prevTrack,
     setIsPlaying,
     setCurrentTime,
     setDuration,
     recordPlay,
-    setRecommendedUpNext,
-    syncOfflineTracks
+    syncOfflineTracks,
+    showToast
   } = usePlayerStore();
 
-  const isElectron = Boolean((window as any).electronAPI?.isElectron);
-
-  const isYouTubeTrack = (t: typeof currentTrack) => {
-    if (!t) return false;
-    if (isOfflineTrackRef.current) return false;
-    if (t.resolvedStreamUrl?.startsWith('http') || t.resolvedStreamUrl?.startsWith('blob:')) return false;
-    if (isElectron && !useIframeFallback) return false;
-    return true;
-  };
-
-  // 1. Initialize Web Audio API engine & YouTube IFrame API
+  // 1. Initialize Web Audio Engine
   useEffect(() => {
     syncOfflineTracks();
 
@@ -77,443 +45,177 @@ export const AudioPlayer = () => {
 
     const handleUserInteraction = () => {
       audioEngine.resume();
+      if (audioRef.current && usePlayerStore.getState().isPlaying && audioRef.current.paused) {
+        audioRef.current.play().catch(() => {});
+      }
     };
 
     window.addEventListener('click', handleUserInteraction, { once: true });
     window.addEventListener('keydown', handleUserInteraction, { once: true });
-
-    function createYTPlayer() {
-      if (ytPlayerRef.current || !window.YT || !window.YT.Player) return;
-
-      ytPlayerRef.current = new window.YT.Player('yt-audio-player', {
-        height: '200',
-        width: '200',
-        host: 'https://www.youtube.com',
-        playerVars: {
-          autoplay: 1,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          playsinline: 1,
-          enablejsapi: 1,
-          rel: 0
-        },
-        events: {
-          onReady: () => {
-            ytReadyRef.current = true;
-            if (ytPlayerRef.current) {
-              try {
-                ytPlayerRef.current.setVolume(volume * 100);
-              } catch (e) {}
-
-              // If a track was queued before iframe was ready, play it immediately!
-              if (pendingVideoIdRef.current) {
-                const vid = pendingVideoIdRef.current;
-                pendingVideoIdRef.current = null;
-                currentVideoIdRef.current = vid;
-                trackStartTimeRef.current = Date.now();
-                isSwitchingRef.current = true;
-                try {
-                  ytPlayerRef.current.loadVideoById({
-                    videoId: vid,
-                    startSeconds: 0
-                  });
-                } catch (err) {
-                  console.warn('Error playing pending video:', err);
-                }
-              }
-            }
-          },
-          onStateChange: (event: any) => {
-            // 0 = ENDED
-            if (event.data === 0) {
-              const state = usePlayerStore.getState();
-              const dur = ytPlayerRef.current?.getDuration?.() || state.duration || 0;
-              const curTime = ytPlayerRef.current?.getCurrentTime?.() || state.currentTime || 0;
-              const elapsedSinceLoad = (Date.now() - trackStartTimeRef.current) / 1000;
-
-              // Guard against premature / spurious ENDED events during initial buffering / cueing
-              const isLegitimateEnd = dur > 0 
-                ? (curTime >= Math.max(5, dur - 4) || elapsedSinceLoad >= Math.max(5, dur - 4))
-                : (elapsedSinceLoad > 10);
-
-              if (isLegitimateEnd && !isSwitchingRef.current) {
-                isSwitchingRef.current = true;
-                const currentRepeat = state.repeatMode;
-                if (currentRepeat === 'one') {
-                  if (ytPlayerRef.current) {
-                    try {
-                      ytPlayerRef.current.seekTo(0);
-                      ytPlayerRef.current.playVideo();
-                      isSwitchingRef.current = false;
-                    } catch (e) {}
-                  }
-                } else {
-                  state.nextTrack();
-                }
-              }
-            }
-            // 1 = PLAYING
-            if (event.data === 1) {
-              setTimeout(() => {
-                isSwitchingRef.current = false;
-              }, 600);
-
-              if (!usePlayerStore.getState().isPlaying) {
-                setIsPlaying(true);
-              }
-              // Immediately sync live YouTube video duration
-              if (ytPlayerRef.current?.getDuration) {
-                const realDur = ytPlayerRef.current.getDuration();
-                if (realDur > 0) {
-                  usePlayerStore.getState().setDuration(realDur);
-                }
-              }
-            }
-          },
-          onError: async (event: any) => {
-            console.warn('YouTube Player Error code:', event.data);
-            isSwitchingRef.current = false;
-            const state = usePlayerStore.getState();
-            const curTrack = state.currentTrack;
-            if (!curTrack) return;
-
-            invalidateVideoId(curTrack.artist, curTrack.title);
-
-            // Attempt to resolve an alternative video candidate for the SAME song instead of skipping
-            let fallbackId = getFallbackVideoId(curTrack.artist, curTrack.title);
-            if (!fallbackId || fallbackId === currentVideoIdRef.current) {
-              try {
-                fallbackId = await resolveAlternativeVideoId(curTrack.artist, curTrack.title, currentVideoIdRef.current);
-              } catch (e) {}
-            }
-
-            if (fallbackId && ytPlayerRef.current?.loadVideoById && fallbackId !== currentVideoIdRef.current) {
-              console.log('Switching to alternative candidate for same track:', fallbackId);
-              currentVideoIdRef.current = fallbackId;
-              trackStartTimeRef.current = Date.now();
-              isSwitchingRef.current = true;
-              try {
-                ytPlayerRef.current.loadVideoById({
-                  videoId: fallbackId,
-                  startSeconds: 0
-                });
-              } catch (err) {
-                console.warn('Error loading fallback video candidate:', err);
-              }
-              return;
-            }
-
-            // Only if multiple alternative video candidates for this track failed completely
-            const failCount = (trackFailedCountRef.current.get(curTrack.id) || 0) + 1;
-            trackFailedCountRef.current.set(curTrack.id, failCount);
-
-            if (failCount >= 2) {
-              state.showToast(`Unable to stream "${curTrack.title}"`);
-              usePlayerStore.getState().nextTrack();
-            }
-          }
-        }
-      });
-    }
-
-    if (!window.YT) {
-      const tag = document.createElement('script');
-      tag.src = 'https://www.youtube.com/iframe_api';
-      const firstScriptTag = document.getElementsByTagName('script')[0];
-      firstScriptTag?.parentNode?.insertBefore(tag, firstScriptTag);
-
-      window.onYouTubeIframeAPIReady = () => {
-        createYTPlayer();
-      };
-    } else if (window.YT && window.YT.Player) {
-      createYTPlayer();
-    }
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
   }, []);
 
-  // 2. Sync Time & Duration tracking & Seamless End-of-Track Autoplay Trigger
+  // 2. Play / Pause Control
   useEffect(() => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (!audioRef.current) return;
 
-    intervalRef.current = setInterval(() => {
-      if (isYouTubeTrack(currentTrack) && ytReadyRef.current && ytPlayerRef.current) {
-        try {
-          const time = ytPlayerRef.current.getCurrentTime?.() || 0;
-          const ytDur = ytPlayerRef.current.getDuration?.() || 0;
-
-          // Always ensure the store's duration matches the actual video duration from YouTube
-          if (ytDur > 0) {
-            const currentStoreDur = usePlayerStore.getState().duration;
-            if (Math.abs(currentStoreDur - ytDur) >= 0.5) {
-              setDuration(ytDur);
-            }
-          }
-
-          const effectiveDur = ytDur > 0 ? ytDur : (usePlayerStore.getState().duration || 180);
-          const clampedTime = Math.min(time, effectiveDur);
-          if (clampedTime >= 0) {
-            setCurrentTime(clampedTime);
-          }
-
-          // Fallback end-of-track trigger ONLY when the audio has legitimately reached 100% of its full duration
-          if (ytDur > 10 && time > 10 && time >= (ytDur - 0.5) && !isSwitchingRef.current) {
-            isSwitchingRef.current = true;
-            setTimeout(() => { isSwitchingRef.current = false; }, 3500);
-
-            const currentRepeat = usePlayerStore.getState().repeatMode;
-            if (currentRepeat === 'one') {
-              ytPlayerRef.current.seekTo(0);
-              ytPlayerRef.current.playVideo();
-              isSwitchingRef.current = false;
-            } else {
-              usePlayerStore.getState().nextTrack();
-            }
-          }
-        } catch (e) {}
-      }
-    }, 400);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [currentTrack?.id, setCurrentTime, setDuration]);
-
-  // 3. Play / Pause Control
-  useEffect(() => {
-    if (isYouTubeTrack(currentTrack)) {
-      if (audioRef.current) audioRef.current.pause();
-
-      if (ytReadyRef.current && ytPlayerRef.current && !isSwitchingRef.current) {
-        if (isPlaying) {
-          try { ytPlayerRef.current.playVideo(); } catch (e) { console.warn(e); }
-        } else {
-          try { ytPlayerRef.current.pauseVideo(); } catch (e) { console.warn(e); }
-        }
+    if (isPlaying) {
+      audioEngine.resume();
+      if (audioRef.current.src && audioRef.current.paused) {
+        audioRef.current.play().catch((err) => {
+          console.warn('[AudioPlayer] Play notice (buffering):', err.message);
+        });
       }
     } else {
-      if (ytReadyRef.current && ytPlayerRef.current) {
-        try { ytPlayerRef.current.pauseVideo(); } catch (e) { console.warn(e); }
-      }
-
-      if (audioRef.current && currentTrack) {
-        if (isPlaying) {
-          // Only trigger play if the audio element is currently loaded with the active track
-          if (activeLoadedTrackIdRef.current === currentTrack.id && audioRef.current.src) {
-            audioEngine.resume();
-            audioRef.current.play().catch((err) => {
-              console.warn('Audio play notice (buffering):', err);
-            });
-          }
-        } else {
-          audioRef.current.pause();
-        }
+      if (!audioRef.current.paused) {
+        audioRef.current.pause();
       }
     }
-  }, [isPlaying, currentTrack?.id]);
+  }, [isPlaying]);
 
-  // 4. Volume Control
+  // 3. Volume Control
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = volume;
     }
-    if (ytReadyRef.current && ytPlayerRef.current?.setVolume) {
-      try { ytPlayerRef.current.setVolume(volume * 100); } catch (e) {}
-    }
   }, [volume]);
 
-  // 5. Seek Event Listener (Supports both HTML5 Audio and YouTube Iframe seamlessly)
+  // 4. Native Seek Event Listener
   useEffect(() => {
     const handleSeek = (e: Event) => {
       const customEvent = e as CustomEvent<{ time: number }>;
       const targetTime = customEvent.detail?.time ?? 0;
 
-      if (isYouTubeTrack(currentTrack)) {
-        if (ytReadyRef.current && ytPlayerRef.current?.seekTo) {
-          try {
-            ytPlayerRef.current.seekTo(targetTime, true);
-          } catch (err) {
-            console.warn('YT seek error:', err);
-          }
-        }
-      } else {
-        if (audioRef.current) {
-          try {
-            audioRef.current.currentTime = targetTime;
-          } catch (err) {
-            console.warn('Audio seek error:', err);
-          }
+      if (audioRef.current) {
+        try {
+          audioRef.current.currentTime = targetTime;
+        } catch (err) {
+          console.warn('[AudioPlayer] Seek error:', err);
         }
       }
     };
 
     window.addEventListener('music:seek', handleSeek);
     return () => window.removeEventListener('music:seek', handleSeek);
-  }, [currentTrack?.id]);
+  }, []);
 
-  // 6. Track Change & Stream Resolution
+  // 5. Track Loading & Native Streaming
   useEffect(() => {
     let isCancelled = false;
 
     async function loadTrack() {
-      if (!currentTrack) return;
+      if (!currentTrack || !audioRef.current) return;
 
-      // Prevent reloading identical track and stuttering opening second
-      if (currentTrack.id === activeLoadedTrackIdRef.current) {
+      // Prevent reloading identical track if already playing
+      if (currentTrack.id === activeLoadedTrackIdRef.current && audioRef.current.src && !audioRef.current.paused) {
         return;
       }
 
-      // Immediately silence & reset the previous audio buffer so it NEVER replays when switching
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.removeAttribute('src');
-        audioRef.current.load();
-      }
-      if (ytPlayerRef.current?.pauseVideo) {
-        try { ytPlayerRef.current.pauseVideo(); } catch (e) {}
-      }
+      // Silence and prepare new buffer
+      audioRef.current.pause();
+      audioRef.current.removeAttribute('src');
+      audioRef.current.load();
 
       activeLoadedTrackIdRef.current = currentTrack.id;
       isSwitchingRef.current = true;
-      trackStartTimeRef.current = Date.now();
-      setUseIframeFallback(false);
-
       recordPlay(currentTrack);
 
-      // 0. Check Offline Storage for instant 100% local audio playback
+      // A. Check Offline Local Storage First (0ms Instant Audio)
       const offlineBlobUrl = await getOfflineTrackBlobUrl(currentTrack.id);
       if (isCancelled) return;
       if (offlineBlobUrl) {
-        isOfflineTrackRef.current = true;
-        if (ytReadyRef.current && ytPlayerRef.current?.pauseVideo) {
-          try { ytPlayerRef.current.pauseVideo(); } catch (e) {}
-        }
-        if (audioRef.current) {
-          audioRef.current.src = offlineBlobUrl;
-          audioRef.current.volume = volume;
-          if (isPlaying) {
-            audioRef.current.play().catch(console.warn);
-          }
-        }
+        audioRef.current.src = offlineBlobUrl;
+        audioRef.current.volume = volume;
+        audioEngine.resume();
+        audioRef.current.play().catch(console.warn);
+        setIsPlaying(true);
         isSwitchingRef.current = false;
-        return;
-      }
-      isOfflineTrackRef.current = false;
-
-      // Direct HTTP audio preview/stream
-      if (currentTrack.resolvedStreamUrl?.startsWith('http')) {
-        if (audioRef.current) {
-          audioRef.current.src = currentTrack.resolvedStreamUrl;
-          if (isPlaying) {
-            audioRef.current.play().catch(console.warn);
-          }
-        }
-        isSwitchingRef.current = false;
+        prefetchUpcoming();
         return;
       }
 
-      // Stop any active HTML5 audio when switching to YouTube
-      if (audioRef.current) {
-        audioRef.current.pause();
+      // B. Direct Blob Preview
+      if (currentTrack.resolvedStreamUrl?.startsWith('blob:')) {
+        audioRef.current.src = currentTrack.resolvedStreamUrl;
+        audioRef.current.volume = volume;
+        audioEngine.resume();
+        audioRef.current.play().catch(console.warn);
+        setIsPlaying(true);
+        isSwitchingRef.current = false;
+        prefetchUpcoming();
+        return;
       }
 
-      // 1. Resolve 100% official studio topic release via Topic / ATV Resolver FIRST
-      let videoId = await resolveYouTubeVideoId(
-        currentTrack.artist, 
-        currentTrack.title, 
-        currentTrack.albumArtist, 
-        currentTrack.duration
-      );
+      // C. Resolve Online Stream via High-Speed Native Proxy
+      let videoId = getDirectYouTubeId(currentTrack);
 
-      // 2. Fall back to existing direct YouTube ID if topic search returned nothing
       if (!videoId) {
-        videoId = getDirectYouTubeId(currentTrack);
+        videoId = await resolveYouTubeVideoId(
+          currentTrack.artist,
+          currentTrack.title,
+          currentTrack.albumArtist,
+          currentTrack.duration
+        );
       }
 
       if (isCancelled) return;
-      if (videoId) {
-        currentVideoIdRef.current = videoId;
-      }
-
-      // In Electron Desktop, try native high-performance stream first
-      if (isElectron && !useIframeFallback) {
-        if (videoId && audioRef.current) {
-          try {
-            const port = (await (window as any).electronAPI?.getProxyPort?.()) || 41721;
-            const streamUrl = `http://127.0.0.1:${port}/api/download-stream?videoId=${videoId}`;
-            activeLoadedTrackIdRef.current = currentTrack.id;
-            audioRef.current.src = streamUrl;
-            audioRef.current.volume = volume;
-            audioEngine.resume();
-            if (isPlaying) {
-              audioRef.current.play().catch((playErr) => {
-                console.warn('Native audio play notice, buffering/fallback:', playErr);
-              });
-            }
-            isSwitchingRef.current = false;
-            return;
-          } catch (err) {
-            console.warn('Native audio stream connection error, falling back to YouTube engine:', err);
-            setUseIframeFallback(true);
-          }
-        } else if (videoId) {
-          setUseIframeFallback(true);
-        }
-      }
 
       if (videoId) {
-        // Play via YouTube Iframe continuously without mid-playback stream swapping
-        if (ytReadyRef.current && ytPlayerRef.current?.loadVideoById) {
-          if (currentVideoIdRef.current !== videoId || useIframeFallback) {
-            currentVideoIdRef.current = videoId;
-            try {
-              ytPlayerRef.current.loadVideoById({
-                videoId,
-                startSeconds: 0
-              });
-              if (isPlaying) {
-                ytPlayerRef.current.playVideo();
-              }
-            } catch (err) {
-              console.warn('Error loading video by ID:', err);
-            }
+        try {
+          const electronAPI = (window as any).electronAPI;
+          let directStreamUrl: string | null = null;
+
+          if (electronAPI?.extractStreamUrl) {
+            directStreamUrl = await electronAPI.extractStreamUrl(videoId);
           }
-        } else {
-          // If player is still preparing, stash videoId to play when onReady fires
-          pendingVideoIdRef.current = videoId;
+
+          if (!directStreamUrl) {
+            let proxyPort = 41721;
+            if (electronAPI?.getProxyPort) {
+              proxyPort = await electronAPI.getProxyPort();
+            }
+            directStreamUrl = `http://127.0.0.1:${proxyPort}/api/stream?videoId=${videoId}`;
+          }
+
+          if (isCancelled) return;
+
+          audioRef.current.src = directStreamUrl;
+          audioRef.current.volume = volume;
+          audioEngine.resume();
+          audioRef.current.play().catch((err) => {
+            console.warn('[AudioPlayer] Native play notice:', err.message);
+          });
+          setIsPlaying(true);
+          isSwitchingRef.current = false;
+        } catch (err) {
+          console.error('[AudioPlayer] Stream setup error:', err);
         }
+      } else {
+        console.warn('[AudioPlayer] Could not resolve video ID for:', currentTrack.title);
+        showToast(`Could not find stream for "${currentTrack.title}"`);
+        nextTrack();
       }
 
-      // Prefetch upcoming tracks in queue for instant switching
-      const activeQueue = isShuffle ? shuffledQueue : queue;
-      if (activeQueue.length > 0) {
-        const next1 = activeQueue[queueIndex + 1];
-        const next2 = activeQueue[queueIndex + 2];
-        if (next1) prefetchTrackVideoId(next1);
-        if (next2) prefetchTrackVideoId(next2);
-      }
+      prefetchUpcoming();
+    }
 
-      // Background Auto-Mix Pre-Generation for the queue session
-      setTimeout(() => {
-        if (isCancelled) return;
-        const currentRecommended = usePlayerStore.getState().recommendedUpNext;
-        if (!currentRecommended || currentRecommended.length < 3) {
-          const queuedIds = new Set(activeQueue.map(t => t.id));
-          fetchUpNextMix(activeQueue.length > 0 ? activeQueue : currentTrack, favorites, playHistory, queuedIds, dislikedTracks, blockedArtists)
-            .then(mix => {
-              if (!isCancelled && mix && mix.length > 0) {
-                setRecommendedUpNext(mix);
-                prefetchTrackVideoId(mix[0]);
-              }
-            })
-            .catch(() => {});
-        } else if (currentRecommended[0]) {
-          prefetchTrackVideoId(currentRecommended[0]);
+    function prefetchUpcoming() {
+      setTimeout(async () => {
+        const activeQueue = isShuffle ? shuffledQueue : queue;
+        const curIdx = activeQueue.findIndex(t => t.id === currentTrack?.id);
+        const nextTracks = activeQueue.slice(curIdx + 1, curIdx + 3);
+
+        const videoIdsToPreload: string[] = [];
+        for (const t of nextTracks) {
+          prefetchTrackVideoId(t);
+          const directId = getDirectYouTubeId(t);
+          if (directId) videoIdsToPreload.push(directId);
         }
-      }, 200);
+
+        const electronAPI = (window as any).electronAPI;
+        if (electronAPI?.prefetchStreamUrls && videoIdsToPreload.length > 0) {
+          electronAPI.prefetchStreamUrls(videoIdsToPreload).catch(() => {});
+        }
+      }, 400);
     }
 
     loadTrack();
@@ -521,9 +223,9 @@ export const AudioPlayer = () => {
     return () => {
       isCancelled = true;
     };
-  }, [currentTrack?.id]);
+  }, [currentTrack?.id, playNonce]);
 
-  // 7. MediaSession Integration
+  // 6. MediaSession Integration
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -543,81 +245,84 @@ export const AudioPlayer = () => {
   }, [currentTrack, setIsPlaying, prevTrack, nextTrack]);
 
   return (
-    <>
-      {/* HTML5 Audio Player for Direct Full-Length Streams */}
-      <audio
-        ref={audioRef}
-        crossOrigin="anonymous"
-        preload="auto"
-        onCanPlay={() => {
-          if (usePlayerStore.getState().isPlaying && audioRef.current && audioRef.current.paused) {
-            audioEngine.resume();
+    <audio
+      ref={audioRef}
+      crossOrigin="anonymous"
+      preload="auto"
+      onCanPlay={() => {
+        if (usePlayerStore.getState().isPlaying && audioRef.current && audioRef.current.paused) {
+          audioEngine.resume();
+          audioRef.current.play().catch(() => {});
+        }
+      }}
+      onPlaying={() => {
+        audioEngine.resume();
+        if (!usePlayerStore.getState().isPlaying) {
+          setIsPlaying(true);
+        }
+      }}
+      onTimeUpdate={() => {
+        if (audioRef.current) {
+          setCurrentTime(audioRef.current.currentTime);
+        }
+      }}
+      onLoadedMetadata={() => {
+        if (audioRef.current && audioRef.current.duration > 0) {
+          setDuration(audioRef.current.duration);
+        }
+      }}
+      onEnded={() => {
+        if (repeatMode === 'one') {
+          if (audioRef.current) {
+            audioRef.current.currentTime = 0;
             audioRef.current.play().catch(console.warn);
           }
-        }}
-        onPlaying={() => {
-          audioEngine.resume();
-        }}
-        onError={(e) => {
-          console.warn('HTML5 Audio stream error, executing seamless YouTube engine fallback:', e);
-          const vid = currentVideoIdRef.current || getDirectYouTubeId(currentTrack);
-          if (vid && ytReadyRef.current && ytPlayerRef.current?.loadVideoById) {
-            setUseIframeFallback(true);
-            try {
-              ytPlayerRef.current.loadVideoById({
-                videoId: vid,
-                startSeconds: 0
-              });
-              if (usePlayerStore.getState().isPlaying) {
-                ytPlayerRef.current.playVideo();
+        } else {
+          nextTrack();
+        }
+      }}
+      onError={async (e) => {
+        console.warn('[AudioPlayer] HTML5 Audio element error:', e);
+        if (!currentTrack) return;
+
+        invalidateVideoId(currentTrack.artist, currentTrack.title);
+
+        const currentFailCount = (trackFailedCountRef.current.get(currentTrack.id) || 0) + 1;
+        trackFailedCountRef.current.set(currentTrack.id, currentFailCount);
+
+        if (currentFailCount <= 2) {
+          // Attempt fallback video candidate
+          try {
+            const fallbackId = await resolveAlternativeVideoId(
+              currentTrack.artist,
+              currentTrack.title,
+              getDirectYouTubeId(currentTrack) || undefined
+            );
+            if (fallbackId && audioRef.current) {
+              const electronAPI = (window as any).electronAPI;
+              let directUrl: string | null = null;
+              if (electronAPI?.extractStreamUrl) {
+                directUrl = await electronAPI.extractStreamUrl(fallbackId);
               }
-            } catch (err) {
-              console.warn('Fallback play error:', err);
-            }
-          }
-        }}
-        onTimeUpdate={() => {
-          if (audioRef.current && !isYouTubeTrack(currentTrack)) {
-            setCurrentTime(audioRef.current.currentTime);
-          }
-        }}
-        onLoadedMetadata={() => {
-          if (audioRef.current && !isYouTubeTrack(currentTrack)) {
-            setDuration(audioRef.current.duration);
-          }
-        }}
-        onEnded={() => {
-          if (!isYouTubeTrack(currentTrack)) {
-            if (repeatMode === 'one') {
-              if (audioRef.current) {
-                audioRef.current.currentTime = 0;
+              if (!directUrl) {
+                const port = await electronAPI?.getProxyPort?.() || 41721;
+                directUrl = `http://127.0.0.1:${port}/api/stream?videoId=${fallbackId}`;
+              }
+
+              audioRef.current.src = directUrl;
+              if (usePlayerStore.getState().isPlaying) {
+                audioEngine.resume();
                 audioRef.current.play().catch(console.warn);
               }
-            } else {
-              usePlayerStore.getState().nextTrack();
+              return;
             }
-          }
-        }}
-        style={{ display: 'none' }}
-      />
+          } catch (err) {}
+        }
 
-      {/* Hidden YouTube Official Audio Engine Element */}
-      <div 
-        style={{ 
-          position: 'fixed', 
-          bottom: '-1000px', 
-          left: '-1000px', 
-          width: '200px', 
-          height: '200px', 
-          overflow: 'hidden', 
-          pointerEvents: 'none', 
-          zIndex: -999 
-        }}
-      >
-        <div id="yt-audio-player" />
-      </div>
-    </>
+        showToast(`Unable to stream "${currentTrack.title}"`);
+        nextTrack();
+      }}
+      style={{ display: 'none' }}
+    />
   );
 };
-
-

@@ -94,41 +94,36 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     }
   }, [queueIndex, activePlayerTab, isPlayerDrawerOpen]);
 
-  // 1. Fetch Dynamic Algorithmic "Up Next / Auto-Mix" anchored to the ACTIVE QUEUE SESSION
-  const lastQueueSessionRef = useRef<string>('');
-
+  // 1. Sync Up Next loading state with the active queue session without firing duplicate parallel fetches
   useEffect(() => {
-    if (!currentTrack || activeQueue.length === 0) return;
-
-    // Only synthesize when a NEW explicit queue session is started or when recommendations are empty!
-    if (lastQueueSessionRef.current === queueSessionId && recommendedUpNext.length > 0) {
+    if (!currentTrack || activeQueue.length === 0) {
+      setIsLoadingMix(false);
       return;
     }
 
-    lastQueueSessionRef.current = queueSessionId;
-
-    let isMounted = true;
-    setIsLoadingMix(true);
-
-    const queuedIds = new Set(activeQueue.map(t => t.id));
-
-    fetchUpNextMix(activeQueue, favorites, playHistory, queuedIds, dislikedTracks, blockedArtists)
-      .then(mix => {
-        if (isMounted) {
-          if (mix && mix.length > 0) {
-            setRecommendedUpNext(mix);
-          }
+    if (recommendedUpNext.length > 0) {
+      setIsLoadingMix(false);
+    } else {
+      setIsLoadingMix(true);
+      // Fallback timeout in case initial background fetch in store encountered network issue
+      const timer = setTimeout(() => {
+        if (usePlayerStore.getState().recommendedUpNext.length === 0) {
+          const queuedIds = new Set(activeQueue.map(t => t.id));
+          fetchUpNextMix(activeQueue, favorites, playHistory, queuedIds, dislikedTracks, blockedArtists)
+            .then(mix => {
+              if (mix && mix.length > 0 && usePlayerStore.getState().queueSessionId === queueSessionId) {
+                setRecommendedUpNext(mix);
+              }
+            })
+            .catch(() => {})
+            .finally(() => setIsLoadingMix(false));
+        } else {
           setIsLoadingMix(false);
         }
-      })
-      .catch(() => {
-        if (isMounted) setIsLoadingMix(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [queueSessionId, activeQueue[0]?.id]);
+      }, 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [queueSessionId, currentTrack?.id, recommendedUpNext.length]);
 
   // 2. Fetch Multi-Tier Lyrics from LRCLIB, Genius & Musixmatch
   useEffect(() => {

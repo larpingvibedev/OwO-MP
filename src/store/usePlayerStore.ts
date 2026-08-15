@@ -18,6 +18,7 @@ interface PlayerState {
   currentTime: number;
   duration: number;
   volume: number;
+  playNonce: number;
   
   // Queue management
   queue: Track[];
@@ -155,6 +156,7 @@ export const usePlayerStore = create<PlayerState>()(
   currentTime: 0,
   duration: 0,
   volume: 0.8,
+  playNonce: 0,
   
   queue: [],
   queueIndex: 0,
@@ -206,17 +208,30 @@ export const usePlayerStore = create<PlayerState>()(
   setLibraryFilter: (libraryFilter) => set({ libraryFilter }),
   setCurrentTrack: (track) => {
     const context = `${track.title} Mix`;
-    set({ 
+    const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    set((state) => ({ 
       currentTrack: track, 
       currentTime: 0, 
       duration: track.duration || 0,
       isPlaying: true, 
       playingFrom: context,
+      queueSessionId: sessionId,
       queue: [track],
       shuffledQueue: [track],
       queueIndex: 0,
-      isPlayerDrawerOpen: true
-    });
+      recommendedUpNext: [],
+      isPlayerDrawerOpen: true,
+      playNonce: state.playNonce + 1
+    }));
+
+    // Synthesize mix anchored to this seed track
+    fetchUpNextMix([track], get().favorites, get().playHistory, new Set([track.id]), get().dislikedTracks, get().blockedArtists)
+      .then(mix => {
+        if (mix && mix.length > 0 && get().queueSessionId === sessionId) {
+          set({ recommendedUpNext: mix });
+        }
+      })
+      .catch(() => {});
   },
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   togglePlayPause: () => set((state) => ({ isPlaying: !state.isPlaying })),
@@ -279,7 +294,7 @@ export const usePlayerStore = create<PlayerState>()(
     const sourceContext = playingFrom || (cur ? `${cur.title} Mix` : 'Queue');
     const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-    set({
+    set((state) => ({
       queue: tracks,
       shuffledQueue: shuffled,
       queueIndex: newIndex,
@@ -289,8 +304,9 @@ export const usePlayerStore = create<PlayerState>()(
       currentTime: 0,
       duration: cur?.duration || 0,
       isPlaying: true,
-      isPlayerDrawerOpen: true
-    });
+      isPlayerDrawerOpen: true,
+      playNonce: state.playNonce + 1
+    }));
 
     // Synthesize multi-track radio mix for this entire queue session
     const queuedIds = new Set(tracks.map(t => t.id));
@@ -314,7 +330,8 @@ export const usePlayerStore = create<PlayerState>()(
         playingFrom: `${track.title} Mix`,
         currentTime: 0,
         isPlaying: true,
-        toastMessage: `Playing "${track.title}"`
+        toastMessage: `Playing "${track.title}"`,
+        playNonce: state.playNonce + 1
       };
     }
     const newQueue = [...state.queue, track];
@@ -336,7 +353,8 @@ export const usePlayerStore = create<PlayerState>()(
         playingFrom: `${track.title} Mix`,
         currentTime: 0,
         isPlaying: true,
-        toastMessage: `Playing "${track.title}"`
+        toastMessage: `Playing "${track.title}"`,
+        playNonce: state.playNonce + 1
       };
     }
     const insertIdx = state.queueIndex + 1;
@@ -374,9 +392,9 @@ export const usePlayerStore = create<PlayerState>()(
 
     const nextIndex = queueIndex + 1;
     if (nextIndex < activeQueue.length) {
-      set({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, isPlaying: true });
+      set((state) => ({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, isPlaying: true, playNonce: state.playNonce + 1 }));
     } else if (repeatMode === 'all' && activeQueue.length > 0) {
-      set({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: true });
+      set((state) => ({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: true, playNonce: state.playNonce + 1 }));
     } else if (autoplay) {
       // 1. If pre-fetched auto-mix exists, play immediately
       if (recommendedUpNext && recommendedUpNext.length > 0) {
@@ -384,15 +402,16 @@ export const usePlayerStore = create<PlayerState>()(
         const remainingMix = recommendedUpNext.slice(1);
         const newQueue = [...queue, autoTrack];
         const newShuffled = [...shuffledQueue, autoTrack];
-        set({
+        set((state) => ({
           queue: newQueue,
           shuffledQueue: newShuffled,
           queueIndex: newQueue.length - 1,
           currentTrack: autoTrack,
           recommendedUpNext: remainingMix,
           currentTime: 0,
-          isPlaying: true
-        });
+          isPlaying: true,
+          playNonce: state.playNonce + 1
+        }));
 
         // Replenish stream in background when low (anchored to recent queue context)
         if (remainingMix.length < 5) {
@@ -422,15 +441,16 @@ export const usePlayerStore = create<PlayerState>()(
             const remainingMix = freshMix.slice(1);
             const newQueue = [...queue, autoTrack];
             const newShuffled = [...shuffledQueue, autoTrack];
-            set({
+            set((state) => ({
               queue: newQueue,
               shuffledQueue: newShuffled,
               queueIndex: newQueue.length - 1,
               currentTrack: autoTrack,
               recommendedUpNext: remainingMix,
               currentTime: 0,
-              isPlaying: true
-            });
+              isPlaying: true,
+              playNonce: state.playNonce + 1
+            }));
             return;
           }
         } catch (err) {
@@ -458,12 +478,13 @@ export const usePlayerStore = create<PlayerState>()(
     }
 
     const prevIndex = (queueIndex - 1 + activeQueue.length) % activeQueue.length;
-    set({
+    set((state) => ({
       queueIndex: prevIndex,
       currentTrack: activeQueue[prevIndex],
       currentTime: 0,
-      isPlaying: true
-    });
+      isPlaying: true,
+      playNonce: state.playNonce + 1
+    }));
   },
 
   toggleShuffle: () => {

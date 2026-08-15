@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     if (localProxyPort) return localProxyPort;
     return await ipcRenderer.invoke('get-proxy-port');
   },
+  extractStreamUrl: async (videoId) => {
+    return await ipcRenderer.invoke('extract-stream-url', videoId);
+  },
+  prefetchStreamUrls: async (videoIds) => {
+    return await ipcRenderer.invoke('prefetch-stream-urls', videoIds);
+  },
   getDefaultMusicDir: async () => {
     return await ipcRenderer.invoke('get-default-music-dir');
   },
