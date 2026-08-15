@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { audioEngine } from '../../services/audioEngine';
-import type { Track } from '../../types';
+import { extractAlbumPalette, type ExtractedPalette } from '../../utils/colorExtractor';
 
 interface AudioVisualizerProps {
   isPlaying?: boolean;
@@ -9,23 +9,6 @@ interface AudioVisualizerProps {
   height?: number;
   variant?: 'rmpc' | 'minimal' | 'cyber';
   style?: React.CSSProperties;
-}
-
-function computeTrackSeed(track: Track | null): { bpm: number; bassWeight: number; midWeight: number; trebleWeight: number } {
-  if (!track) return { bpm: 120, bassWeight: 1.2, midWeight: 1.0, trebleWeight: 1.1 };
-  const str = `${track.id}-${track.title}-${track.artist}`;
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i);
-    hash |= 0;
-  }
-  const posHash = Math.abs(hash);
-  return {
-    bpm: 100 + (posHash % 45), // 100 to 145 BPM
-    bassWeight: 1.0 + ((posHash >> 2) % 30) / 100,
-    midWeight: 0.95 + ((posHash >> 6) % 30) / 100,
-    trebleWeight: 1.0 + ((posHash >> 10) % 30) / 100
-  };
 }
 
 export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
@@ -41,24 +24,38 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const barsDataRef = useRef<number[]>([]);
   const peakDataRef = useRef<number[]>([]);
   const peakVelocityRef = useRef<number[]>([]);
+  const paletteRef = useRef<ExtractedPalette | null>(null);
 
   const {
-    currentTrack,
     isPlaying: storeIsPlaying,
+    currentTrack,
     volume,
     theme,
     rustyColor
   } = usePlayerStore();
 
   const isPlaying = propIsPlaying !== undefined ? propIsPlaying : storeIsPlaying;
-  const trackSeed = useMemo(() => computeTrackSeed(currentTrack), [currentTrack?.id, currentTrack?.title]);
+
+  // Extract vibrant album art palette whenever currentTrack cover changes
+  useEffect(() => {
+    let isMounted = true;
+    if (currentTrack?.cover) {
+      extractAlbumPalette(currentTrack.cover).then((palette) => {
+        if (isMounted) {
+          paletteRef.current = palette;
+        }
+      });
+    } else {
+      paletteRef.current = null;
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [currentTrack?.cover]);
 
   // Keep references to avoid re-triggering the animation loop on state changes
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
-
-  const trackSeedRef = useRef(trackSeed);
-  trackSeedRef.current = trackSeed;
 
   const volumeRef = useRef(volume);
   volumeRef.current = volume;
@@ -87,10 +84,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       lastTimestamp = now;
 
       const activeIsPlaying = isPlayingRef.current;
-      const seed = trackSeedRef.current;
       const curTheme = themeRef.current;
       const curRustyColor = rustyColorRef.current;
       const curVol = volumeRef.current;
+      const activePalette = paletteRef.current;
 
       // Increment clock
       animTime += activeIsPlaying ? delta : delta * 0.25;
@@ -112,7 +109,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       const barWidth = Math.max(3, totalBarWidth - 3);
       const gap = totalBarWidth - barWidth;
 
-      // Color scheme based on active theme
+      // Color scheme based on active theme & Dynamic Album Cover Palette
       let gradient: CanvasGradient;
       if (curTheme === 'rusty') {
         gradient = ctx.createLinearGradient(0, h, 0, 0);
@@ -126,6 +123,12 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
           gradient.addColorStop(0, '#00ccff');
           gradient.addColorStop(1, '#33ffff');
         }
+      } else if (activePalette) {
+        // Dynamic Album Art Palette (Adaptive Vibrant Color Gradient)
+        gradient = ctx.createLinearGradient(0, h, 0, 0);
+        gradient.addColorStop(0, activePalette.secondary); // Deep rich bottom accent
+        gradient.addColorStop(0.52, activePalette.primary);  // Vibrant primary artwork color
+        gradient.addColorStop(1, '#ffffff');               // Light treble peak shimmer
       } else {
         // Signature Synthwave / RMPC Neon Gradient (Hot Pink -> Violet -> Cyan -> Sky Blue)
         gradient = ctx.createLinearGradient(0, h, 0, 0);
@@ -135,59 +138,32 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         gradient.addColorStop(1, '#38bdf8');     // Sky Blue (Treble Sparkle)
       }
 
-      // Check for 100% TRUE LIVE FREQUENCY DATA FROM WEB AUDIO API
-      const liveFrequencies = activeIsPlaying ? audioEngine.getLiveFrequencies(barCount) : null;
-
-      // Dynamic Beat Clock based on BPM for rhythm synthesis
-      const bps = seed.bpm / 60;
-      const beat = animTime * bps;
-      const kick = Math.pow(Math.max(0, Math.sin(beat * Math.PI)), 2.8);
-      const snare = Math.pow(Math.max(0, Math.sin((beat + 0.5) * Math.PI)), 3.2);
-      const hat = Math.pow(Math.max(0, Math.sin(beat * 4 * Math.PI)), 2.0);
+      // Check for 100% TRUE LIVE FREQUENCY DATA FROM WEB AUDIO API (Symmetrical Bell Curve Mode)
+      const liveFrequencies = activeIsPlaying ? audioEngine.getLiveFrequencies(barCount, 'bell') : null;
 
       for (let i = 0; i < barCount; i++) {
-        const norm = i / (barCount - 1); // 0.0 (Bass) to 1.0 (Treble)
-        let targetHeight = 3;
+        let targetHeight = 2;
 
         if (activeIsPlaying) {
           if (liveFrequencies && liveFrequencies.length === barCount) {
-            // MODE A: 100% Physical FFT Spectrum Analysis
+            // MODE A: 100% True Physical FFT Spectrum Analysis
             const rawEnergy = liveFrequencies[i];
-            if (rawEnergy < 0.025 || curVol <= 0.01) {
+            if (rawEnergy < 0.008 || curVol <= 0.005) {
               targetHeight = 2; // Flat baseline during silence/quiet
             } else {
-              targetHeight = Math.max(2, rawEnergy * (h - 4) * Math.min(1.0, curVol * 1.15));
+              targetHeight = Math.max(2, rawEnergy * (h - 4) * Math.min(1.0, Math.max(0.45, curVol * 1.2)));
             }
           } else {
-            // MODE B: High-Fidelity Synthwave Rhythm Engine (Responsive to Volume & Tempo)
-            const bass = (Math.sin(animTime * 3.5 + i * 0.3) * 0.5 + 0.5) * 0.45 + kick * 0.55;
-            const mid = (Math.sin(animTime * 5.0 - i * 0.4) * 0.5 + 0.5) * 0.45 + snare * 0.55;
-            const treble = (Math.sin(animTime * 8.5 + i * 0.7) * 0.5 + 0.5) * 0.45 + hat * 0.55;
-
-            let energy = 0;
-            if (norm <= 0.35) {
-              const w = norm / 0.35;
-              energy = bass * seed.bassWeight * (1 - w * 0.3) + mid * (w * 0.3);
-            } else if (norm <= 0.72) {
-              const w = (norm - 0.35) / 0.37;
-              energy = mid * seed.midWeight * (1 - w * 0.25) + treble * (w * 0.25);
-            } else {
-              const w = (norm - 0.72) / 0.28;
-              energy = treble * seed.trebleWeight * (0.8 + w * 0.2);
-            }
-
-            const jitter = (Math.sin(animTime * 13.0 + i * 6.5) * 0.5 + 0.5) * 0.08;
-            const finalVal = Math.max(0.04, Math.min(0.95, (energy * 0.75 + jitter) * Math.min(1.0, curVol * 1.15)));
-            targetHeight = Math.max(3, finalVal * (h - 4));
+            targetHeight = 2;
           }
         } else {
           // Paused idle baseline
-          targetHeight = 3 + (Math.sin(animTime * 1.5 + i * 0.2) * 0.5 + 0.5) * 2;
+          targetHeight = 2;
         }
 
-        // Realistic Spring Physics: Fast attack on punchy beats, smooth natural decay
-        const currentH = barsDataRef.current[i] || 3;
-        const attackFactor = targetHeight > currentH ? 0.60 : 0.26;
+        // Fast explosive attack for maximum beat reactivity, smooth decay
+        const currentH = barsDataRef.current[i] || 2;
+        const attackFactor = targetHeight > currentH ? 0.88 : 0.22;
         const newH = currentH + (targetHeight - currentH) * attackFactor;
         barsDataRef.current[i] = newH;
 

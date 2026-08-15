@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { 
   MoreVertical, Radio, ListPlus, Plus, Heart, FolderPlus, 
   User, Disc, Info, Share2, Check, ExternalLink, Music2,
-  Trash2, X, Ban, UserX
+  Trash2, X, Ban, UserX, Download, Loader2, HardDrive
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -28,6 +28,11 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
   const {
     favorites,
     playlists,
+    downloadedTrackIds,
+    downloadingTrackIds,
+    downloadTrack,
+    removeDownloadedTrack,
+    syncOfflineTracks,
     toggleFavorite,
     addToQueue,
     playNext,
@@ -44,22 +49,22 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
   const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
-  const [menuCoords, setMenuCoords] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [menuCoords, setMenuCoords] = useState<{ top: number; left: number; maxHeight: number }>({ top: 0, left: 0, maxHeight: 480 });
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const isFav = favorites.some(f => f.id === track.id);
+  const isDownloaded = Boolean(downloadedTrackIds[track.id]);
+  const downloadProgress = downloadingTrackIds[track.id];
 
-  // Calculate smart menu coordinates relative to viewport
+  // Calculate smart menu coordinates and safe viewport boundaries
   const calculatePosition = useCallback(() => {
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     const menuWidth = 240;
-    const menuHeight = 420;
 
     let left = rect.right - menuWidth;
-    let top = rect.bottom + 6;
 
     // Prevent clipping right
     if (left + menuWidth > window.innerWidth - 12) {
@@ -69,12 +74,23 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     if (left < 12) {
       left = 12;
     }
-    // If near bottom, flip menu upwards
-    if (top + menuHeight > window.innerHeight - 12) {
-      top = Math.max(12, rect.top - menuHeight - 6);
+
+    const spaceBelow = window.innerHeight - rect.bottom - 16;
+    const spaceAbove = rect.top - 16;
+    const shouldFlip = spaceBelow < 420 && spaceAbove > spaceBelow;
+
+    let top: number;
+    let maxHeight: number;
+
+    if (shouldFlip) {
+      maxHeight = Math.max(200, Math.min(540, spaceAbove));
+      top = Math.max(12, rect.top - maxHeight - 6);
+    } else {
+      maxHeight = Math.max(200, Math.min(540, spaceBelow));
+      top = rect.bottom + 6;
     }
 
-    setMenuCoords({ top, left });
+    setMenuCoords({ top, left, maxHeight });
   }, []);
 
   const toggleMenu = (e: React.MouseEvent) => {
@@ -82,6 +98,7 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     e.preventDefault();
 
     if (!isOpen) {
+      syncOfflineTracks();
       calculatePosition();
       setShowPlaylistPicker(false);
       setIsOpen(true);
@@ -94,6 +111,7 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
   // Re-calculate position or handle outside clicks
   useEffect(() => {
     if (!isOpen) return;
+    syncOfflineTracks();
 
     const handleScrollOrResize = () => {
       calculatePosition();
@@ -210,6 +228,18 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     blockArtist(track.artist);
   };
 
+  const handleDownload = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsOpen(false);
+    downloadTrack(track);
+  };
+
+  const handleRemoveDownload = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsOpen(false);
+    removeDownloadedTrack(track.id);
+  };
+
   const handleSaveToPlaylist = (playlistId: string) => {
     addToPlaylist(playlistId, track);
     setShowPlaylistPicker(false);
@@ -272,6 +302,10 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
             top: `${menuCoords.top}px`,
             left: `${menuCoords.left}px`,
             width: '240px',
+            maxHeight: `${menuCoords.maxHeight || 480}px`,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            overscrollBehavior: 'contain',
             backgroundColor: '#18181c',
             border: '1px solid rgba(255, 255, 255, 0.14)',
             borderRadius: '12px',
@@ -359,7 +393,25 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
                 <span>Save to playlist</span>
               </button>
 
-              {/* 6. Remove from Queue (if in queue drawer) */}
+              {/* 6. Offline Download & Local Disk Export */}
+              {downloadProgress !== undefined ? (
+                <button className="track-menu-item" style={{ color: 'var(--accent-primary)' }} onClick={(e) => e.stopPropagation()}>
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Downloading ({downloadProgress}%)</span>
+                </button>
+              ) : isDownloaded ? (
+                <button className="track-menu-item" onClick={handleRemoveDownload}>
+                  <HardDrive size={16} color="var(--accent-primary)" />
+                  <span style={{ color: 'var(--accent-primary)' }}>Downloaded (Click to remove)</span>
+                </button>
+              ) : (
+                <button className="track-menu-item" onClick={handleDownload}>
+                  <Download size={16} />
+                  <span>Download for Offline Play</span>
+                </button>
+              )}
+
+              {/* 7. Remove from Queue (if in queue drawer) */}
               {onRemoveFromQueue && (
                 <button className="track-menu-item" onClick={() => { setIsOpen(false); onRemoveFromQueue(); }}>
                   <Trash2 size={16} color="#e74c3c" />

@@ -117,3 +117,13 @@ export interface SearchSuggestionsResult {
 export type ViewType = 'dashboard' | 'discover' | 'library' | 'albums' | 'playlists' | 'downloads' | 'settings';
 export type LibraryFilterType = 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'downloads';
 export type SearchCategory = 'all' | 'songs' | 'videos' | 'playlists';
+
+export interface DownloadedTrackMeta {
+  track: Track;
+  downloadedAt: number;
+  sizeBytes?: number;
+  mimeType?: string;
+}
+
+export type DownloadStatus = 'idle' | 'downloading' | 'completed' | 'error';
+

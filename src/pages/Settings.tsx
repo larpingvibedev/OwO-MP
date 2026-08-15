@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Wifi, 
   CheckCircle2, 
@@ -15,16 +16,55 @@ import {
   Ban,
   UserX,
   Sliders,
-  X
+  X,
+  HardDrive,
+  ExternalLink,
+  Folder,
+  FolderOpen
 } from 'lucide-react';
 import { SyncModal } from '../components/SyncModal';
 import { usePlayerStore } from '../store/usePlayerStore';
+import { 
+  promptChooseCustomDirectory, 
+  getCustomDirectoryName, 
+  clearCustomDirectory,
+  getPreferredDownloadFormat,
+  setPreferredDownloadFormat
+} from '../services/downloadService';
 
 export function Settings() {
+  const navigate = useNavigate();
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [historyCleared, setHistoryCleared] = useState(false);
   const [searchesCleared, setSearchesCleared] = useState(false);
+  const [customDirName, setCustomDirName] = useState<string | null>(null);
+  const [downloadFormat, setDownloadFormat] = useState<'mp3' | 'm4a'>('mp3');
+
+  useEffect(() => {
+    getCustomDirectoryName().then(setCustomDirName);
+    getPreferredDownloadFormat().then(setDownloadFormat);
+  }, []);
+
+  const handleChooseFolder = async () => {
+    const chosen = await promptChooseCustomDirectory();
+    if (chosen) {
+      setCustomDirName(chosen);
+      showToast(`Custom download folder set to "${chosen}"`);
+    }
+  };
+
+  const handleResetFolder = async () => {
+    await clearCustomDirectory();
+    setCustomDirName(null);
+    showToast('Reset download folder to default browser Downloads directory');
+  };
+
+  const handleFormatChange = async (fmt: 'mp3' | 'm4a') => {
+    setDownloadFormat(fmt);
+    await setPreferredDownloadFormat(fmt);
+    showToast(`Default offline export format set to .${fmt.toUpperCase()}`);
+  };
 
   const { 
     theme, 
@@ -36,6 +76,8 @@ export function Settings() {
     clearRecentSearchedTracks,
     dislikedTracks,
     blockedArtists,
+    downloadedTrackIds,
+    clearAllDownloads,
     unmarkTrackNotInterested,
     unblockArtist,
     clearDislikedAndBlocked,
@@ -586,7 +628,267 @@ export function Settings() {
         </div>
 
         {/* ========================================================================= */}
-        {/* 5. DATABASE STORAGE & FACTORY RESET                                       */}
+        {/* 5. OFFLINE STORAGE & DOWNLOADS                                            */}
+        {/* ========================================================================= */}
+        <div style={{
+          backgroundColor: 'var(--bg-card)',
+          borderRadius: '12px',
+          padding: '24px',
+          border: '1px solid var(--border-color)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '1.1rem' }}>
+              <HardDrive size={20} color="var(--accent-primary)" />
+              <span>Offline Downloads & Local Cache</span>
+            </div>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              backgroundColor: 'rgba(30, 144, 255, 0.12)',
+              color: 'var(--accent-primary)',
+              padding: '4px 10px',
+              borderRadius: '12px',
+              fontSize: '0.78rem',
+              fontWeight: 700
+            }}>
+              <CheckCircle2 size={13} />
+              <span>IndexedDB Active</span>
+            </div>
+          </div>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
+            Direct high-bitrate Opus & AAC audio streams are saved directly into your device's browser IndexedDB database for instant zero-buffering offline listening.
+          </p>
+
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '14px 18px',
+            backgroundColor: 'rgba(255, 255, 255, 0.03)',
+            borderRadius: '10px',
+            border: '1px solid rgba(255, 255, 255, 0.06)',
+            flexWrap: 'wrap',
+            gap: '12px',
+            marginBottom: '16px'
+          }}>
+            <div>
+              <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {Object.keys(downloadedTrackIds || {}).length} {Object.keys(downloadedTrackIds || {}).length === 1 ? 'Track' : 'Tracks'} Downloaded
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                Offline tracks play with native HTML5 Audio & 64-band Web Audio Spectrum Analyzer
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => navigate('/library?tab=downloads')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  borderRadius: '20px',
+                  backgroundColor: 'var(--accent-primary)',
+                  color: '#000',
+                  border: 'none',
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                <ExternalLink size={14} />
+                <span>View Offline Library</span>
+              </button>
+
+              {Object.keys(downloadedTrackIds || {}).length > 0 && (
+                <button
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to clear all offline downloaded tracks?')) {
+                      clearAllDownloads();
+                    }
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 14px',
+                    borderRadius: '20px',
+                    backgroundColor: 'rgba(231, 76, 60, 0.12)',
+                    color: '#e74c3c',
+                    border: '1px solid rgba(231, 76, 60, 0.3)',
+                    fontSize: '0.82rem',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Trash2 size={14} />
+                  <span>Clear All Cache</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Custom Download Folder Pathway */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '14px 18px',
+            backgroundColor: 'rgba(255, 255, 255, 0.02)',
+            borderRadius: '10px',
+            border: '1px solid rgba(255, 255, 255, 0.05)',
+            flexWrap: 'wrap',
+            gap: '12px'
+          }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {customDirName ? <FolderOpen size={17} color="var(--accent-primary)" /> : <Folder size={17} color="var(--text-secondary)" />}
+                <span>Custom Music Download Folder</span>
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                {customDirName 
+                  ? `Active target folder: "${customDirName}" on your PC`
+                  : 'Default: Standard OS Downloads folder (e.g. C:\\Users\\...\\Downloads)'}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {window.electronAPI?.isElectron && (
+                <button
+                  onClick={() => window.electronAPI?.openFolder(customDirName || undefined)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 14px',
+                    borderRadius: '20px',
+                    backgroundColor: 'rgba(255, 0, 127, 0.12)',
+                    color: 'var(--accent-primary)',
+                    border: '1px solid var(--accent-primary)',
+                    fontSize: '0.82rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                  title="Open music downloads folder in Windows File Explorer"
+                >
+                  <FolderOpen size={14} />
+                  <span>Open in Explorer</span>
+                </button>
+              )}
+
+              <button
+                onClick={handleChooseFolder}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 14px',
+                  borderRadius: '20px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color)',
+                  fontSize: '0.82rem',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                <Folder size={14} />
+                <span>{customDirName ? 'Change Folder' : 'Choose Music Folder'}</span>
+              </button>
+
+              {customDirName && (
+                <button
+                  onClick={handleResetFolder}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 12px',
+                    borderRadius: '20px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                    color: 'var(--text-secondary)',
+                    border: '1px solid var(--border-color)',
+                    fontSize: '0.82rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <RotateCcw size={13} />
+                  <span>Reset Default</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Preferred Offline Audio Format (.mp3 vs .m4a) */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '14px 18px',
+            backgroundColor: 'rgba(255, 255, 255, 0.02)',
+            borderRadius: '10px',
+            border: '1px solid rgba(255, 255, 255, 0.05)',
+            flexWrap: 'wrap',
+            gap: '12px',
+            marginTop: '12px'
+          }}>
+            <div>
+              <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Preferred Audio Export Format
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                Select format for exported music files saved onto your device
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => handleFormatChange('mp3')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  borderRadius: '20px',
+                  backgroundColor: downloadFormat === 'mp3' ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.05)',
+                  color: downloadFormat === 'mp3' ? '#000000' : 'var(--text-primary)',
+                  border: `1px solid ${downloadFormat === 'mp3' ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <span>.MP3 (Universal Standard)</span>
+              </button>
+
+              <button
+                onClick={() => handleFormatChange('m4a')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  borderRadius: '20px',
+                  backgroundColor: downloadFormat === 'm4a' ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.05)',
+                  color: downloadFormat === 'm4a' ? '#000000' : 'var(--text-primary)',
+                  border: `1px solid ${downloadFormat === 'm4a' ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <span>.M4A (Apple / AAC)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ========================================================================= */}
+        {/* 6. DATABASE STORAGE & FACTORY RESET                                       */}
         {/* ========================================================================= */}
         <div style={{
           backgroundColor: 'var(--bg-card)',

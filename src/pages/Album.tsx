@@ -3,7 +3,7 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { fetchAlbumDetails, fetchArtistProfileFromYTM, cleanGoogleImageUrl, resolveArtistAvatar } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { isSameTrack } from '../utils/trackUtils';
-import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check, Bookmark, BookmarkCheck } from 'lucide-react';
+import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check, Bookmark, BookmarkCheck, Download, HardDrive } from 'lucide-react';
 import type { AlbumDetail, Track, Album as ReleaseItem } from '../types';
 
 function formatTime(seconds: number): string {
@@ -46,7 +46,10 @@ export function Album() {
     toggleFavorite,
     addToQueue,
     savedAlbums,
-    toggleSaveAlbum
+    toggleSaveAlbum,
+    downloadedTrackIds,
+    downloadingTrackIds,
+    downloadTrackBatch
   } = usePlayerStore();
 
   const albumName = searchParams.get('name') || '';
@@ -140,6 +143,8 @@ export function Album() {
   const isSavedToLibrary = Boolean(album && savedAlbums.some(
     a => a.id === album.id || (a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase())
   ));
+  const isAllAlbumDownloaded = Boolean(album && album.tracks.length > 0 && album.tracks.every(t => Boolean(downloadedTrackIds[t.id])));
+  const isAlbumDownloading = Boolean(album && album.tracks.some(t => downloadingTrackIds[t.id] !== undefined));
 
   const handlePlayTrack = (track: Track) => {
     if (isSameTrack(currentTrack, track)) {
@@ -426,6 +431,35 @@ export function Album() {
               onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
             >
               {isSavedToLibrary ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
+            </button>
+
+            {/* Download Entire Album Button */}
+            <button 
+              onClick={() => downloadTrackBatch(album.tracks, album.name)}
+              title={isAllAlbumDownloaded ? "Album downloaded for offline playback" : "Download album offline"}
+              style={{ 
+                width: '44px',
+                height: '44px',
+                borderRadius: '50%',
+                backgroundColor: isAllAlbumDownloaded ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.06)',
+                border: '1px solid var(--border-color)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                color: isAllAlbumDownloaded ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                transition: 'transform 0.15s, color 0.15s, background-color 0.15s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.08)'}
+              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+            >
+              {isAlbumDownloading ? (
+                <Loader2 size={18} className="animate-spin" color="var(--accent-primary)" />
+              ) : isAllAlbumDownloaded ? (
+                <HardDrive size={18} color="var(--accent-primary)" />
+              ) : (
+                <Download size={18} />
+              )}
             </button>
 
             {/* Add All to Queue Button */}

@@ -1920,6 +1920,7 @@ export async function resolveYouTubeMusicATV(artist: string, title: string): Pro
         const sections = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
         const normTitle = cleanTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
 
+        // Pass 1: Priority strict Official Audio Track Video (ATV)
         for (const sec of sections) {
           if (sec.musicCardShelfRenderer) {
             const card = sec.musicCardShelfRenderer;
@@ -1948,6 +1949,36 @@ export async function resolveYouTubeMusicATV(artist: string, title: string): Pro
 
               if (videoId && (iNormTitle.includes(normTitle) || normTitle.includes(iNormTitle))) {
                 return videoId;
+              }
+            }
+          }
+        }
+
+        // Pass 2: Fallback to top matching song release / card videoId
+        for (const sec of sections) {
+          if (sec.musicCardShelfRenderer) {
+            const card = sec.musicCardShelfRenderer;
+            const cTitle = card.title?.runs?.[0]?.text || '';
+            const cNormTitle = cTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const rawId = card.onTap?.watchEndpoint?.videoId ||
+                          card.title?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+                          card.buttons?.[0]?.buttonRenderer?.command?.watchEndpoint?.videoId;
+            if (rawId && (cNormTitle.includes(normTitle) || normTitle.includes(cNormTitle))) {
+              return rawId;
+            }
+          }
+
+          const items = sec.musicShelfRenderer?.contents || sec.itemSectionRenderer?.contents || [];
+          for (const item of items) {
+            const r = item.musicResponsiveListItemRenderer;
+            if (r) {
+              const iTitle = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '';
+              const iNormTitle = iTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const rawId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+                            r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+                            r.playlistItemData?.videoId;
+              if (rawId && (iNormTitle.includes(normTitle) || normTitle.includes(iNormTitle))) {
+                return rawId;
               }
             }
           }

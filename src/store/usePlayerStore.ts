@@ -2,6 +2,14 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Track, Playlist, ViewType, ArtistProfile, SavedAlbum, FollowedArtist } from '../types';
 import { fetchUpNextMix } from '../services/musicSearch';
+import { 
+  downloadTrackOffline, 
+  removeOfflineTrack, 
+  getAllOfflineRecords, 
+  clearAllOfflineStorage,
+  exportTrackToDisk 
+} from '../services/downloadService';
+import { supabaseSync } from '../services/supabaseSyncService';
 
 interface PlayerState {
   // Current track & playback
@@ -57,6 +65,11 @@ interface PlayerState {
   // Algorithmic Preferences & Blocklists (Not Interested / Don't Recommend)
   dislikedTracks: Track[];
   blockedArtists: string[];
+
+  // Offline Downloads & Storage
+  downloadedTrackIds: Record<string, { downloadedAt: number; sizeBytes?: number; title?: string; artist?: string }>;
+  downloadingTrackIds: Record<string, number>;
+  isOfflineOnly: boolean;
 
   // Toast Notifications
   toastMessage: string | null;
@@ -127,6 +140,15 @@ interface PlayerState {
   saveQueueAsPlaylist: (customName?: string) => void;
   generateRadio: (seedTrack: Track) => Promise<void>;
   generateMultiRadio: (seedTracks: Track[]) => Promise<void>;
+
+  // Offline Downloads Actions
+  downloadTrack: (track: Track) => Promise<boolean>;
+  removeDownloadedTrack: (trackId: string) => Promise<void>;
+  downloadTrackBatch: (tracks: Track[], albumOrPlaylistName?: string) => Promise<{ successCount: number; failCount: number }>;
+  exportTrackAudioToDisk: (track: Track) => Promise<boolean>;
+  syncOfflineTracks: () => Promise<void>;
+  toggleOfflineOnly: () => void;
+  clearAllDownloads: () => Promise<void>;
 }
 
 export const usePlayerStore = create<PlayerState>()(
@@ -159,6 +181,10 @@ export const usePlayerStore = create<PlayerState>()(
 
   dislikedTracks: [],
   blockedArtists: [],
+
+  downloadedTrackIds: {},
+  downloadingTrackIds: {},
+  isOfflineOnly: false,
 
   theme: 'default',
   rustyColor: 'green',
@@ -675,11 +701,14 @@ export const usePlayerStore = create<PlayerState>()(
   
   toggleFavorite: (track) => set((state) => {
     const isFav = state.favorites.some((t) => t.id === track.id);
-    return {
-      favorites: isFav 
-        ? state.favorites.filter((t) => t.id !== track.id)
-        : [{ ...track, savedAt: Date.now() }, ...state.favorites]
-    };
+    const newFavorites = isFav 
+      ? state.favorites.filter((t) => t.id !== track.id)
+      : [{ ...track, savedAt: Date.now() }, ...state.favorites];
+    
+    // Trigger background cloud sync
+    supabaseSync.syncFavoriteUp(track, !isFav);
+
+    return { favorites: newFavorites };
   }),
 
   toggleSaveAlbum: (album) => set((state) => {
@@ -748,6 +777,7 @@ export const usePlayerStore = create<PlayerState>()(
       playlists: [...state.playlists, newPl],
       toastMessage: `Saved "${name}" to Playlists`
     });
+    supabaseSync.syncPlaylistUp(newPl);
   },
 
   createPlaylist: (name: string) => {
@@ -763,6 +793,7 @@ export const usePlayerStore = create<PlayerState>()(
       playlists: [newPl, ...state.playlists],
       toastMessage: `Created playlist "${trimmed}"`
     }));
+    supabaseSync.syncPlaylistUp(newPl);
     return newId;
   },
 
@@ -782,9 +813,11 @@ export const usePlayerStore = create<PlayerState>()(
     if (pl.tracks.some(t => t.id === track.id)) {
       return { toastMessage: `"${track.title}" is already in ${pl.name}` };
     }
+    const updatedPl: Playlist = { ...pl, tracks: [...pl.tracks, track] };
     const updated = state.playlists.map(p => 
-      p.id === playlistId ? { ...p, tracks: [...p.tracks, track] } : p
+      p.id === playlistId ? updatedPl : p
     );
+    supabaseSync.syncPlaylistUp(updatedPl);
     return {
       playlists: updated,
       toastMessage: `Added "${track.title}" to ${pl.name}`
@@ -798,6 +831,7 @@ export const usePlayerStore = create<PlayerState>()(
       tracks: [track],
       createdAt: Date.now()
     };
+    supabaseSync.syncPlaylistUp(newPl);
     return {
       playlists: [...state.playlists, newPl],
       toastMessage: `Created playlist "${newPl.name}"`
@@ -868,6 +902,175 @@ export const usePlayerStore = create<PlayerState>()(
       get().setQueue(seedTracks, 0);
       set({ isPlaying: true });
     }
+  },
+
+  downloadTrack: async (track: Track) => {
+    const trackId = track.id;
+    if (get().downloadedTrackIds[trackId]) {
+      get().showToast(`"${track.title}" is already downloaded`);
+      return true;
+    }
+    if (get().downloadingTrackIds[trackId] !== undefined) {
+      // Already downloading! Prevent duplicate clicks
+      return false;
+    }
+
+    set((state) => ({
+      downloadingTrackIds: { ...state.downloadingTrackIds, [trackId]: 1 }
+    }));
+
+    try {
+      const record = await downloadTrackOffline(track, (progress) => {
+        set((state) => ({
+          downloadingTrackIds: { ...state.downloadingTrackIds, [trackId]: progress }
+        }));
+      });
+
+      set((state) => {
+        const nextDownloading = { ...state.downloadingTrackIds };
+        delete nextDownloading[trackId];
+
+        return {
+          downloadingTrackIds: nextDownloading,
+          downloadedTrackIds: {
+            ...state.downloadedTrackIds,
+            [trackId]: {
+              downloadedAt: record.downloadedAt,
+              sizeBytes: record.size,
+              title: track.title,
+              artist: track.artist
+            }
+          },
+          toastMessage: `Downloaded "${track.title}" for offline playback`
+        };
+      });
+      return true;
+    } catch (err: any) {
+      console.error('Download error:', err);
+      set((state) => {
+        const nextDownloading = { ...state.downloadingTrackIds };
+        delete nextDownloading[trackId];
+        return {
+          downloadingTrackIds: nextDownloading,
+          toastMessage: `Download failed: ${err.message || 'Network error'}`
+        };
+      });
+      return false;
+    }
+  },
+
+  removeDownloadedTrack: async (trackId: string) => {
+    try {
+      await removeOfflineTrack(trackId);
+      set((state) => {
+        const nextDownloaded = { ...state.downloadedTrackIds };
+        delete nextDownloaded[trackId];
+        return {
+          downloadedTrackIds: nextDownloaded,
+          toastMessage: 'Removed from offline downloads'
+        };
+      });
+    } catch (err: any) {
+      console.error('Remove download error:', err);
+    }
+  },
+
+  downloadTrackBatch: async (tracks: Track[], albumOrPlaylistName?: string) => {
+    if (!tracks || tracks.length === 0) return { successCount: 0, failCount: 0 };
+
+    const name = albumOrPlaylistName ? ` "${albumOrPlaylistName}"` : '';
+    get().showToast(`Starting offline download for${name} (${tracks.length} songs)...`);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    // Concurrency limit: 2 tracks at a time
+    const queue = [...tracks];
+    const workerCount = Math.min(2, queue.length);
+
+    const runWorker = async () => {
+      while (queue.length > 0) {
+        const item = queue.shift();
+        if (!item) break;
+        const ok = await get().downloadTrack(item);
+        if (ok) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
+    get().showToast(`Completed download:${name} (${successCount} saved${failCount > 0 ? `, ${failCount} failed` : ''})`);
+    return { successCount, failCount };
+  },
+
+  exportTrackAudioToDisk: async (track: Track) => {
+    try {
+      get().showToast(`Preparing audio export for "${track.title}"...`);
+      const res = await exportTrackToDisk(track);
+      if (res.success) {
+        get().showToast(`Saved "${track.title}" to ${res.path}`);
+        return true;
+      }
+      return false;
+    } catch (err: any) {
+      console.error('Export error:', err);
+      get().showToast(`Export failed: ${err.message || 'Error'}`);
+      return false;
+    }
+  },
+
+  syncOfflineTracks: async () => {
+    try {
+      const records = await getAllOfflineRecords();
+      let diskFiles: string[] | null = null;
+      if ((window as any).electronAPI?.getDiskAudioFiles) {
+        diskFiles = await (window as any).electronAPI.getDiskAudioFiles();
+      }
+
+      const map: Record<string, { downloadedAt: number; sizeBytes?: number; title?: string; artist?: string }> = {};
+      for (const r of records) {
+        // If in Electron, verify the physical file is still present in the Music folder
+        if (diskFiles !== null) {
+          const cleanArtistStr = (r.track?.artist || '').replace(/[\\/:*?"<>|]/g, '_').toLowerCase().trim();
+          const cleanTitleStr = (r.track?.title || '').replace(/[\\/:*?"<>|]/g, '_').toLowerCase().trim();
+          
+          const existsOnDisk = diskFiles.some(f => 
+            (f.includes(cleanTitleStr) && f.includes(cleanArtistStr)) ||
+            f.startsWith(`${cleanArtistStr} - ${cleanTitleStr}`)
+          );
+
+          if (!existsOnDisk) {
+            // File was deleted from disk! Clean up from IndexedDB
+            await removeOfflineTrack(r.id);
+            continue;
+          }
+        }
+        map[r.id] = {
+          downloadedAt: r.downloadedAt,
+          sizeBytes: r.size,
+          title: r.track?.title,
+          artist: r.track?.artist
+        };
+      }
+      set({ downloadedTrackIds: map });
+    } catch (e) {
+      console.warn('Sync offline tracks failed:', e);
+    }
+  },
+
+  toggleOfflineOnly: () => set((state) => ({ isOfflineOnly: !state.isOfflineOnly })),
+
+  clearAllDownloads: async () => {
+    try {
+      await clearAllOfflineStorage();
+      set({ downloadedTrackIds: {}, toastMessage: 'Cleared all offline downloads' });
+    } catch (e) {
+      console.error('Clear downloads failed:', e);
+    }
   }
     }),
     {
@@ -886,7 +1089,9 @@ export const usePlayerStore = create<PlayerState>()(
         recentSearchQueries: state.recentSearchQueries,
         recentSearchedTracks: state.recentSearchedTracks,
         dislikedTracks: state.dislikedTracks,
-        blockedArtists: state.blockedArtists
+        blockedArtists: state.blockedArtists,
+        downloadedTrackIds: state.downloadedTrackIds,
+        isOfflineOnly: state.isOfflineOnly
       })
     }
   )

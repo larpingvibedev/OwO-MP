@@ -10,6 +10,7 @@ import {
   fetchUpNextMix
 } from '../services/musicSearch';
 import { audioEngine } from '../services/audioEngine';
+import { getOfflineTrackBlobUrl } from '../services/downloadService';
 
 declare global {
   interface Window {
@@ -30,6 +31,7 @@ export const AudioPlayer = () => {
   const activeLoadedTrackIdRef = useRef<string | null>(null);
   const trackStartTimeRef = useRef<number>(0);
   const trackFailedCountRef = useRef<Map<string, number>>(new Map());
+  const isOfflineTrackRef = useRef<boolean>(false);
 
   const {
     currentTrack,
@@ -50,17 +52,24 @@ export const AudioPlayer = () => {
     setCurrentTime,
     setDuration,
     recordPlay,
-    setRecommendedUpNext
+    setRecommendedUpNext,
+    syncOfflineTracks
   } = usePlayerStore();
+
+  const isElectron = Boolean((window as any).electronAPI?.isElectron);
 
   const isYouTubeTrack = (t: typeof currentTrack) => {
     if (!t) return false;
-    if (t.resolvedStreamUrl?.startsWith('http')) return false;
+    if (isElectron) return false; // Native Electron uses direct HTML5 stream
+    if (isOfflineTrackRef.current) return false;
+    if (t.resolvedStreamUrl?.startsWith('http') || t.resolvedStreamUrl?.startsWith('blob:')) return false;
     return true;
   };
 
   // 1. Initialize Web Audio API engine & YouTube IFrame API
   useEffect(() => {
+    syncOfflineTracks();
+
     if (audioRef.current) {
       audioEngine.init(audioRef.current);
     }
@@ -291,13 +300,19 @@ export const AudioPlayer = () => {
 
       if (audioRef.current && currentTrack) {
         if (isPlaying) {
-          audioRef.current.play().catch(() => setIsPlaying(false));
+          // Only trigger play if the audio element is currently loaded with the active track
+          if (activeLoadedTrackIdRef.current === currentTrack.id && audioRef.current.src) {
+            audioEngine.resume();
+            audioRef.current.play().catch((err) => {
+              console.warn('Audio play notice (buffering):', err);
+            });
+          }
         } else {
           audioRef.current.pause();
         }
       }
     }
-  }, [isPlaying, currentTrack?.id, setIsPlaying]);
+  }, [isPlaying, currentTrack?.id]);
 
   // 4. Volume Control
   useEffect(() => {
@@ -349,11 +364,42 @@ export const AudioPlayer = () => {
       if (currentTrack.id === activeLoadedTrackIdRef.current) {
         return;
       }
+
+      // Immediately silence & reset the previous audio buffer so it NEVER replays when switching
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+        audioRef.current.load();
+      }
+      if (ytPlayerRef.current?.pauseVideo) {
+        try { ytPlayerRef.current.pauseVideo(); } catch (e) {}
+      }
+
       activeLoadedTrackIdRef.current = currentTrack.id;
       isSwitchingRef.current = true;
       trackStartTimeRef.current = Date.now();
 
       recordPlay(currentTrack);
+
+      // 0. Check Offline Storage for instant 100% local audio playback
+      const offlineBlobUrl = await getOfflineTrackBlobUrl(currentTrack.id);
+      if (isCancelled) return;
+      if (offlineBlobUrl) {
+        isOfflineTrackRef.current = true;
+        if (ytReadyRef.current && ytPlayerRef.current?.pauseVideo) {
+          try { ytPlayerRef.current.pauseVideo(); } catch (e) {}
+        }
+        if (audioRef.current) {
+          audioRef.current.src = offlineBlobUrl;
+          audioRef.current.volume = volume;
+          if (isPlaying) {
+            audioRef.current.play().catch(console.warn);
+          }
+        }
+        isSwitchingRef.current = false;
+        return;
+      }
+      isOfflineTrackRef.current = false;
 
       // Direct HTTP audio preview/stream
       if (currentTrack.resolvedStreamUrl?.startsWith('http')) {
@@ -386,6 +432,27 @@ export const AudioPlayer = () => {
       }
 
       if (isCancelled) return;
+
+      // In Electron Desktop, stream directly via internal proxy to native HTML5 <audio>
+      if (isElectron) {
+        if (videoId && audioRef.current) {
+          try {
+            const port = (await (window as any).electronAPI?.getProxyPort?.()) || 41721;
+            const streamUrl = `http://127.0.0.1:${port}/api/download-stream?videoId=${videoId}`;
+            activeLoadedTrackIdRef.current = currentTrack.id;
+            audioRef.current.src = streamUrl;
+            audioRef.current.volume = volume;
+            audioEngine.resume();
+            if (isPlaying) {
+              audioRef.current.play().catch(console.warn);
+            }
+          } catch (err) {
+            console.warn('Native audio play error:', err);
+          }
+        }
+        isSwitchingRef.current = false;
+        return;
+      }
 
       if (videoId) {
         // Play via YouTube Iframe continuously without mid-playback stream swapping
@@ -467,7 +534,16 @@ export const AudioPlayer = () => {
       {/* HTML5 Audio Player for Direct Full-Length Streams */}
       <audio
         ref={audioRef}
-        crossOrigin="anonymous"
+        preload="auto"
+        onCanPlay={() => {
+          if (usePlayerStore.getState().isPlaying && audioRef.current && audioRef.current.paused) {
+            audioEngine.resume();
+            audioRef.current.play().catch(console.warn);
+          }
+        }}
+        onPlaying={() => {
+          audioEngine.resume();
+        }}
         onTimeUpdate={() => {
           if (audioRef.current && !isYouTubeTrack(currentTrack)) {
             setCurrentTime(audioRef.current.currentTime);

@@ -22,7 +22,8 @@ export function Sidebar() {
     toggleSidebar, 
     playlists, 
     favorites, 
-    createPlaylist
+    createPlaylist,
+    closePlayerDrawer
   } = usePlayerStore();
 
   const [showQuickCreate, setShowQuickCreate] = useState(false);
@@ -34,6 +35,7 @@ export function Sidebar() {
     createPlaylist(quickPlaylistName.trim());
     setQuickPlaylistName('');
     setShowQuickCreate(false);
+    closePlayerDrawer();
     navigate('/library?tab=playlists');
   };
 
@@ -51,7 +53,7 @@ export function Sidebar() {
         </button>
 
         {!isSidebarCollapsed && (
-          <NavLink to="/" className="sidebar-logo">
+          <NavLink to="/" className="sidebar-logo" onClick={() => closePlayerDrawer()}>
             <Disc3 className="brand-disc-icon" size={24} color="var(--accent-primary)" />
             <span className="brand-text">OwO Music</span>
           </NavLink>
@@ -64,6 +66,7 @@ export function Sidebar() {
           to="/" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           title="Home"
+          onClick={() => closePlayerDrawer()}
           end
         >
           <Home size={22} className="icon" />
@@ -74,6 +77,7 @@ export function Sidebar() {
           to="/discover" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           title="Discover"
+          onClick={() => closePlayerDrawer()}
         >
           <Search size={22} className="icon" />
           {!isSidebarCollapsed && <span className="nav-label">Discover</span>}
@@ -83,6 +87,7 @@ export function Sidebar() {
           to="/library" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           title="Library"
+          onClick={() => closePlayerDrawer()}
         >
           <Library size={22} className="icon" />
           {!isSidebarCollapsed && <span className="nav-label">Library</span>}
@@ -128,6 +133,7 @@ export function Sidebar() {
               to="/library?tab=songs"
               className={({ isActive }) => `sidebar-playlist-item ${isActive ? 'active' : ''}`}
               title="Liked Music"
+              onClick={() => closePlayerDrawer()}
             >
               <div className="playlist-item-icon-box liked-box">
                 <Heart size={13} fill="#ffffff" color="#ffffff" />
@@ -147,6 +153,7 @@ export function Sidebar() {
                 to={`/library?tab=playlists`}
                 className="sidebar-playlist-item"
                 title={pl.name}
+                onClick={() => closePlayerDrawer()}
               >
                 <div className="playlist-item-icon-box">
                   <ListMusic size={14} color="var(--text-secondary)" />
@@ -169,6 +176,7 @@ export function Sidebar() {
           to="/settings" 
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           title="Settings"
+          onClick={() => closePlayerDrawer()}
         >
           <Settings size={22} className="icon" />
           {!isSidebarCollapsed && <span className="nav-label">Settings</span>}

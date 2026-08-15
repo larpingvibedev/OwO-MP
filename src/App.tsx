@@ -1,25 +1,57 @@
-import React from 'react';
+import { useEffect, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { MainLayout } from './components/layout/MainLayout';
 import { Dashboard } from './pages/Dashboard';
 import { Discover } from './pages/Discover';
-import { SyncModal } from './components/SyncModal';
-
 import { Artist } from './pages/Artist';
 import { Album } from './pages/Album';
 import { Library } from './pages/Library';
 import { Settings } from './pages/Settings';
+import { AuthModal } from './components/auth/AuthModal';
+import { EditProfileModal } from './components/auth/EditProfileModal';
+import { DeviceConnectModal } from './components/connect/DeviceConnectModal';
+import { useAuthStore } from './store/useAuthStore';
+import { usePlayerStore } from './store/usePlayerStore';
+import { supabaseSync } from './services/supabaseSyncService';
 import './App.css';
 
 function App() {
-  const [showSyncModal, setShowSyncModal] = React.useState(false);
+  const { initAuth, user } = useAuthStore();
+  const syncOfflineTracks = usePlayerStore(s => s.syncOfflineTracks);
+  const [showDeviceModal, setShowDeviceModal] = useState(false);
+
+  useEffect(() => {
+    initAuth();
+  }, [initAuth]);
+
+  useEffect(() => {
+    if (user) {
+      supabaseSync.startSync();
+    } else {
+      supabaseSync.stopSync();
+    }
+  }, [user]);
+
+  // Expose global openDeviceModal handler and live disk file sync
+  useEffect(() => {
+    (window as any).__openDeviceModal = () => setShowDeviceModal(true);
+
+    if ((window as any).electronAPI?.onDiskFolderChanged) {
+      const cleanup = (window as any).electronAPI.onDiskFolderChanged(() => {
+        syncOfflineTracks();
+      });
+      return cleanup;
+    }
+  }, [syncOfflineTracks]);
 
   return (
     <>
-      {showSyncModal && <SyncModal onClose={() => setShowSyncModal(false)} />}
+      <AuthModal />
+      <EditProfileModal />
+      <DeviceConnectModal isOpen={showDeviceModal} onClose={() => setShowDeviceModal(false)} />
       
       <Routes>
-        <Route path="/" element={<MainLayout />}>
+        <Route path="/" element={<MainLayout onOpenDeviceModal={() => setShowDeviceModal(true)} />}>
           <Route index element={<Dashboard />} />
           <Route path="discover" element={<Discover />} />
           <Route path="library" element={<Library />} />

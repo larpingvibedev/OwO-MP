@@ -121,11 +121,11 @@ export async function fetchLyrics(
     };
   }
 
-  // Fallback: If only Genius is found
+  // Fallback: If Genius lyrics are found
   if (genius) {
     return {
       synced: null,
-      plain: null,
+      plain: genius.plain || null,
       source: 'Genius',
       isSynced: false,
       geniusUrl: genius.url,
@@ -209,31 +209,39 @@ async function fetchLrcLib(
 }
 
 /**
- * Fetch Genius Song Metadata & Direct Lyrics URL
+ * Fetch Genius Song Metadata & Full Plain Lyrics
  */
 async function fetchGeniusMetadata(
   cleanTitle: string,
   cleanArtist: string
-): Promise<{ url: string; title: string; artist: string; thumbnail?: string } | null> {
+): Promise<{ url: string; title: string; artist: string; thumbnail?: string; plain?: string } | null> {
+  const query = `${cleanArtist} ${cleanTitle}`.trim();
+
+  // 1. If running inside Electron, use native IPC extractor (bypasses all browser CORS limitations)
+  if ((window as any).electronAPI?.getGeniusLyrics) {
+    try {
+      const data = await (window as any).electronAPI.getGeniusLyrics(query);
+      if (data && data.plain) {
+        return data;
+      }
+    } catch (e) {}
+  }
+
+  // 2. Direct web fetch fallback
   try {
-    const query = `${cleanArtist} ${cleanTitle}`.trim();
     const res = await fetch(`https://genius.com/api/search/multi?q=${encodeURIComponent(query)}`);
     if (res.ok) {
       const data = await res.json();
       const sections = data?.response?.sections || [];
-      for (const sec of sections) {
-        if (sec.type === 'song' || sec.type === 'top_hit') {
-          const hits = sec.hits || [];
-          if (hits.length > 0 && hits[0].result) {
-            const hit = hits[0].result;
-            return {
-              url: hit.url,
-              title: hit.title,
-              artist: hit.primary_artist?.name || cleanArtist,
-              thumbnail: hit.song_art_image_thumbnail_url || hit.header_image_thumbnail_url
-            };
-          }
-        }
+      const songHit = sections.flatMap((s: any) => s.hits || []).find((h: any) => h.type === 'song' || h.result?._type === 'song');
+      if (songHit?.result?.url) {
+        const hit = songHit.result;
+        return {
+          url: hit.url,
+          title: hit.title,
+          artist: hit.primary_artist?.name || cleanArtist,
+          thumbnail: hit.song_art_image_thumbnail_url || hit.header_image_thumbnail_url
+        };
       }
     }
   } catch {}

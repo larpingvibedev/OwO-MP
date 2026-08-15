@@ -9,7 +9,11 @@ import { Toast } from '../common/Toast';
 
 import { usePlayerStore } from '../../store/usePlayerStore';
 
-export function MainLayout() {
+interface MainLayoutProps {
+  onOpenDeviceModal?: () => void;
+}
+
+export function MainLayout({ onOpenDeviceModal }: MainLayoutProps) {
   const location = useLocation();
   const { theme, rustyColor, isPlayerDrawerOpen, closePlayerDrawer } = usePlayerStore();
   const themeClass = theme === 'rusty' ? `theme-rusty rusty-${rustyColor}` : 'theme-default';
@@ -30,18 +34,18 @@ export function MainLayout() {
         <Sidebar />
         
         <div className="content-area">
-          <TopBar />
+          <TopBar onOpenDeviceModal={onOpenDeviceModal} />
           
           <main className="main-scroll-view">
             <Outlet />
           </main>
 
-          <PlayerDrawer />
+          <PlayerDrawer onOpenDeviceModal={onOpenDeviceModal} />
         </div>
       </div>
 
       <Toast />
-      <BottomPlayer />
+      <BottomPlayer onOpenDeviceModal={onOpenDeviceModal} />
     </div>
   );
 }

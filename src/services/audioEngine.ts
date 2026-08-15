@@ -28,10 +28,10 @@ class AudioEngineManager {
 
       if (!this.analyser) {
         this.analyser = this.audioCtx.createAnalyser();
-        this.analyser.fftSize = 128; // 64 frequency bins
-        this.analyser.smoothingTimeConstant = 0.75;
-        this.analyser.minDecibels = -85;
-        this.analyser.maxDecibels = -10;
+        this.analyser.fftSize = 256; // 128 frequency bins for rich definition
+        this.analyser.smoothingTimeConstant = 0.58; // Snappy, punchy response to transient beats
+        this.analyser.minDecibels = -90;
+        this.analyser.maxDecibels = -18;
         this.freqData = new Uint8Array(this.analyser.frequencyBinCount);
       }
 
@@ -64,9 +64,9 @@ class AudioEngineManager {
 
   /**
    * Returns normalized real-time frequency data (0.0 to 1.0) resampled to `barCount` bars.
-   * Returns null if HTML5 audio element is idle so visualizer can use Mode B Synthwave Rhythm.
+   * Returns null if HTML5 audio element is idle so visualizer stays quiet.
    */
-  public getLiveFrequencies(barCount: number): number[] | null {
+  public getLiveFrequencies(barCount: number = 42, layout: 'bell' | 'linear' = 'bell'): number[] | null {
     if (!this.analyser || !this.freqData || !this.audioCtx) return null;
 
     // If audio element is paused or not actively streaming direct audio, return null
@@ -86,25 +86,45 @@ class AudioEngineManager {
     for (let i = 0; i < len; i++) {
       sum += this.freqData[i];
     }
-    if (sum < 1.0) {
+    if (sum < 0.5) {
       return null;
     }
 
     const result: number[] = new Array(barCount);
+    // Active musical band: Bin 1 (~40 Hz) to Bin 48 (~8 kHz)
+    const maxMusicalBin = Math.min(len - 1, 48);
+    const minMusicalBin = 1;
 
-    // Resample the 64 FFT bins to target `barCount` (e.g. 42 bars) with logarithmic frequency distribution
-    for (let i = 0; i < barCount; i++) {
-      const norm = i / (barCount - 1);
-      const logIndex = Math.pow(norm, 1.45) * (len - 1);
-      const lowIdx = Math.floor(logIndex);
-      const highIdx = Math.min(len - 1, Math.ceil(logIndex));
-      const frac = logIndex - lowIdx;
-
-      const rawVal = this.freqData[lowIdx] * (1 - frac) + this.freqData[highIdx] * frac;
+    const sampleFrequency = (norm: number) => {
+      // Logarithmic distribution: ample resolution for Sub-bass (norm 0.0), Mids (0.5), and Highs (1.0)
+      const logNorm = Math.pow(norm, 1.22);
+      const binIdx = minMusicalBin + logNorm * (maxMusicalBin - minMusicalBin);
       
-      // True linear normalization: 0 to 255 -> 0.0 to 1.0 with high-frequency compensation
-      const eqBoost = 1.0 + norm * 0.55;
-      result[i] = Math.min(1.0, (rawVal / 255.0) * eqBoost);
+      const lowIdx = Math.floor(binIdx);
+      const highIdx = Math.min(maxMusicalBin, Math.ceil(binIdx));
+      const frac = binIdx - lowIdx;
+
+      const rawVal = (this.freqData![lowIdx] || 0) * (1 - frac) + (this.freqData![highIdx] || 0) * frac;
+      
+      // Dynamic frequency tilt: balances mids & high-treble so the entire width stays full and lively
+      const trebleComp = 1.05 + Math.pow(norm, 0.85) * 1.75;
+      const normalized = Math.min(1.0, (rawVal / 205.0) * trebleComp);
+      
+      return Math.pow(normalized, 0.82);
+    };
+
+    if (layout === 'bell') {
+      // Symmetrical Bell Curve: Powerful Sub-Bass / Kicks in the Center, rippling outward to Mids, Vocals, and Treble wings
+      const mid = (barCount - 1) / 2;
+      for (let i = 0; i < barCount; i++) {
+        const distFromCenter = Math.abs(i - mid) / mid; // 0.0 at center, 1.0 at outer left/right
+        result[i] = sampleFrequency(distFromCenter);
+      }
+    } else {
+      for (let i = 0; i < barCount; i++) {
+        const norm = i / (barCount - 1);
+        result[i] = sampleFrequency(norm);
+      }
     }
 
     return result;

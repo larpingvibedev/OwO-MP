@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { 
   Sparkles, Music, Play, Plus,
   Compass, Volume2, Check, ExternalLink, Loader2, Info, Disc, ListPlus,
-  Copy, BookOpen, Search, Heart
+  Copy, BookOpen, Search, Heart, Radio
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -19,7 +19,11 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
-export function PlayerDrawer() {
+interface PlayerDrawerProps {
+  onOpenDeviceModal?: () => void;
+}
+
+export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
   const navigate = useNavigate();
   const {
     currentTrack,
@@ -344,6 +348,17 @@ export function PlayerDrawer() {
               {/* Action Buttons */}
               {currentTrack && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                  <button 
+                    className="secondary-btn" 
+                    onClick={() => {
+                      if (onOpenDeviceModal) onOpenDeviceModal();
+                      else (window as any).__openDeviceModal?.();
+                    }}
+                    style={{ color: 'var(--text-secondary)', padding: '8px' }}
+                    title="Connect to a Device (Handoff)"
+                  >
+                    <Radio size={20} />
+                  </button>
                   <button 
                     className="secondary-btn" 
                     onClick={() => toggleFavorite(currentTrack)}

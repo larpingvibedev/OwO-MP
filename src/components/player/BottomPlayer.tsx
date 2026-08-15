@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { 
   Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Heart, ListMusic, Mic2,
-  ChevronDown, ChevronUp
+  ChevronDown, ChevronUp, Radio
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -14,7 +14,11 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
-export function BottomPlayer() {
+interface BottomPlayerProps {
+  onOpenDeviceModal?: () => void;
+}
+
+export function BottomPlayer({ onOpenDeviceModal }: BottomPlayerProps = {}) {
   const navigate = useNavigate();
   const progressBarRef = useRef<HTMLDivElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
@@ -338,6 +342,17 @@ export function BottomPlayer() {
           title="Up Next & Queue"
         >
           <ListMusic size={20} />
+        </button>
+
+        <button 
+          className="secondary-btn" 
+          onClick={() => {
+            if (onOpenDeviceModal) onOpenDeviceModal();
+            else (window as any).__openDeviceModal?.();
+          }}
+          title="Connect to a Device (Spotify Connect Style Handoff)"
+        >
+          <Radio size={19} />
         </button>
         
         {/* Real-Time Draggable Volume Bar */}

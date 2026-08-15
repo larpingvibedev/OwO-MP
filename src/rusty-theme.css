@@ -212,6 +212,9 @@
   border-bottom: 1px solid var(--border-color);
   height: 56px;
   padding: 0 20px;
+  position: sticky;
+  top: 0;
+  z-index: 100 !important;
 }
 
 .theme-rusty .nav-btn {

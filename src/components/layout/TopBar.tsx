@@ -4,9 +4,14 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { searchFreeMusic, fetchArtistProfile, getSearchSuggestions } from '../../services/musicSearch';
 import { SearchDropdown } from '../search/SearchDropdown';
+import { UserProfileButton } from '../auth/UserProfileButton';
 import type { SuggestionEntity, Track } from '../../types';
 
-export function TopBar() {
+interface TopBarProps {
+  onOpenDeviceModal?: () => void;
+}
+
+export function TopBar({ onOpenDeviceModal }: TopBarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { 
@@ -25,8 +30,16 @@ export function TopBar() {
     theme,
     rustyColor,
     setTheme,
-    setRustyColor
+    setRustyColor,
+    downloadingTrackIds,
+    closePlayerDrawer
   } = usePlayerStore();
+
+  const activeDownloadKeys = Object.keys(downloadingTrackIds || {});
+  const activeDownloadCount = activeDownloadKeys.length;
+  const activeDownloadPercent = activeDownloadCount > 0 
+    ? Math.round(activeDownloadKeys.reduce((acc, k) => acc + (downloadingTrackIds[k] || 0), 0) / activeDownloadCount)
+    : 0;
 
   // Handle local query state to avoid lagging the input
   const [localQuery, setLocalQuery] = useState(searchQuery);
@@ -120,6 +133,7 @@ export function TopBar() {
       return;
     }
 
+    closePlayerDrawer();
     setIsDropdownOpen(false);
     setLocalQuery(q);
     setSearchQuery(q);
@@ -162,11 +176,13 @@ export function TopBar() {
 
   // Dropdown query selection
   const handleSelectQuery = (query: string) => {
+    closePlayerDrawer();
     handleSearchSubmit(query);
   };
 
   // Dropdown entity selection (Direct play / navigate)
   const handleSelectEntity = (entity: SuggestionEntity) => {
+    closePlayerDrawer();
     setIsDropdownOpen(false);
     addRecentSearchQuery(entity.title);
 
@@ -314,6 +330,36 @@ export function TopBar() {
           {theme === 'rusty' ? <Terminal size={16} /> : <Sparkles size={16} color="var(--accent-primary)" />}
           <span>{theme === 'rusty' ? 'RUSTY TUI' : 'Rusty UI'}</span>
         </button>
+
+        {/* Global Download Progress Indicator */}
+        {activeDownloadCount > 0 && (
+          <div 
+            onClick={() => {
+              closePlayerDrawer();
+              navigate('/library?tab=downloads');
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '20px',
+              background: 'rgba(255, 0, 127, 0.12)',
+              border: '1px solid var(--accent-primary)',
+              color: 'var(--accent-primary)',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 0 12px rgba(255, 0, 127, 0.25)'
+            }}
+            title="Active offline download in progress (Click to view Library Downloads)"
+          >
+            <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
+            <span>{activeDownloadCount === 1 ? `Saving... ${activeDownloadPercent}%` : `${activeDownloadCount} songs (${activeDownloadPercent}%)`}</span>
+          </div>
+        )}
+
+        <UserProfileButton onOpenDeviceModal={onOpenDeviceModal || (() => {})} />
       </div>
     </header>
   );
