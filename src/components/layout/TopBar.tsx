@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, ChevronLeft, ChevronRight, Loader2, Terminal, Sparkles, Palette, X } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Loader2, X } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { searchFreeMusic, fetchArtistProfile, getSearchSuggestions } from '../../services/musicSearch';
@@ -27,10 +27,6 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
     addRecentSearchedTrack,
     setQueue,
     setIsPlaying,
-    theme,
-    rustyColor,
-    setTheme,
-    setRustyColor,
     downloadingTrackIds,
     closePlayerDrawer
   } = usePlayerStore();
@@ -41,7 +37,6 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
     ? Math.round(activeDownloadKeys.reduce((acc, k) => acc + (downloadingTrackIds[k] || 0), 0) / activeDownloadCount)
     : 0;
 
-  // Handle local query state to avoid lagging the input
   const [localQuery, setLocalQuery] = useState(searchQuery);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [textSuggestions, setTextSuggestions] = useState<string[]>([]);
@@ -50,86 +45,31 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
 
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
-  // Sync when searchQuery is updated from external (e.g. clicking a recent search chip)
   useEffect(() => {
     setLocalQuery(searchQuery);
   }, [searchQuery]);
 
-  // Click outside to close dropdown
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
         setIsDropdownOpen(false);
       }
     };
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setLocalQuery(val);
-    setIsDropdownOpen(true);
+    if (!isDropdownOpen) setIsDropdownOpen(true);
   };
 
-  const handleClear = () => {
-    setLocalQuery('');
-    setSearchQuery('');
-    setSearchResults([]);
-    setArtistProfile(null);
-    setTextSuggestions([]);
-    setEntitySuggestions([]);
-  };
-
-  const handleToggleTheme = () => {
-    setTheme(theme === 'rusty' ? 'default' : 'rusty');
-  };
-
-  const cycleRustyColor = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const colors: Array<'green' | 'amber' | 'cyan' | 'rust'> = ['green', 'amber', 'cyan', 'rust'];
-    const nextIdx = (colors.indexOf(rustyColor) + 1) % colors.length;
-    setRustyColor(colors[nextIdx]);
-  };
-
-  // Live Suggestions Fetcher (Snappy ~100ms debounce)
-  useEffect(() => {
-    if (!localQuery.trim()) {
-      setTextSuggestions([]);
-      setEntitySuggestions([]);
-      setIsSuggestionsLoading(false);
-      return;
-    }
-
-    setIsSuggestionsLoading(true);
-    const controller = new AbortController();
-
-    const sugTimer = setTimeout(async () => {
-      try {
-        const { textSuggestions: ts, entitySuggestions: es } = await getSearchSuggestions(localQuery, controller.signal);
-        if (!controller.signal.aborted) {
-          setTextSuggestions(ts);
-          setEntitySuggestions(es);
-          setIsSuggestionsLoading(false);
-        }
-      } catch (err: any) {
-        if (err?.name !== 'AbortError') {
-          setIsSuggestionsLoading(false);
-        }
-      }
-    }, 100);
-
-    return () => {
-      clearTimeout(sugTimer);
-      controller.abort();
-    };
-  }, [localQuery]);
-
-  // Full Search Submitter (Runs search on Enter or selection, keeping results persistent while typing)
   const handleSearchSubmit = async (queryToSearch?: string) => {
     const q = (queryToSearch !== undefined ? queryToSearch : localQuery).trim();
     if (!q) {
-      handleClear();
+      handleClearSearch();
       return;
     }
 
@@ -145,11 +85,9 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
     }
 
     try {
-      // 1. Run ultra-fast hybrid search (< 350ms)
       const { tracks, profileCandidate } = await searchFreeMusic(q);
       setSearchResults(tracks);
 
-      // 2. Resolve artist profile in parallel
       const qClean = q.toLowerCase();
       const topResultChannelId = profileCandidate?.channelId ||
         tracks.find(t => (t.artist.toLowerCase() === qClean || t.albumArtist?.toLowerCase() === qClean) && t.channelId)?.channelId ||
@@ -164,23 +102,10 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
     }
   };
 
-  // Sync external searchQuery changes (e.g. clicking chip in Discover)
-  const lastExecutedQueryRef = useRef<string>('');
-  useEffect(() => {
-    if (searchQuery && searchQuery !== lastExecutedQueryRef.current) {
-      lastExecutedQueryRef.current = searchQuery;
-      setLocalQuery(searchQuery);
-      handleSearchSubmit(searchQuery);
-    }
-  }, [searchQuery]);
-
-  // Dropdown query selection
-  const handleSelectQuery = (query: string) => {
-    closePlayerDrawer();
-    handleSearchSubmit(query);
+  const handleSelectQuery = (q: string) => {
+    handleSearchSubmit(q);
   };
 
-  // Dropdown entity selection (Direct play / navigate)
   const handleSelectEntity = (entity: SuggestionEntity) => {
     closePlayerDrawer();
     setIsDropdownOpen(false);
@@ -207,49 +132,91 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleSearchSubmit();
-    } else if (e.key === 'Escape') {
-      setIsDropdownOpen(false);
-    }
+  const handleClearSearch = () => {
+    setLocalQuery('');
+    setSearchQuery('');
+    setSearchResults([]);
+    setArtistProfile(null);
+    setTextSuggestions([]);
+    setEntitySuggestions([]);
   };
+
+  useEffect(() => {
+    if (!localQuery.trim()) {
+      setTextSuggestions([]);
+      setEntitySuggestions([]);
+      setIsSuggestionsLoading(false);
+      return;
+    }
+
+    setIsSuggestionsLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const { textSuggestions: texts, entitySuggestions: entities } = await getSearchSuggestions(localQuery);
+        setTextSuggestions(texts);
+        setEntitySuggestions(entities);
+      } catch (err) {
+        console.warn('Suggestions error:', err);
+      } finally {
+        setIsSuggestionsLoading(false);
+      }
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [localQuery]);
 
   return (
     <header className="top-bar">
       <div className="nav-controls">
-        <button className="nav-btn" onClick={() => navigate(-1)} title="Go back">
+        <button 
+          className="nav-btn" 
+          onClick={() => navigate(-1)} 
+          title="Go Back"
+          aria-label="Go Back"
+        >
           <ChevronLeft size={20} />
         </button>
-        <button className="nav-btn" onClick={() => navigate(1)} title="Go forward">
+        <button 
+          className="nav-btn" 
+          onClick={() => navigate(1)} 
+          title="Go Forward"
+          aria-label="Go Forward"
+        >
           <ChevronRight size={20} />
         </button>
       </div>
-      
+
       <div 
         ref={searchContainerRef} 
         className="search-container" 
         style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
       >
         {isSearching || isSuggestionsLoading ? (
-          <Loader2 size={18} className="search-icon animate-spin" style={{ color: 'var(--accent-primary)' }} />
+          <Loader2 size={18} className="search-icon animate-spin" style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
         ) : (
-          <Search size={18} className="search-icon" color="var(--text-secondary)" />
+          <Search size={18} className="search-icon" color="var(--text-secondary)" style={{ flexShrink: 0 }} />
         )}
         <input 
           type="text" 
           className="search-input" 
           placeholder="Search tracks, albums, artists..." 
           value={localQuery}
-          onChange={handleInputChange}
+          onChange={handleSearchChange}
           onFocus={() => setIsDropdownOpen(true)}
-          onKeyDown={handleKeyDown}
-          style={{ paddingRight: (localQuery || searchQuery) ? '36px' : '16px' }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              handleSearchSubmit();
+            } else if (e.key === 'Escape') {
+              setIsDropdownOpen(false);
+            }
+          }}
+          style={{ paddingRight: localQuery ? '36px' : '16px' }}
         />
-        {(localQuery || searchQuery) && (
+        {localQuery && (
           <button
-            onClick={handleClear}
+            type="button"
+            onClick={handleClearSearch}
             title="Clear search"
             style={{
               position: 'absolute',
@@ -262,14 +229,14 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
               borderRadius: '50%',
               backgroundColor: 'rgba(255, 255, 255, 0.08)',
               transition: 'all 0.2s',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              border: 'none'
             }}
           >
             <X size={14} />
           </button>
         )}
 
-        {/* YouTube Music Style Search Dropdown Overlay */}
         <SearchDropdown
           isOpen={isDropdownOpen}
           query={localQuery}
@@ -284,54 +251,7 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
         />
       </div>
 
-      <div className="topbar-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        {theme === 'rusty' && (
-          <button 
-            className="theme-color-btn"
-            onClick={cycleRustyColor}
-            title={`Current Accent: ${rustyColor.toUpperCase()} (Click to cycle)`}
-            style={{
-              padding: '6px 10px',
-              fontSize: '0.75rem',
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              borderRadius: '4px',
-              border: '1px solid var(--accent-primary)',
-              color: 'var(--accent-primary)',
-              background: 'rgba(0,0,0,0.4)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            <Palette size={14} />
-            <span>[{rustyColor}]</span>
-          </button>
-        )}
-
-        <button 
-          className={`theme-toggle-btn ${theme === 'rusty' ? 'active-rusty' : ''}`}
-          onClick={handleToggleTheme}
-          title={theme === 'rusty' ? 'Switch to Modern UI' : 'Switch to Rusty TUI (Retro / Hacker)'}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '6px 12px',
-            borderRadius: theme === 'rusty' ? '0px' : '20px',
-            border: '1px solid var(--border-color)',
-            backgroundColor: theme === 'rusty' ? 'var(--accent-primary)' : 'var(--bg-card)',
-            color: theme === 'rusty' ? '#000000' : 'var(--text-primary)',
-            fontSize: '0.8rem',
-            fontWeight: 600,
-            transition: 'all 0.2s'
-          }}
-        >
-          {theme === 'rusty' ? <Terminal size={16} /> : <Sparkles size={16} color="var(--accent-primary)" />}
-          <span>{theme === 'rusty' ? 'RUSTY TUI' : 'Rusty UI'}</span>
-        </button>
-
-        {/* Global Download Progress Indicator */}
+      <div className="topbar-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '12px' }}>
         {activeDownloadCount > 0 && (
           <div 
             onClick={() => {

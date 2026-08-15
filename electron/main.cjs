@@ -12,6 +12,7 @@ app.commandLine.appendSwitch('disable-features', 'PreloadMediaEngagementData,Aut
 let mainWindow = null;
 let proxyPort = 41721;
 let cachedVisitorSession = null;
+const resolvedAudioCache = new Map(); // videoId -> { audioInfo: { url, mimeType }, time: number }
 
 async function getVisitorSession() {
   if (cachedVisitorSession && Date.now() - cachedVisitorSession.time < 3600000) {
@@ -21,7 +22,8 @@ async function getVisitorSession() {
     const res = await fetch('https://www.youtube.com/', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
+      },
+      signal: AbortSignal.timeout(3000)
     });
     const html = await res.text();
     const visitorMatch = html.match(/"VISITOR_DATA":\s*"([^"]+)"/) || html.match(/"visitorData":\s*"([^"]+)"/);
@@ -36,7 +38,18 @@ async function getVisitorSession() {
   }
 }
 
+// Pre-warm visitor session immediately
+getVisitorSession().catch(() => {});
+
 async function resolveBestAudioUrl(videoId, session) {
+  if (!videoId) return null;
+
+  // 1. Instant Cache hit (Valid for 3 hours)
+  const cached = resolvedAudioCache.get(videoId);
+  if (cached && (Date.now() - cached.time < 10800000)) {
+    return cached.audioInfo;
+  }
+
   const clients = [
     { clientName: 'ANDROID_VR', clientVersion: '1.60.19', deviceModel: 'Quest 3', hl: 'en', gl: 'US' },
     { clientName: 'ANDROID', clientVersion: '19.29.35', hl: 'en', gl: 'US' },
@@ -62,7 +75,7 @@ async function resolveBestAudioUrl(videoId, session) {
           },
           videoId: videoId
         }),
-        signal: AbortSignal.timeout(4000)
+        signal: AbortSignal.timeout(2800)
       });
 
       if (playerRes.ok) {
@@ -73,12 +86,16 @@ async function resolveBestAudioUrl(videoId, session) {
         if (formats.length > 0) {
           // Prioritize M4A / AAC format for standard music player compatibility
           const m4aFormats = formats.filter(f => f.mimeType?.includes('audio/mp4') || f.mimeType?.includes('mp4a'));
+          let audioInfo = null;
           if (m4aFormats.length > 0) {
             m4aFormats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-            return { url: m4aFormats[0].url, mimeType: 'audio/mp4' };
+            audioInfo = { url: m4aFormats[0].url, mimeType: 'audio/mp4' };
+          } else {
+            formats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+            audioInfo = { url: formats[0].url, mimeType: formats[0].mimeType || 'audio/mp4' };
           }
-          formats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-          return { url: formats[0].url, mimeType: formats[0].mimeType || 'audio/mp4' };
+          resolvedAudioCache.set(videoId, { audioInfo, time: Date.now() });
+          return audioInfo;
         }
       }
     } catch (e) {}
@@ -93,18 +110,22 @@ async function resolveBestAudioUrl(videoId, session) {
 
   for (const inst of publicInstances) {
     try {
-      const res = await fetch(`${inst}/streams/${videoId}`, { signal: AbortSignal.timeout(3500) });
+      const res = await fetch(`${inst}/streams/${videoId}`, { signal: AbortSignal.timeout(2500) });
       if (res.ok) {
         const data = await res.json();
         const audios = (data.audioStreams || []).filter(f => Boolean(f.url));
         if (audios.length > 0) {
           const m4aAudios = audios.filter(f => f.mimeType?.includes('audio/mp4') || f.format === 'M4A');
+          let audioInfo = null;
           if (m4aAudios.length > 0) {
             m4aAudios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-            return { url: m4aAudios[0].url, mimeType: 'audio/mp4' };
+            audioInfo = { url: m4aAudios[0].url, mimeType: 'audio/mp4' };
+          } else {
+            audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+            audioInfo = { url: audios[0].url, mimeType: audios[0].mimeType || 'audio/mp4' };
           }
-          audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-          return { url: audios[0].url, mimeType: audios[0].mimeType || 'audio/mp4' };
+          resolvedAudioCache.set(videoId, { audioInfo, time: Date.now() });
+          return audioInfo;
         }
       }
     } catch (e) {}
@@ -119,6 +140,7 @@ function startInternalProxyServer() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);

@@ -15,8 +15,7 @@ interface MainLayoutProps {
 
 export function MainLayout({ onOpenDeviceModal }: MainLayoutProps) {
   const location = useLocation();
-  const { theme, rustyColor, isPlayerDrawerOpen, closePlayerDrawer } = usePlayerStore();
-  const themeClass = theme === 'rusty' ? `theme-rusty rusty-${rustyColor}` : 'theme-default';
+  const { isPlayerDrawerOpen, closePlayerDrawer } = usePlayerStore();
 
   // Universally close the full viewer player drawer whenever any navigation occurs
   useEffect(() => {
@@ -26,7 +25,7 @@ export function MainLayout({ onOpenDeviceModal }: MainLayoutProps) {
   }, [location.pathname, location.search]);
 
   return (
-    <div className={`app-container ${themeClass}`}>
+    <div className="app-container">
       {/* Invisible HTML5 Audio Handler */}
       <AudioPlayer />
 

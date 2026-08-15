@@ -3,7 +3,7 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { fetchAlbumDetails, fetchArtistProfileFromYTM, cleanGoogleImageUrl, resolveArtistAvatar } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { isSameTrack } from '../utils/trackUtils';
-import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check, Bookmark, BookmarkCheck, Download, HardDrive } from 'lucide-react';
+import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check, Download, HardDrive } from 'lucide-react';
 import type { AlbumDetail, Track, Album as ReleaseItem } from '../types';
 
 function formatTime(seconds: number): string {
@@ -139,7 +139,6 @@ export function Album() {
   const isCurrentReleasePlaying = isPlaying && album.tracks.some(t => isSameTrack(t, currentTrack));
   const totalSeconds = album.tracks.reduce((acc, t) => acc + (t.duration || 180), 0);
 
-  const isPrimaryFavorited = album.tracks.length > 0 && favorites.some(f => f.id === album.tracks[0]?.id);
   const isSavedToLibrary = Boolean(album && savedAlbums.some(
     a => a.id === album.id || (a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase())
   ));
@@ -377,32 +376,7 @@ export function Album() {
               </button>
             )}
 
-            {/* Favorite Release Button */}
-            {album.tracks.length > 0 && (
-              <button 
-                onClick={() => toggleFavorite(album.tracks[0])}
-                title={isPrimaryFavorited ? "Remove from Favorites" : "Add to Favorites"}
-                style={{ 
-                  width: '44px',
-                  height: '44px',
-                  borderRadius: '50%',
-                  backgroundColor: 'rgba(255,255,255,0.06)',
-                  border: '1px solid var(--border-color)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  color: isPrimaryFavorited ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                  transition: 'transform 0.15s, color 0.15s'
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.08)'}
-                onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-              >
-                <Heart size={18} fill={isPrimaryFavorited ? "currentColor" : "none"} />
-              </button>
-            )}
-
-            {/* Save Album to Library Button */}
+            {/* Save Album to Library / Favorite Release Button */}
             <button 
               onClick={() => toggleSaveAlbum({
                 id: album.id,
@@ -430,7 +404,7 @@ export function Album() {
               onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.08)'}
               onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
             >
-              {isSavedToLibrary ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
+              <Heart size={18} fill={isSavedToLibrary ? "currentColor" : "none"} />
             </button>
 
             {/* Download Entire Album Button */}

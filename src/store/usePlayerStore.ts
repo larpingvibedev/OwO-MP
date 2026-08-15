@@ -30,9 +30,7 @@ interface PlayerState {
   artistProfile: ArtistProfile | null;
   isSearching: boolean;
   
-  // Appearance & Navigation Layout
-  theme: 'default' | 'rusty';
-  rustyColor: 'green' | 'amber' | 'cyan' | 'rust';
+  // Navigation Layout
   isSidebarCollapsed: boolean;
   libraryFilter: 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'downloads';
   
@@ -77,8 +75,6 @@ interface PlayerState {
   hideToast: () => void;
 
   // Actions
-  setTheme: (theme: 'default' | 'rusty') => void;
-  setRustyColor: (color: 'green' | 'amber' | 'cyan' | 'rust') => void;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setLibraryFilter: (filter: 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'downloads') => void;
@@ -186,8 +182,6 @@ export const usePlayerStore = create<PlayerState>()(
   downloadingTrackIds: {},
   isOfflineOnly: false,
 
-  theme: 'default',
-  rustyColor: 'green',
   isSidebarCollapsed: false,
   libraryFilter: 'all',
   
@@ -207,8 +201,6 @@ export const usePlayerStore = create<PlayerState>()(
   showToast: (message: string) => set({ toastMessage: message }),
   hideToast: () => set({ toastMessage: null }),
 
-  setTheme: (theme) => set({ theme }),
-  setRustyColor: (rustyColor) => set({ rustyColor }),
   toggleSidebar: () => set((state) => ({ isSidebarCollapsed: !state.isSidebarCollapsed })),
   setSidebarCollapsed: (isSidebarCollapsed) => set({ isSidebarCollapsed }),
   setLibraryFilter: (libraryFilter) => set({ libraryFilter }),
@@ -1076,8 +1068,6 @@ export const usePlayerStore = create<PlayerState>()(
     {
       name: 'owo-music-player-storage',
       partialize: (state) => ({
-        theme: state.theme,
-        rustyColor: state.rustyColor,
         favorites: state.favorites,
         playlists: state.playlists,
         volume: state.volume,

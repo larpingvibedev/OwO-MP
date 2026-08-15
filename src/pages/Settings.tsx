@@ -5,9 +5,6 @@ import {
   CheckCircle2, 
   ShieldCheck, 
   Database, 
-  Terminal, 
-  Palette, 
-  Sparkles,
   History,
   RotateCcw,
   Trash2,
@@ -67,10 +64,6 @@ export function Settings() {
   };
 
   const { 
-    theme, 
-    rustyColor, 
-    setTheme, 
-    setRustyColor,
     clearListeningHistoryAndPreferences,
     clearRecentSearchQueries,
     clearRecentSearchedTracks,
@@ -88,13 +81,6 @@ export function Settings() {
 
   const historyCount = Object.keys(playHistory || {}).length;
   const searchCount = (recentSearchQueries || []).length;
-
-  const colorPresets: Array<{ id: 'green' | 'amber' | 'cyan' | 'rust'; label: string; hex: string }> = [
-    { id: 'green', label: 'Matrix CRT Green', hex: '#00ff66' },
-    { id: 'amber', label: 'Phosphor Amber', hex: '#ffb000' },
-    { id: 'cyan', label: 'Cyberpunk Cyan', hex: '#00e5ff' },
-    { id: 'rust', label: 'Classic Rust Orange', hex: '#ff5722' },
-  ];
 
   const handleClearHistory = () => {
     clearListeningHistoryAndPreferences();
@@ -474,111 +460,7 @@ export function Settings() {
         </div>
 
         {/* ========================================================================= */}
-        {/* 2. APPEARANCE & THEME MODE                                                */}
-        {/* ========================================================================= */}
-        <div style={{
-          backgroundColor: 'var(--bg-card)',
-          borderRadius: '12px',
-          padding: '24px',
-          border: '1px solid var(--border-color)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '1.1rem', marginBottom: '4px' }}>
-            <Palette size={20} color="var(--accent-primary)" />
-            <span>Interface Mode & Theme</span>
-          </div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
-            Switch between the modern player design and the retro, hacker-style "Rusty" TUI inspired by terminal music players.
-          </p>
-
-          <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setTheme('default')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '10px 18px',
-                borderRadius: '6px',
-                border: `2px solid ${theme === 'default' ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                backgroundColor: theme === 'default' ? 'rgba(52, 152, 219, 0.15)' : 'var(--bg-main)',
-                color: theme === 'default' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontWeight: 600,
-                fontSize: '0.9rem',
-                cursor: 'pointer'
-              }}
-            >
-              <Sparkles size={18} color="var(--accent-primary)" />
-              <span>Modern Sleek (Default)</span>
-            </button>
-
-            <button
-              onClick={() => setTheme('rusty')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '10px 18px',
-                borderRadius: '6px',
-                border: `2px solid ${theme === 'rusty' ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                backgroundColor: theme === 'rusty' ? 'rgba(0, 255, 102, 0.15)' : 'var(--bg-main)',
-                color: theme === 'rusty' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontWeight: 600,
-                fontSize: '0.9rem',
-                cursor: 'pointer'
-              }}
-            >
-              <Terminal size={18} color="var(--accent-primary)" />
-              <span>Rusty TUI (Retro / Hacker)</span>
-            </button>
-          </div>
-
-          {theme === 'rusty' && (
-            <div style={{
-              paddingTop: '16px',
-              borderTop: '1px dashed var(--border-color)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px'
-            }}>
-              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                Terminal Phosphor Accent Color:
-              </span>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                {colorPresets.map(preset => (
-                  <button
-                    key={preset.id}
-                    onClick={() => setRustyColor(preset.id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '6px 14px',
-                      borderRadius: '4px',
-                      border: `1px solid ${rustyColor === preset.id ? preset.hex : 'var(--border-color)'}`,
-                      backgroundColor: rustyColor === preset.id ? 'rgba(0,0,0,0.6)' : 'var(--bg-main)',
-                      color: rustyColor === preset.id ? preset.hex : 'var(--text-secondary)',
-                      fontSize: '0.8rem',
-                      fontWeight: 600,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <span style={{
-                      width: '10px',
-                      height: '10px',
-                      borderRadius: '50%',
-                      backgroundColor: preset.hex,
-                      boxShadow: `0 0 6px ${preset.hex}`
-                    }} />
-                    <span>{preset.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ========================================================================= */}
-        {/* 3. MULTI-DEVICE SYNC                                                      */}
+        {/* 2. MULTI-DEVICE SYNC                                                      */}
         {/* ========================================================================= */}
         <div style={{
           backgroundColor: 'var(--bg-card)',

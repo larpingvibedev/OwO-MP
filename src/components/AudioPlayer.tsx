@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { 
   getDirectYouTubeId,
@@ -32,6 +32,7 @@ export const AudioPlayer = () => {
   const trackStartTimeRef = useRef<number>(0);
   const trackFailedCountRef = useRef<Map<string, number>>(new Map());
   const isOfflineTrackRef = useRef<boolean>(false);
+  const [useIframeFallback, setUseIframeFallback] = useState<boolean>(false);
 
   const {
     currentTrack,
@@ -60,9 +61,9 @@ export const AudioPlayer = () => {
 
   const isYouTubeTrack = (t: typeof currentTrack) => {
     if (!t) return false;
-    if (isElectron) return false; // Native Electron uses direct HTML5 stream
     if (isOfflineTrackRef.current) return false;
     if (t.resolvedStreamUrl?.startsWith('http') || t.resolvedStreamUrl?.startsWith('blob:')) return false;
+    if (isElectron && !useIframeFallback) return false;
     return true;
   };
 
@@ -378,6 +379,7 @@ export const AudioPlayer = () => {
       activeLoadedTrackIdRef.current = currentTrack.id;
       isSwitchingRef.current = true;
       trackStartTimeRef.current = Date.now();
+      setUseIframeFallback(false);
 
       recordPlay(currentTrack);
 
@@ -432,9 +434,12 @@ export const AudioPlayer = () => {
       }
 
       if (isCancelled) return;
+      if (videoId) {
+        currentVideoIdRef.current = videoId;
+      }
 
-      // In Electron Desktop, stream directly via internal proxy to native HTML5 <audio>
-      if (isElectron) {
+      // In Electron Desktop, try native high-performance stream first
+      if (isElectron && !useIframeFallback) {
         if (videoId && audioRef.current) {
           try {
             const port = (await (window as any).electronAPI?.getProxyPort?.()) || 41721;
@@ -444,26 +449,34 @@ export const AudioPlayer = () => {
             audioRef.current.volume = volume;
             audioEngine.resume();
             if (isPlaying) {
-              audioRef.current.play().catch(console.warn);
+              audioRef.current.play().catch((playErr) => {
+                console.warn('Native audio play notice, buffering/fallback:', playErr);
+              });
             }
+            isSwitchingRef.current = false;
+            return;
           } catch (err) {
-            console.warn('Native audio play error:', err);
+            console.warn('Native audio stream connection error, falling back to YouTube engine:', err);
+            setUseIframeFallback(true);
           }
+        } else if (videoId) {
+          setUseIframeFallback(true);
         }
-        isSwitchingRef.current = false;
-        return;
       }
 
       if (videoId) {
         // Play via YouTube Iframe continuously without mid-playback stream swapping
         if (ytReadyRef.current && ytPlayerRef.current?.loadVideoById) {
-          if (currentVideoIdRef.current !== videoId) {
+          if (currentVideoIdRef.current !== videoId || useIframeFallback) {
             currentVideoIdRef.current = videoId;
             try {
               ytPlayerRef.current.loadVideoById({
                 videoId,
                 startSeconds: 0
               });
+              if (isPlaying) {
+                ytPlayerRef.current.playVideo();
+              }
             } catch (err) {
               console.warn('Error loading video by ID:', err);
             }
@@ -534,6 +547,7 @@ export const AudioPlayer = () => {
       {/* HTML5 Audio Player for Direct Full-Length Streams */}
       <audio
         ref={audioRef}
+        crossOrigin="anonymous"
         preload="auto"
         onCanPlay={() => {
           if (usePlayerStore.getState().isPlaying && audioRef.current && audioRef.current.paused) {
@@ -543,6 +557,24 @@ export const AudioPlayer = () => {
         }}
         onPlaying={() => {
           audioEngine.resume();
+        }}
+        onError={(e) => {
+          console.warn('HTML5 Audio stream error, executing seamless YouTube engine fallback:', e);
+          const vid = currentVideoIdRef.current || getDirectYouTubeId(currentTrack);
+          if (vid && ytReadyRef.current && ytPlayerRef.current?.loadVideoById) {
+            setUseIframeFallback(true);
+            try {
+              ytPlayerRef.current.loadVideoById({
+                videoId: vid,
+                startSeconds: 0
+              });
+              if (usePlayerStore.getState().isPlaying) {
+                ytPlayerRef.current.playVideo();
+              }
+            } catch (err) {
+              console.warn('Fallback play error:', err);
+            }
+          }
         }}
         onTimeUpdate={() => {
           if (audioRef.current && !isYouTubeTrack(currentTrack)) {

@@ -29,9 +29,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const {
     isPlaying: storeIsPlaying,
     currentTrack,
-    volume,
-    theme,
-    rustyColor
+    volume
   } = usePlayerStore();
 
   const isPlaying = propIsPlaying !== undefined ? propIsPlaying : storeIsPlaying;
@@ -60,12 +58,6 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const volumeRef = useRef(volume);
   volumeRef.current = volume;
 
-  const themeRef = useRef(theme);
-  themeRef.current = theme;
-
-  const rustyColorRef = useRef(rustyColor);
-  rustyColorRef.current = rustyColor;
-
   useEffect(() => {
     barsDataRef.current = new Array(barCount).fill(3);
     peakDataRef.current = new Array(barCount).fill(3);
@@ -84,8 +76,6 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       lastTimestamp = now;
 
       const activeIsPlaying = isPlayingRef.current;
-      const curTheme = themeRef.current;
-      const curRustyColor = rustyColorRef.current;
       const curVol = volumeRef.current;
       const activePalette = paletteRef.current;
 
@@ -109,21 +99,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       const barWidth = Math.max(3, totalBarWidth - 3);
       const gap = totalBarWidth - barWidth;
 
-      // Color scheme based on active theme & Dynamic Album Cover Palette
+      // Color scheme based on Dynamic Album Cover Palette
       let gradient: CanvasGradient;
-      if (curTheme === 'rusty') {
-        gradient = ctx.createLinearGradient(0, h, 0, 0);
-        if (curRustyColor === 'green') {
-          gradient.addColorStop(0, '#00ff66');
-          gradient.addColorStop(1, '#00ffcc');
-        } else if (curRustyColor === 'amber') {
-          gradient.addColorStop(0, '#ff9900');
-          gradient.addColorStop(1, '#ffcc00');
-        } else {
-          gradient.addColorStop(0, '#00ccff');
-          gradient.addColorStop(1, '#33ffff');
-        }
-      } else if (activePalette) {
+      if (activePalette) {
         // Dynamic Album Art Palette (Adaptive Vibrant Color Gradient)
         gradient = ctx.createLinearGradient(0, h, 0, 0);
         gradient.addColorStop(0, activePalette.secondary); // Deep rich bottom accent

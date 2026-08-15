@@ -57,7 +57,7 @@ class AudioEngineManager {
    * Resumes AudioContext if suspended by browser autoplay policy.
    */
   public resume(): void {
-    if (this.audioCtx && this.audioCtx.state === 'suspended') {
+    if (this.audioCtx && (this.audioCtx.state === 'suspended' || this.audioCtx.state === 'interrupted')) {
       this.audioCtx.resume().catch(() => {});
     }
   }
