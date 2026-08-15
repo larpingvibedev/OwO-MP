@@ -11,7 +11,11 @@ import {
   RotateCcw,
   Trash2,
   AlertTriangle,
-  Check
+  Check,
+  Ban,
+  UserX,
+  Sliders,
+  X
 } from 'lucide-react';
 import { SyncModal } from '../components/SyncModal';
 import { usePlayerStore } from '../store/usePlayerStore';
@@ -30,6 +34,11 @@ export function Settings() {
     clearListeningHistoryAndPreferences,
     clearRecentSearchQueries,
     clearRecentSearchedTracks,
+    dislikedTracks,
+    blockedArtists,
+    unmarkTrackNotInterested,
+    unblockArtist,
+    clearDislikedAndBlocked,
     showToast,
     playHistory,
     recentSearchQueries
@@ -255,6 +264,171 @@ export function Settings() {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* ========================================================================= */}
+        {/* 1.5. ALGORITHM TUNING: NOT INTERESTED & BLOCKED ARTISTS                   */}
+        {/* ========================================================================= */}
+        <div style={{
+          backgroundColor: 'var(--bg-card)',
+          borderRadius: '12px',
+          padding: '24px',
+          border: '1px solid var(--border-color)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, fontSize: '1.15rem' }}>
+              <Sliders size={22} color="var(--accent-primary)" />
+              <span>Algorithm Tuning & Blocked Preferences</span>
+            </div>
+            <span style={{ 
+              fontSize: '0.75rem', 
+              padding: '3px 10px', 
+              borderRadius: '12px', 
+              backgroundColor: 'rgba(231, 76, 60, 0.12)', 
+              color: '#e74c3c',
+              fontWeight: 600
+            }}>
+              {(dislikedTracks?.length || 0) + (blockedArtists?.length || 0)} Excluded
+            </span>
+          </div>
+
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '20px', lineHeight: '1.45' }}>
+            Manage the songs and artists you've marked as "Not interested" or "Don't recommend artist". These are strictly excluded from all autoplay streams, Up Next queues, radio mixes, and discovery carousels.
+          </p>
+
+          {/* Blocked Artists Section */}
+          <div style={{ marginBottom: '18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              <UserX size={16} color="#e74c3c" />
+              <span>Blocked Artists ({blockedArtists?.length || 0})</span>
+            </div>
+
+            {(!blockedArtists || blockedArtists.length === 0) ? (
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '8px 12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
+                No artists blocked. When you choose "Don't recommend artist" on a track, they'll show up here.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {blockedArtists.map(artist => (
+                  <div 
+                    key={artist}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '6px 12px',
+                      backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                      border: '1px solid rgba(231, 76, 60, 0.3)',
+                      borderRadius: '20px',
+                      fontSize: '0.82rem',
+                      color: 'var(--text-primary)'
+                    }}
+                  >
+                    <span>{artist}</span>
+                    <button
+                      onClick={() => unblockArtist(artist)}
+                      title={`Unblock ${artist}`}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#e74c3c',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '50%'
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Not Interested Tracks Section */}
+          <div style={{ marginBottom: '18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              <Ban size={16} color="#e74c3c" />
+              <span>Not Interested Tracks ({dislikedTracks?.length || 0})</span>
+            </div>
+
+            {(!dislikedTracks || dislikedTracks.length === 0) ? (
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '8px 12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
+                No songs hidden. When you choose "Not interested" on a track, it will be listed here.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {dislikedTracks.map(track => (
+                  <div 
+                    key={track.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '6px 12px',
+                      backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '20px',
+                      fontSize: '0.82rem',
+                      color: 'var(--text-primary)',
+                      maxWidth: '320px'
+                    }}
+                  >
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <strong>{track.title}</strong> &bull; {track.artist}
+                    </span>
+                    <button
+                      onClick={() => unmarkTrackNotInterested(track.id)}
+                      title="Restore song recommendations"
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '50%',
+                        flexShrink: 0
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Reset all Blocklists Button if anything is blocked */}
+          {((blockedArtists && blockedArtists.length > 0) || (dislikedTracks && dislikedTracks.length > 0)) && (
+            <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                onClick={clearDislikedAndBlocked}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '7px 14px',
+                  borderRadius: '16px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-secondary)',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <Trash2 size={14} />
+                <span>Reset All Blocklists</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ========================================================================= */}

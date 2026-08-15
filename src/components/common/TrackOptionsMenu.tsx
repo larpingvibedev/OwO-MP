@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { 
   MoreVertical, Radio, ListPlus, Plus, Heart, FolderPlus, 
   User, Disc, Info, Share2, Check, ExternalLink, Music2,
-  Trash2, X
+  Trash2, X, Ban, UserX
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -34,6 +34,8 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     addToPlaylist,
     createPlaylistWithTrack,
     generateRadio,
+    markTrackNotInterested,
+    blockArtist,
     showToast,
     closePlayerDrawer
   } = usePlayerStore();
@@ -194,6 +196,18 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     e.stopPropagation();
     setIsOpen(false);
     setShowDetailsModal(true);
+  };
+
+  const handleNotInterested = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsOpen(false);
+    markTrackNotInterested(track);
+  };
+
+  const handleDontRecommendArtist = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsOpen(false);
+    blockArtist(track.artist);
   };
 
   const handleSaveToPlaylist = (playlistId: string) => {
@@ -377,6 +391,20 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
               <button className="track-menu-item" onClick={handleShare}>
                 <Share2 size={16} />
                 <span>Share</span>
+              </button>
+
+              <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
+
+              {/* 11. Not interested */}
+              <button className="track-menu-item" onClick={handleNotInterested}>
+                <Ban size={16} color="#e74c3c" />
+                <span>Not interested</span>
+              </button>
+
+              {/* 12. Don't recommend artist */}
+              <button className="track-menu-item" onClick={handleDontRecommendArtist}>
+                <UserX size={16} color="#e74c3c" />
+                <span>Don't recommend artist</span>
               </button>
             </div>
           ) : (

@@ -54,6 +54,8 @@ export function Dashboard() {
     favorites, 
     playlists, 
     currentTrack, 
+    dislikedTracks,
+    blockedArtists,
     setQueue, 
     setIsPlaying,
     toggleFavorite,
@@ -110,8 +112,17 @@ export function Dashboard() {
   }, [playHistory]);
 
 
-  // 1. Get Speed Dial & Quick Picks tracks (deduplicated by Title + Artist)
-  const historyArray = Object.values(playHistory || {});
+  // Helper to filter out not interested / blocked tracks and artists
+  const isTrackBlocked = (t: Track) => {
+    if (!t) return true;
+    const aLower = (t.artist || '').toLowerCase().trim();
+    const isArtistBlocked = (blockedArtists || []).some(b => b && (aLower === b.toLowerCase() || aLower.includes(b.toLowerCase())));
+    const isDisliked = (dislikedTracks || []).some(d => isSameTrack(d, t));
+    return isArtistBlocked || isDisliked;
+  };
+
+  // 1. Get Speed Dial & Quick Picks tracks (deduplicated by Title + Artist, excluding blocked items)
+  const historyArray = Object.values(playHistory || {}).filter(h => h.track && !isTrackBlocked(h.track));
   const uniqueHistoryMap = new Map<string, { track: Track; playCount: number; lastPlayedAt: number }>();
   historyArray.forEach(h => {
     if (!h.track?.title || !h.track?.artist) return;
@@ -134,7 +145,7 @@ export function Dashboard() {
     .map(h => h.track);
 
   // Fallback speed dial if empty
-  const defaultSpeedDial = speedDialTracks.length > 0 ? speedDialTracks : favorites.slice(0, 9);
+  const defaultSpeedDial = speedDialTracks.length > 0 ? speedDialTracks : favorites.filter(t => !isTrackBlocked(t)).slice(0, 9);
 
   // 2. Get Quick Picks (recent listening habits)
   const quickPicksTracks = Array.from(uniqueHistoryMap.values())
@@ -143,14 +154,14 @@ export function Dashboard() {
     .map(h => h.track);
 
   // Fallback for quick picks
-  const displayQuickPicks = quickPicksTracks.length > 0 ? quickPicksTracks : favorites;
+  const displayQuickPicks = quickPicksTracks.length > 0 ? quickPicksTracks : favorites.filter(t => !isTrackBlocked(t));
 
   // 3. Universal User Seed Resolution (History -> Favorites -> Playlists -> Current -> Discovery)
   const allUserTracks: Track[] = [
     ...historyArray.map(h => h.track),
-    ...favorites,
-    ...playlists.flatMap(p => p.tracks),
-    ...(currentTrack ? [currentTrack] : [])
+    ...favorites.filter(t => !isTrackBlocked(t)),
+    ...playlists.flatMap(p => p.tracks).filter(t => !isTrackBlocked(t)),
+    ...(currentTrack && !isTrackBlocked(currentTrack) ? [currentTrack] : [])
   ];
 
   const allUserArtists = Array.from(
@@ -164,6 +175,7 @@ export function Dashboard() {
   // 4. Get Forgotten Favorites (favorites not played in the last 7 days)
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const forgottenFavorites = favorites.filter(fav => {
+    if (isTrackBlocked(fav)) return false;
     const historyItem = playHistory[fav.id];
     if (!historyItem) return true; // Never played but favorited!
     return historyItem.lastPlayedAt < sevenDaysAgo;
@@ -494,12 +506,12 @@ export function Dashboard() {
       )}
 
       {/* Dynamic Recommendation: Similar to [Recent Artist] */}
-      {recommendedTracks.length > 0 && (
+      {recommendedTracks.filter(t => !isTrackBlocked(t)).length > 0 && (
         <Carousel 
           title={`More by ${recommendedArtist}`}
           subtitle="Based on your recent listening history"
           icon={<Music size={20} color="var(--accent-primary)" />}
-          items={recommendedTracks}
+          items={recommendedTracks.filter(t => !isTrackBlocked(t))}
           renderItem={(track) => (
             <div 
               key={`rec-${track.id}`}
@@ -532,12 +544,12 @@ export function Dashboard() {
       )}
 
       {/* Dynamic Recommendation: Covers and Remixes */}
-      {coversAndRemixes.length > 0 && (
+      {coversAndRemixes.filter(t => !isTrackBlocked(t)).length > 0 && (
         <Carousel 
           title="Covers & Remixes"
           subtitle="Alternative versions of tracks you love"
           icon={<Sparkles size={20} color="var(--accent-primary)" />}
-          items={coversAndRemixes}
+          items={coversAndRemixes.filter(t => !isTrackBlocked(t))}
           renderItem={(track) => (
             <div 
               key={`cover-${track.id}`}

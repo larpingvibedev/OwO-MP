@@ -42,6 +42,8 @@ export const AudioPlayer = () => {
     repeatMode,
     favorites,
     playHistory,
+    dislikedTracks,
+    blockedArtists,
     nextTrack,
     prevTrack,
     setIsPlaying,
@@ -420,7 +422,7 @@ export const AudioPlayer = () => {
         const currentRecommended = usePlayerStore.getState().recommendedUpNext;
         if (!currentRecommended || currentRecommended.length < 3) {
           const queuedIds = new Set(activeQueue.map(t => t.id));
-          fetchUpNextMix(activeQueue.length > 0 ? activeQueue : currentTrack, favorites, playHistory, queuedIds)
+          fetchUpNextMix(activeQueue.length > 0 ? activeQueue : currentTrack, favorites, playHistory, queuedIds, dislikedTracks, blockedArtists)
             .then(mix => {
               if (!isCancelled && mix && mix.length > 0) {
                 setRecommendedUpNext(mix);

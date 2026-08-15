@@ -54,6 +54,10 @@ interface PlayerState {
   recentSearchQueries: string[];
   recentSearchedTracks: Track[];
 
+  // Algorithmic Preferences & Blocklists (Not Interested / Don't Recommend)
+  dislikedTracks: Track[];
+  blockedArtists: string[];
+
   // Toast Notifications
   toastMessage: string | null;
   showToast: (message: string) => void;
@@ -105,6 +109,12 @@ interface PlayerState {
   removeRecentSearchedTrack: (trackId: string) => void;
   clearRecentSearchedTracks: () => void;
   clearListeningHistoryAndPreferences: () => void;
+
+  markTrackNotInterested: (track: Track) => void;
+  unmarkTrackNotInterested: (trackId: string) => void;
+  blockArtist: (artistName: string) => void;
+  unblockArtist: (artistName: string) => void;
+  clearDislikedAndBlocked: () => void;
   
   toggleFavorite: (track: Track) => void;
   toggleSaveAlbum: (album: { id: string; name: string; artist: string; cover: string; releaseDate?: string; trackCount?: number; artistId?: string | number }) => void;
@@ -146,6 +156,9 @@ export const usePlayerStore = create<PlayerState>()(
   
   recentSearchQueries: [],
   recentSearchedTracks: [],
+
+  dislikedTracks: [],
+  blockedArtists: [],
 
   theme: 'default',
   rustyColor: 'green',
@@ -263,7 +276,7 @@ export const usePlayerStore = create<PlayerState>()(
 
     // Synthesize multi-track radio mix for this entire queue session
     const queuedIds = new Set(tracks.map(t => t.id));
-    fetchUpNextMix(tracks, get().favorites, get().playHistory, queuedIds)
+    fetchUpNextMix(tracks, get().favorites, get().playHistory, queuedIds, get().dislikedTracks, get().blockedArtists)
       .then(mix => {
         if (mix && mix.length > 0) {
           set({ recommendedUpNext: mix });
@@ -367,7 +380,7 @@ export const usePlayerStore = create<PlayerState>()(
         if (remainingMix.length < 5) {
           const queuedIds = new Set(newQueue.map(t => t.id));
           const recentSeeds = newQueue.slice(-4);
-          fetchUpNextMix(recentSeeds, favorites, playHistory, queuedIds)
+          fetchUpNextMix(recentSeeds, favorites, playHistory, queuedIds, get().dislikedTracks, get().blockedArtists)
             .then(fresh => {
               if (fresh && fresh.length > 0) {
                 const existingIds = new Set([...newQueue, ...remainingMix].map(t => t.id));
@@ -385,7 +398,7 @@ export const usePlayerStore = create<PlayerState>()(
         try {
           const queuedIds = new Set(activeQueue.map(t => t.id));
           const seedContext = activeQueue.length > 0 ? activeQueue.slice(-4) : currentTrack;
-          const freshMix = await fetchUpNextMix(seedContext, favorites, playHistory, queuedIds);
+          const freshMix = await fetchUpNextMix(seedContext, favorites, playHistory, queuedIds, get().dislikedTracks, get().blockedArtists);
           if (freshMix && freshMix.length > 0) {
             const autoTrack = freshMix[0];
             const remainingMix = freshMix.slice(1);
@@ -582,6 +595,83 @@ export const usePlayerStore = create<PlayerState>()(
       toastMessage: 'Listening history & recommendations cleared (Clean Slate)'
     });
   },
+
+  markTrackNotInterested: (track: Track) => {
+    const { dislikedTracks, recommendedUpNext, currentTrack, showToast } = get();
+    const cleanTitle = (track.title || '').trim().toLowerCase();
+    const cleanArtist = (track.artist || '').trim().toLowerCase();
+    
+    const exists = (dislikedTracks || []).some(
+      t => t.id === track.id || (t.title.toLowerCase() === cleanTitle && t.artist.toLowerCase() === cleanArtist)
+    );
+    const updated = exists ? dislikedTracks : [...(dislikedTracks || []), track];
+
+    // Instantly purge track from recommended Up Next
+    const filteredUpNext = (recommendedUpNext || []).filter(
+      t => t.id !== track.id && !(t.title.toLowerCase() === cleanTitle && t.artist.toLowerCase() === cleanArtist)
+    );
+
+    set({
+      dislikedTracks: updated,
+      recommendedUpNext: filteredUpNext
+    });
+
+    // If the marked track is currently playing, advance to next track
+    if (currentTrack && (currentTrack.id === track.id || (currentTrack.title.toLowerCase() === cleanTitle && currentTrack.artist.toLowerCase() === cleanArtist))) {
+      get().nextTrack();
+    }
+
+    showToast(`Got it. We won't recommend "${track.title}" again`);
+  },
+
+  unmarkTrackNotInterested: (trackId: string) => {
+    set(state => ({
+      dislikedTracks: (state.dislikedTracks || []).filter(t => t.id !== trackId)
+    }));
+    get().showToast('Removed from Not Interested list');
+  },
+
+  blockArtist: (artistName: string) => {
+    const clean = artistName.trim();
+    if (!clean) return;
+    const { blockedArtists, recommendedUpNext, currentTrack, showToast } = get();
+    const lower = clean.toLowerCase();
+    const exists = (blockedArtists || []).some(a => a.toLowerCase() === lower);
+    const updated = exists ? blockedArtists : [...(blockedArtists || []), clean];
+
+    // Instantly purge all tracks by this artist from recommended Up Next
+    const filteredUpNext = (recommendedUpNext || []).filter(
+      t => t.artist.toLowerCase() !== lower && !t.artist.toLowerCase().includes(lower)
+    );
+
+    set({
+      blockedArtists: updated,
+      recommendedUpNext: filteredUpNext
+    });
+
+    // If current track is by this blocked artist, skip to next track
+    if (currentTrack && (currentTrack.artist.toLowerCase() === lower || currentTrack.artist.toLowerCase().includes(lower))) {
+      get().nextTrack();
+    }
+
+    showToast(`Got it. We won't recommend songs by ${clean} again`);
+  },
+
+  unblockArtist: (artistName: string) => {
+    const lower = artistName.toLowerCase().trim();
+    set(state => ({
+      blockedArtists: (state.blockedArtists || []).filter(a => a.toLowerCase() !== lower)
+    }));
+    get().showToast(`Unblocked ${artistName}`);
+  },
+
+  clearDislikedAndBlocked: () => {
+    set({
+      dislikedTracks: [],
+      blockedArtists: []
+    });
+    get().showToast('Cleared all blocked tracks and artists');
+  },
   
   toggleFavorite: (track) => set((state) => {
     const isFav = state.favorites.some((t) => t.id === track.id);
@@ -718,7 +808,7 @@ export const usePlayerStore = create<PlayerState>()(
     set({ isPlaying: false });
     try {
       const state = get();
-      const mix = await fetchUpNextMix(seedTrack, state.favorites, state.playHistory);
+      const mix = await fetchUpNextMix(seedTrack, state.favorites, state.playHistory, new Set(), state.dislikedTracks, state.blockedArtists);
       const radioQueue = [seedTrack, ...mix.filter(t => t.id !== seedTrack.id)];
       get().setQueue(radioQueue, 0, `${seedTrack.title} Mix`);
       set({ isPlaying: true });
@@ -794,7 +884,9 @@ export const usePlayerStore = create<PlayerState>()(
         queue: state.queue,
         playHistory: state.playHistory,
         recentSearchQueries: state.recentSearchQueries,
-        recentSearchedTracks: state.recentSearchedTracks
+        recentSearchedTracks: state.recentSearchedTracks,
+        dislikedTracks: state.dislikedTracks,
+        blockedArtists: state.blockedArtists
       })
     }
   )

@@ -2252,12 +2252,15 @@ export async function fetchUpNextMix(
   seed: Track | Track[],
   userFavorites: Track[] = [],
   playHistory: Record<string, { track: Track; playCount: number }> = {},
-  excludeIds: Set<string> = new Set()
+  excludeIds: Set<string> = new Set(),
+  dislikedTracks: Track[] = [],
+  blockedArtists: string[] = []
 ): Promise<Track[]> {
   const seedList: Track[] = Array.isArray(seed) ? seed.filter(Boolean) : (seed ? [seed] : []);
   if (seedList.length === 0) return [];
 
   const seenKeys = new Set<string>();
+  const blockedLowerSet = new Set((blockedArtists || []).map(a => a.toLowerCase().trim()));
 
   // Exclude all tracks currently in the queue/seed list
   seedList.forEach(s => {
@@ -2265,11 +2268,19 @@ export async function fetchUpNextMix(
     excludeIds.add(s.id);
   });
 
-  // Extract all unique primary artists from the queue (preserving queue appearance order)
+  // Exclude all explicitly disliked tracks
+  (dislikedTracks || []).forEach(d => {
+    seenKeys.add(getCanonicalSignature(d.title, d.artist));
+    if (d.id) excludeIds.add(d.id);
+  });
+
+  // Extract all unique primary artists from the queue (preserving queue appearance order, excluding blocked artists)
   const uniqueArtists: string[] = [];
   seedList.forEach(s => {
     const raw = (s.artist || '').split(/[,&/]| feat\.? | ft\.? | with /i)[0].trim();
-    if (raw && !uniqueArtists.some(a => a.toLowerCase() === raw.toLowerCase())) {
+    const rawLower = raw.toLowerCase();
+    const isBlocked = blockedLowerSet.has(rawLower) || Array.from(blockedLowerSet).some(b => b && (rawLower === b || rawLower.includes(b)));
+    if (raw && !isBlocked && !uniqueArtists.some(a => a.toLowerCase() === rawLower)) {
       uniqueArtists.push(raw);
     }
   });
@@ -2312,6 +2323,11 @@ export async function fetchUpNextMix(
 
         const aLower = item.artistName.toLowerCase().trim();
         const tLower = item.trackName.toLowerCase().trim();
+
+        // Check if artist is blocked
+        if (blockedLowerSet.has(aLower) || Array.from(blockedLowerSet).some(b => b && (aLower === b || aLower.includes(b)))) {
+          return;
+        }
 
         const trackObj: Track = {
           id,

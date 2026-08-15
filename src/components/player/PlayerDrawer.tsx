@@ -38,6 +38,8 @@ export function PlayerDrawer() {
     isPlayerDrawerOpen,
     favorites,
     playHistory,
+    dislikedTracks,
+    blockedArtists,
     addToQueue,
     removeFromQueue,
     toggleAutoplay,
@@ -106,7 +108,7 @@ export function PlayerDrawer() {
 
     const queuedIds = new Set(activeQueue.map(t => t.id));
 
-    fetchUpNextMix(activeQueue, favorites, playHistory, queuedIds)
+    fetchUpNextMix(activeQueue, favorites, playHistory, queuedIds, dislikedTracks, blockedArtists)
       .then(mix => {
         if (isMounted) {
           if (mix && mix.length > 0) {
