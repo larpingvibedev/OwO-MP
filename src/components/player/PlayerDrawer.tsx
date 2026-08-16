@@ -417,7 +417,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                   [{isPlaying ? 'Playing' : 'Paused'}] {formatDuration(currentTime)} / {formatDuration(duration)}
                 </span>
                 <span style={{ color: '#2ecc71', fontWeight: 700 }}>
-                  160 kbps Lossless Opus (HQ)
+                  160 kbps Opus (High Quality)
                 </span>
               </div>
             </div>

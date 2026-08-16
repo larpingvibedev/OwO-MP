@@ -245,7 +245,7 @@ export function Settings() {
           </div>
           <span className="settings-badge" style={{ backgroundColor: 'rgba(46, 204, 113, 0.15)', color: '#2ecc71' }}>
             <CheckCircle2 size={12} />
-            <span>Studio 320kbps Active</span>
+            <span>High Quality (160 kbps Opus)</span>
           </span>
         </div>
       </div>

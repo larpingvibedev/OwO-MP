@@ -28,8 +28,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 
   const {
     isPlaying: storeIsPlaying,
-    currentTrack,
-    volume
+    currentTrack
   } = usePlayerStore();
 
   const isPlaying = propIsPlaying !== undefined ? propIsPlaying : storeIsPlaying;
@@ -55,9 +54,6 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
 
-  const volumeRef = useRef(volume);
-  volumeRef.current = volume;
-
   useEffect(() => {
     barsDataRef.current = new Array(barCount).fill(3);
     peakDataRef.current = new Array(barCount).fill(3);
@@ -76,7 +72,6 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       lastTimestamp = now;
 
       const activeIsPlaying = isPlayingRef.current;
-      const curVol = volumeRef.current;
       const activePalette = paletteRef.current;
 
       // Increment clock
@@ -131,12 +126,12 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 
         if (activeIsPlaying) {
           if (liveFrequencies && liveFrequencies.length === barCount) {
-            // MODE A: 100% True Physical FFT Spectrum Analysis
+            // MODE A: 100% True Physical FFT Spectrum Analysis (Volume-Independent)
             const rawEnergy = liveFrequencies[i];
-            if (rawEnergy < 0.008 || curVol <= 0.005) {
+            if (rawEnergy < 0.008) {
               targetHeight = 2; // Flat baseline during silence/quiet
             } else {
-              targetHeight = Math.max(2, rawEnergy * (h - 4) * Math.min(1.0, Math.max(0.45, curVol * 1.2)));
+              targetHeight = Math.max(2, rawEnergy * (h - 4));
             }
           } else {
             targetHeight = 2;

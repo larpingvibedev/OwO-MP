@@ -622,7 +622,7 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>Audio Quality</span>
-                <span style={{ fontWeight: 600, color: '#2ecc71' }}>Lossless Opus 160kbps (HQ)</span>
+                <span style={{ fontWeight: 600, color: '#2ecc71' }}>160 kbps Opus (High Quality)</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>Engine Source</span>

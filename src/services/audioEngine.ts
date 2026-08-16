@@ -1,18 +1,22 @@
 /**
  * Global Web Audio API Engine & Real-Time Spectrum Analyzer
  * Connects directly to the HTML5 Audio Element to extract 100% accurate FFT frequency spectrum data.
+ * Features Volume-Independent Analysis: audio flows into AnalyserNode at full resolution before GainNode controls speaker volume.
  */
 
 class AudioEngineManager {
   private audioCtx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
+  private gainNode: GainNode | null = null;
   private sourceNode: MediaElementAudioSourceNode | null = null;
   private audioElement: HTMLAudioElement | null = null;
   private freqData: Uint8Array | null = null;
   private isConnected = false;
+  private currentVolume = 1.0;
 
   /**
    * Initializes the Web Audio API context and connects the audio element to the analyser.
+   * Audio Routing: Source -> AnalyserNode (Full Signal) -> GainNode (User Volume) -> Destination (Speakers)
    */
   public init(audioEl: HTMLAudioElement | null): void {
     if (!audioEl || this.isConnected) return;
@@ -29,17 +33,29 @@ class AudioEngineManager {
       if (!this.analyser) {
         this.analyser = this.audioCtx.createAnalyser();
         this.analyser.fftSize = 256; // 128 frequency bins for rich definition
-        this.analyser.smoothingTimeConstant = 0.58; // Snappy, punchy response to transient beats
-        this.analyser.minDecibels = -90;
-        this.analyser.maxDecibels = -18;
+        this.analyser.smoothingTimeConstant = 0.65; // Snappy, punchy response to transient beats
+        this.analyser.minDecibels = -80;
+        this.analyser.maxDecibels = -12;
         this.freqData = new Uint8Array(this.analyser.frequencyBinCount);
+      }
+
+      if (!this.gainNode) {
+        this.gainNode = this.audioCtx.createGain();
+        this.gainNode.gain.setValueAtTime(this.currentVolume, this.audioCtx.currentTime);
       }
 
       if (!this.sourceNode && this.audioElement) {
         this.sourceNode = this.audioCtx.createMediaElementSource(this.audioElement);
+        // Pure unattenuated signal enters Analyser
         this.sourceNode.connect(this.analyser);
-        this.analyser.connect(this.audioCtx.destination);
+        // Output from Analyser enters GainNode for listening volume control
+        this.analyser.connect(this.gainNode);
+        // Scaled volume exits to device speakers
+        this.gainNode.connect(this.audioCtx.destination);
         this.isConnected = true;
+
+        // Ensure HTML5 audio element stays at unity gain so Web Audio receives full dynamic range
+        this.audioElement.volume = 1.0;
       }
 
       // Auto-resume on all audio element events
@@ -55,6 +71,29 @@ class AudioEngineManager {
     } catch (err) {
       console.warn('Web Audio API connection notice:', err);
     }
+  }
+
+  /**
+   * Sets output volume via the Web Audio GainNode.
+   * Preserves full unattenuated signal into the FFT Analyser.
+   */
+  public setVolume(vol: number): void {
+    const clamped = Math.max(0, Math.min(1, vol));
+    this.currentVolume = clamped;
+    if (this.gainNode && this.audioCtx) {
+      try {
+        this.gainNode.gain.setValueAtTime(clamped, this.audioCtx.currentTime);
+      } catch (e) {
+        this.gainNode.gain.value = clamped;
+      }
+    }
+  }
+
+  /**
+   * Returns whether Web Audio API is actively connected and processing.
+   */
+  public isConnectedToWebAudio(): boolean {
+    return this.isConnected;
   }
 
   /**
@@ -77,7 +116,7 @@ class AudioEngineManager {
 
   /**
    * Returns normalized real-time frequency data (0.0 to 1.0) resampled to `barCount` bars.
-   * Returns null if HTML5 audio element is idle so visualizer stays quiet.
+   * Operates on source audio dynamics, completely independent of the volume slider setting.
    */
   public getLiveFrequencies(barCount: number = 42, layout: 'bell' | 'linear' = 'bell'): number[] | null {
     if (!this.analyser || !this.freqData || !this.audioCtx) return null;
@@ -104,13 +143,13 @@ class AudioEngineManager {
     }
 
     const result: number[] = new Array(barCount);
-    // Active musical band: Bin 1 (~40 Hz) to Bin 48 (~8 kHz)
+    // Active musical spectrum: Bin 1 (~40 Hz) to Bin 48 (~8.5 kHz)
     const maxMusicalBin = Math.min(len - 1, 48);
     const minMusicalBin = 1;
 
     const sampleFrequency = (norm: number) => {
-      // Logarithmic distribution: ample resolution for Sub-bass (norm 0.0), Mids (0.5), and Highs (1.0)
-      const logNorm = Math.pow(norm, 1.22);
+      // Natural logarithmic distribution from sub-bass to high treble
+      const logNorm = Math.pow(norm, 1.25);
       const binIdx = minMusicalBin + logNorm * (maxMusicalBin - minMusicalBin);
       
       const lowIdx = Math.floor(binIdx);
@@ -119,11 +158,12 @@ class AudioEngineManager {
 
       const rawVal = (this.freqData![lowIdx] || 0) * (1 - frac) + (this.freqData![highIdx] || 0) * frac;
       
-      // Dynamic frequency tilt: balances mids & high-treble so the entire width stays full and lively
-      const trebleComp = 1.05 + Math.pow(norm, 0.85) * 1.75;
-      const normalized = Math.min(1.0, (rawVal / 205.0) * trebleComp);
+      // rawVal is 0..255 from getByteFrequencyData
+      const baseRatio = rawVal / 255.0;
       
-      return Math.pow(normalized, 0.82);
+      // Dynamic power curve: punchy transient peaks, clear separation between beats, prevents flat clipping
+      const dynamicVal = Math.pow(baseRatio, 1.28) * 1.08;
+      return Math.min(0.96, Math.max(0.0, dynamicVal));
     };
 
     if (layout === 'bell') {

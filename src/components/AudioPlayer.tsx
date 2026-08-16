@@ -74,7 +74,8 @@ export const AudioPlayer = () => {
 
   // 3. Volume Control
   useEffect(() => {
-    if (audioRef.current) {
+    audioEngine.setVolume(volume);
+    if (audioRef.current && !audioEngine.isConnectedToWebAudio()) {
       audioRef.current.volume = volume;
     }
   }, [volume]);
@@ -124,7 +125,8 @@ export const AudioPlayer = () => {
       if (isCancelled) return;
       if (offlineBlobUrl) {
         audioRef.current.src = offlineBlobUrl;
-        audioRef.current.volume = volume;
+        audioEngine.setVolume(volume);
+        if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
         audioEngine.resume();
         audioRef.current.play().catch(console.warn);
         setIsPlaying(true);
@@ -136,7 +138,8 @@ export const AudioPlayer = () => {
       // B. Direct Blob Preview
       if (currentTrack.resolvedStreamUrl?.startsWith('blob:')) {
         audioRef.current.src = currentTrack.resolvedStreamUrl;
-        audioRef.current.volume = volume;
+        audioEngine.setVolume(volume);
+        if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
         audioEngine.resume();
         audioRef.current.play().catch(console.warn);
         setIsPlaying(true);
@@ -179,7 +182,8 @@ export const AudioPlayer = () => {
           if (isCancelled) return;
 
           audioRef.current.src = directStreamUrl;
-          audioRef.current.volume = volume;
+          audioEngine.setVolume(volume);
+          if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
           audioEngine.resume();
           audioRef.current.play().catch((err) => {
             console.warn('[AudioPlayer] Native play notice:', err.message);
