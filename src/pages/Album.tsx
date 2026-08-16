@@ -39,6 +39,7 @@ export function Album() {
   const { 
     currentTrack, 
     isPlaying, 
+    playingFrom,
     setQueue, 
     setIsPlaying, 
     togglePlayPause,
@@ -79,7 +80,16 @@ export function Album() {
         setLoading(false);
       });
 
-    if (resolvedArtistName) {
+    const cleanAlbumId = (albumId || '').replace('album-', '').replace('album-derived-', '');
+    const isPlaylistId = Boolean(
+      cleanAlbumId.startsWith('PL') || 
+      cleanAlbumId.startsWith('VLPL') || 
+      cleanAlbumId.startsWith('RD') || 
+      cleanAlbumId.startsWith('community-') || 
+      cleanAlbumId.startsWith('mix-')
+    );
+
+    if (resolvedArtistName && !isPlaylistId) {
       // Fetch artist avatar for header
       resolveArtistAvatar(resolvedArtistName).then(avatar => {
         if (avatar) setArtistAvatar(avatar);
@@ -150,8 +160,20 @@ export function Album() {
   const playButtonText = isPlaylist ? 'Play Playlist' : (isSingle ? 'Play Single' : (isEP ? 'Play EP' : (isAlbum ? 'Play Album' : 'Play Release')));
   const displayCover = cleanGoogleImageUrl(album.cover || initialCover, 500);
 
-  // Check if currently playing this release
-  const isCurrentReleasePlaying = isPlaying && album.tracks.some(t => isSameTrack(t, currentTrack));
+  // Check if currently playing this specific release/playlist context
+  const cleanPlayingFrom = (playingFrom || '').trim().toLowerCase();
+  const cleanAlbumName = (album.name || '').trim().toLowerCase();
+  const isThisReleaseActive = Boolean(
+    currentTrack &&
+    album.tracks.some(t => isSameTrack(t, currentTrack)) &&
+    (
+      cleanPlayingFrom === cleanAlbumName ||
+      cleanPlayingFrom === `${cleanAlbumName} (shuffle)` ||
+      cleanPlayingFrom === `${cleanAlbumName} mix`
+    )
+  );
+
+  const isCurrentReleasePlaying = isPlaying && isThisReleaseActive;
   const totalSeconds = album.tracks.reduce((acc, t) => acc + (t.duration || 180), 0);
 
   const isSavedToLibrary = Boolean(
@@ -165,7 +187,7 @@ export function Album() {
   const isAlbumDownloading = Boolean(album && album.tracks.some(t => downloadingTrackIds[t.id] !== undefined));
 
   const handlePlayTrack = (track: Track) => {
-    if (isSameTrack(currentTrack, track)) {
+    if (isThisReleaseActive && isSameTrack(currentTrack, track)) {
       togglePlayPause();
     } else {
       const idx = album.tracks.findIndex(t => isSameTrack(t, track));
@@ -175,7 +197,7 @@ export function Album() {
   };
 
   const handlePlayRelease = () => {
-    if (isCurrentReleasePlaying) {
+    if (isThisReleaseActive) {
       togglePlayPause();
     } else if (album.tracks.length > 0) {
       setQueue(album.tracks, 0, `${album.name}`);
@@ -304,13 +326,13 @@ export function Album() {
             flexWrap: 'wrap',
             marginBottom: '24px'
           }}>
-            {/* Clickable Artist Pill with Avatar */}
+            {/* Creator / Artist Info */}
             <div 
               style={{ 
                 display: 'flex', 
                 alignItems: 'center', 
                 gap: '8px', 
-                cursor: 'pointer',
+                cursor: isPlaylist ? 'default' : 'pointer',
                 color: 'var(--text-primary)',
                 fontWeight: 700
               }}
@@ -320,7 +342,7 @@ export function Album() {
                 }
               }}
             >
-              {artistAvatar && (
+              {artistAvatar && !isPlaylist && (
                 <img 
                   src={artistAvatar} 
                   alt={album.artist} 
@@ -507,7 +529,7 @@ export function Album() {
 
         <div className="top-tracks-list">
           {album.tracks.map((track, idx) => {
-            const isCurrent = isSameTrack(currentTrack, track);
+            const isCurrent = isThisReleaseActive && isSameTrack(currentTrack, track);
             const isFav = favorites.some(f => f.id === track.id);
             const isAdded = addedTrackId === track.id;
 
@@ -660,9 +682,9 @@ export function Album() {
       </div>
 
       {/* ========================================================================= */}
-      {/* MORE RELEASES BY ARTIST SHELF                                             */}
+      {/* MORE RELEASES BY ARTIST SHELF (Official Releases Only)                    */}
       {/* ========================================================================= */}
-      {moreReleases.length > 0 && (
+      {!isPlaylist && moreReleases.length > 0 && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
             <h3 className="section-header" style={{ fontSize: '1.25rem', margin: 0 }}>

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
-import { fetchUpNextMix, fetchSimilarArtists, fetchArtistDeepTracks } from '../../services/musicSearch';
+import { fetchUpNextMix, fetchSimilarArtists, fetchArtistDeepTracks, cleanGoogleImageUrl } from '../../services/musicSearch';
 import { fetchLyrics, type LyricsResult } from '../../services/lyricsService';
 import type { Track, SimilarArtist } from '../../types';
 import { TrackOptionsMenu } from '../common/TrackOptionsMenu';
@@ -52,7 +52,8 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     closePlayerDrawer,
     setCurrentTime,
     saveQueueAsPlaylist,
-    toggleFavorite
+    toggleFavorite,
+    useRotatingCD
   } = usePlayerStore();
 
   const [isLoadingMix, setIsLoadingMix] = useState(false);
@@ -279,21 +280,41 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
         {/* LEFT COLUMN: COVER ART & RMPC SPECTRUM VISUALIZER                         */}
         {/* ========================================================================= */}
         <div className="expanded-cover-col">
-          {/* Main Album Artwork (Large, Centered, High Impact) */}
-          <div 
-            style={{
-              width: 'min(480px, 90%)',
-              aspectRatio: '1',
-              maxHeight: 'min(480px, 50vh)',
-              borderRadius: '16px',
-              backgroundImage: currentTrack ? `url(${currentTrack.cover})` : 'none',
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              boxShadow: '0 28px 70px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.12)',
-              position: 'relative',
-              flexShrink: 0
-            }}
-          />
+          {/* Main Album Artwork: Dynamic Rotating CD or Classic Square */}
+          {useRotatingCD ? (
+            <div className="cd-disc-wrapper">
+              <div className={`cd-disc-disc ${isPlaying ? 'playing' : 'paused'}`}>
+                {/* Artwork Disc Layer (with overscan edge-fill to eliminate pillarbox padding) */}
+                <div 
+                  className="cd-disc-art"
+                  style={{
+                    backgroundImage: currentTrack ? `url(${cleanGoogleImageUrl(currentTrack.cover, 800)})` : 'none',
+                  }}
+                />
+                {/* Concentric Vinyl / CD Grooves */}
+                <div className="cd-disc-grooves" />
+                {/* Gloss & Light Glare Reflection */}
+                <div className="cd-disc-glare" />
+                {/* Center Spindle Hole */}
+                <div className="cd-disc-center-hole" />
+              </div>
+            </div>
+          ) : (
+            <div 
+              style={{
+                width: 'min(480px, 90%)',
+                aspectRatio: '1',
+                maxHeight: 'min(480px, 50vh)',
+                borderRadius: '16px',
+                backgroundImage: currentTrack ? `url(${cleanGoogleImageUrl(currentTrack.cover, 800)})` : 'none',
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                boxShadow: '0 28px 70px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.12)',
+                position: 'relative',
+                flexShrink: 0
+              }}
+            />
+          )}
 
           {/* Track Info & Controls */}
           <div style={{ width: '100%', maxWidth: '480px', marginTop: '22px', textAlign: 'left' }}>

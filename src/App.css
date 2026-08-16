@@ -2413,5 +2413,332 @@
   text-align: right;
 }
 
+/* ========================================================================= */
+/* ROTATING CD DISC PLAYER (INSTAGRAM STYLE)                                 */
+/* ========================================================================= */
+@keyframes cdSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cd-disc-wrapper {
+  width: min(480px, 90%);
+  aspect-ratio: 1;
+  max-height: min(480px, 50vh);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.cd-disc-disc {
+  width: 100%;
+  height: 100%;
+  border-radius: 50% !important;
+  position: relative;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.15), 0 0 20px rgba(0, 0, 0, 0.6);
+  animation: cdSpin 12s linear infinite;
+  will-change: transform;
+  overflow: hidden;
+  background-color: #121212;
+}
+
+/* Dedicated artwork layer with edge-fill overscan to eliminate 4:3 and 16:9 side pillarbox bars */
+.cd-disc-art {
+  position: absolute;
+  inset: -14%;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: 50%;
+  z-index: 1;
+}
+
+.cd-disc-disc.playing {
+  animation-play-state: running;
+}
+
+.cd-disc-disc.paused {
+  animation-play-state: paused;
+}
+
+/* Concentric micro-groove rings */
+.cd-disc-grooves {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background: repeating-radial-gradient(
+    circle at center,
+    rgba(255, 255, 255, 0.04) 0px,
+    rgba(255, 255, 255, 0.04) 1px,
+    transparent 1px,
+    transparent 5px
+  );
+  mix-blend-mode: overlay;
+  z-index: 2;
+}
+
+/* Light glare reflection sweep */
+.cd-disc-glare {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0.04) 30%,
+    transparent 45%,
+    rgba(255, 255, 255, 0.03) 55%,
+    rgba(255, 255, 255, 0.18) 100%
+  );
+  mix-blend-mode: screen;
+  z-index: 3;
+}
+
+/* Spindle Center Hole (Inner hub + transparent center hole) */
+.cd-disc-center-hole {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 22%;
+  height: 22%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at center,
+    #151515 0%,
+    #151515 36%,
+    rgba(255, 255, 255, 0.35) 37%,
+    rgba(255, 255, 255, 0.1) 48%,
+    #1c1c1c 50%,
+    #151515 65%,
+    rgba(255, 255, 255, 0.25) 67%,
+    transparent 69%
+  );
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.95), 0 0 0 2px rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* ========================================================================= */
+/* SETTINGS PAGE (CLEAN MODERN REDESIGN)                                     */
+/* ========================================================================= */
+.settings-container {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 0 60px 0;
+}
+
+.settings-header-desc {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-top: -12px;
+  margin-bottom: 28px;
+}
+
+.settings-group {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  overflow: hidden;
+  margin-bottom: 20px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.2);
+}
+
+.settings-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background-color: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-group-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background-color 0.15s ease;
+  gap: 16px;
+}
+
+.settings-row:last-child {
+  border-bottom: none;
+}
+
+.settings-row:hover {
+  background-color: rgba(255, 255, 255, 0.015);
+}
+
+.settings-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-row-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-row-desc {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+/* Custom Toggle Switch */
+.settings-switch {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.15);
+  position: relative;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.settings-switch.active {
+  background-color: var(--accent-primary);
+}
+
+.settings-switch-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: #ffffff;
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.settings-switch.active .settings-switch-thumb {
+  transform: translateX(20px);
+}
+
+/* Segmented Buttons */
+.settings-segment-group {
+  display: flex;
+  background-color: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.settings-segment-btn {
+  padding: 5px 14px;
+  border-radius: 16px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-segment-btn.active {
+  background-color: var(--accent-primary);
+  color: #000000;
+  font-weight: 700;
+}
+
+.settings-badge {
+  font-size: 0.72rem;
+  padding: 3px 9px;
+  border-radius: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-btn-secondary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 18px;
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-btn-secondary:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.settings-btn-primary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 18px;
+  background-color: var(--accent-primary);
+  border: none;
+  color: #000000;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-btn-primary:hover {
+  filter: brightness(1.08);
+  transform: scale(1.02);
+}
+
+.settings-btn-danger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 18px;
+  background-color: rgba(231, 76, 60, 0.12);
+  border: 1px solid rgba(231, 76, 60, 0.35);
+  color: #ff5252;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-btn-danger:hover {
+  background-color: rgba(231, 76, 60, 0.22);
+}
+
+
+
 
 

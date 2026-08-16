@@ -3,21 +3,19 @@ import { useNavigate } from 'react-router-dom';
 import { 
   Wifi, 
   CheckCircle2, 
-  ShieldCheck, 
-  Database, 
-  History,
+  Disc,
+  Sliders,
+  HardDrive,
+  Folder,
+  FolderOpen,
   RotateCcw,
   Trash2,
   AlertTriangle,
   Check,
   Ban,
   UserX,
-  Sliders,
   X,
-  HardDrive,
-  ExternalLink,
-  Folder,
-  FolderOpen
+  ExternalLink
 } from 'lucide-react';
 import { SyncModal } from '../components/SyncModal';
 import { usePlayerStore } from '../store/usePlayerStore';
@@ -47,20 +45,20 @@ export function Settings() {
     const chosen = await promptChooseCustomDirectory();
     if (chosen) {
       setCustomDirName(chosen);
-      showToast(`Custom download folder set to "${chosen}"`);
+      showToast(`Download folder set to "${chosen}"`);
     }
   };
 
   const handleResetFolder = async () => {
     await clearCustomDirectory();
     setCustomDirName(null);
-    showToast('Reset download folder to default browser Downloads directory');
+    showToast('Reset download folder to default Downloads');
   };
 
   const handleFormatChange = async (fmt: 'mp3' | 'm4a') => {
     setDownloadFormat(fmt);
     await setPreferredDownloadFormat(fmt);
-    showToast(`Default offline export format set to .${fmt.toUpperCase()}`);
+    showToast(`Download format set to .${fmt.toUpperCase()}`);
   };
 
   const { 
@@ -76,17 +74,23 @@ export function Settings() {
     clearDislikedAndBlocked,
     showToast,
     playHistory,
-    recentSearchQueries
+    recentSearchQueries,
+    autoplay,
+    toggleAutoplay,
+    useRotatingCD,
+    toggleRotatingCD
   } = usePlayerStore();
 
   const historyCount = Object.keys(playHistory || {}).length;
   const searchCount = (recentSearchQueries || []).length;
+  const downloadCount = Object.keys(downloadedTrackIds || {}).length;
+  const blockedCount = (dislikedTracks?.length || 0) + (blockedArtists?.length || 0);
 
   const handleClearHistory = () => {
     clearListeningHistoryAndPreferences();
     setHistoryCleared(true);
-    showToast('Listening history & recommendations cleared (Clean Slate)');
-    setTimeout(() => setHistoryCleared(false), 3000);
+    showToast('Listening history & taste profile cleared');
+    setTimeout(() => setHistoryCleared(false), 2500);
   };
 
   const handleClearSearches = () => {
@@ -94,7 +98,7 @@ export function Settings() {
     clearRecentSearchedTracks();
     setSearchesCleared(true);
     showToast('Search history cleared');
-    setTimeout(() => setSearchesCleared(false), 3000);
+    setTimeout(() => setSearchesCleared(false), 2500);
   };
 
   const handleFactoryReset = () => {
@@ -107,7 +111,7 @@ export function Settings() {
   };
 
   return (
-    <div style={{ paddingBottom: '48px', maxWidth: '820px' }}>
+    <div className="settings-container">
       {showSyncModal && <SyncModal onClose={() => setShowSyncModal(false)} />}
 
       {/* Confirmation Modal for Factory Reset */}
@@ -129,7 +133,7 @@ export function Settings() {
           <div style={{
             backgroundColor: 'var(--bg-card)',
             border: '1px solid rgba(255, 71, 87, 0.4)',
-            borderRadius: '12px',
+            borderRadius: '14px',
             padding: '28px',
             maxWidth: '460px',
             width: '100%',
@@ -140,7 +144,7 @@ export function Settings() {
               <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800 }}>Factory Reset Everything?</h3>
             </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: '1.5', marginBottom: '24px' }}>
-              This will permanently delete all your <strong>custom playlists</strong>, <strong>liked songs</strong>, <strong>saved albums</strong>, <strong>history</strong>, and <strong>preferences</strong>. This action cannot be undone.
+              This will permanently delete all your <strong>playlists</strong>, <strong>favorites</strong>, <strong>saved albums</strong>, <strong>listening history</strong>, and <strong>custom preferences</strong>. This action cannot be undone.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button
@@ -171,637 +175,364 @@ export function Settings() {
         </div>
       )}
 
-      <h2 className="section-header">Settings & Preferences</h2>
+      <h2 className="section-header" style={{ marginBottom: '8px' }}>Settings & Preferences</h2>
+      <p className="settings-header-desc">Customize playback, offline downloads, device connections, and recommendation privacy.</p>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        {/* ========================================================================= */}
-        {/* 1. CLEAN SLATE & LISTENING HISTORY                                        */}
-        {/* ========================================================================= */}
-        <div style={{
-          backgroundColor: 'var(--bg-card)',
-          borderRadius: '12px',
-          padding: '24px',
-          border: '1px solid var(--border-color)',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, fontSize: '1.15rem' }}>
-              <History size={22} color="var(--accent-primary)" />
-              <span>Listening History & Recommendation Privacy</span>
-            </div>
-            <span style={{ 
-              fontSize: '0.75rem', 
-              padding: '3px 10px', 
-              borderRadius: '12px', 
-              backgroundColor: 'rgba(52, 152, 219, 0.12)', 
-              color: 'var(--accent-primary)',
-              fontWeight: 600
-            }}>
-              Clean Slate Tools
-            </span>
-          </div>
-
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '20px', lineHeight: '1.45' }}>
-            Wipe your listening habits, speed dial cards, quick picks, and algorithmic taste profiles to start fresh with a clean slate. Your personal created playlists and liked songs will remain untouched.
-          </p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Primary Clean Slate Button */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '16px',
-              backgroundColor: 'rgba(255, 255, 255, 0.03)',
-              borderRadius: '8px',
-              border: '1px solid var(--border-color)',
-              flexWrap: 'wrap',
-              gap: '12px'
-            }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--text-primary)' }}>
-                  Clear Listening History & Reset Recommendations
-                </div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
-                  Resets Speed Dial, Quick Picks, and all Dashboard recommendation carousels ({historyCount} recorded songs).
-                </div>
-              </div>
-
-              <button
-                onClick={handleClearHistory}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '9px 18px',
-                  borderRadius: '20px',
-                  backgroundColor: historyCleared ? 'rgba(46, 204, 113, 0.2)' : 'rgba(52, 152, 219, 0.15)',
-                  border: `1px solid ${historyCleared ? '#2ecc71' : 'var(--accent-primary)'}`,
-                  color: historyCleared ? '#2ecc71' : 'var(--accent-primary)',
-                  fontSize: '0.82rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                {historyCleared ? <Check size={16} /> : <RotateCcw size={16} />}
-                <span>{historyCleared ? 'Clean Slate Activated!' : 'Clear History & Recommendations'}</span>
-              </button>
-            </div>
-
-            {/* Clear Search History Button */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '14px 16px',
-              backgroundColor: 'rgba(255, 255, 255, 0.02)',
-              borderRadius: '8px',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              flexWrap: 'wrap',
-              gap: '12px'
-            }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
-                  Clear Search History & Queries
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  Removes recent search queries and clicked search items ({searchCount} recent searches).
-                </div>
-              </div>
-
-              <button
-                onClick={handleClearSearches}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 14px',
-                  borderRadius: '16px',
-                  backgroundColor: searchesCleared ? 'rgba(46, 204, 113, 0.15)' : 'rgba(255, 255, 255, 0.06)',
-                  border: `1px solid ${searchesCleared ? '#2ecc71' : 'var(--border-color)'}`,
-                  color: searchesCleared ? '#2ecc71' : 'var(--text-secondary)',
-                  fontSize: '0.78rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                {searchesCleared ? <Check size={14} /> : <Trash2 size={14} />}
-                <span>{searchesCleared ? 'Cleared' : 'Clear Searches'}</span>
-              </button>
-            </div>
+      {/* ========================================================================= */}
+      {/* 1. PLAYBACK & VISUALS                                                     */}
+      {/* ========================================================================= */}
+      <div className="settings-group">
+        <div className="settings-group-header">
+          <div className="settings-group-title">
+            <Disc size={18} color="var(--accent-primary)" />
+            <span>Playback & Visuals</span>
           </div>
         </div>
 
-        {/* ========================================================================= */}
-        {/* 1.5. ALGORITHM TUNING: NOT INTERESTED & BLOCKED ARTISTS                   */}
-        {/* ========================================================================= */}
-        <div style={{
-          backgroundColor: 'var(--bg-card)',
-          borderRadius: '12px',
-          padding: '24px',
-          border: '1px solid var(--border-color)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, fontSize: '1.15rem' }}>
-              <Sliders size={22} color="var(--accent-primary)" />
-              <span>Algorithm Tuning & Blocked Preferences</span>
+        {/* Rotating CD Disc Mode */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">
+              <span>Rotating CD Disc Player</span>
+              <span className="settings-badge" style={{ backgroundColor: useRotatingCD ? 'rgba(52, 152, 219, 0.15)' : 'rgba(255,255,255,0.06)', color: useRotatingCD ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
+                {useRotatingCD ? 'Active' : 'Classic Art'}
+              </span>
             </div>
-            <span style={{ 
-              fontSize: '0.75rem', 
-              padding: '3px 10px', 
-              borderRadius: '12px', 
-              backgroundColor: 'rgba(231, 76, 60, 0.12)', 
-              color: '#e74c3c',
-              fontWeight: 600
-            }}>
-              {(dislikedTracks?.length || 0) + (blockedArtists?.length || 0)} Excluded
-            </span>
-          </div>
-
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '20px', lineHeight: '1.45' }}>
-            Manage the songs and artists you've marked as "Not interested" or "Don't recommend artist". These are strictly excluded from all autoplay streams, Up Next queues, radio mixes, and discovery carousels.
-          </p>
-
-          {/* Blocked Artists Section */}
-          <div style={{ marginBottom: '18px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
-              <UserX size={16} color="#e74c3c" />
-              <span>Blocked Artists ({blockedArtists?.length || 0})</span>
+            <div className="settings-row-desc">
+              Displays album artwork as a spinning vinyl CD with reflection gloss and grooves in the full-screen player.
             </div>
-
-            {(!blockedArtists || blockedArtists.length === 0) ? (
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '8px 12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                No artists blocked. When you choose "Don't recommend artist" on a track, they'll show up here.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {blockedArtists.map(artist => (
-                  <div 
-                    key={artist}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '6px 12px',
-                      backgroundColor: 'rgba(231, 76, 60, 0.1)',
-                      border: '1px solid rgba(231, 76, 60, 0.3)',
-                      borderRadius: '20px',
-                      fontSize: '0.82rem',
-                      color: 'var(--text-primary)'
-                    }}
-                  >
-                    <span>{artist}</span>
-                    <button
-                      onClick={() => unblockArtist(artist)}
-                      title={`Unblock ${artist}`}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: '#e74c3c',
-                        cursor: 'pointer',
-                        padding: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '50%'
-                      }}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
+          <div 
+            className={`settings-switch ${useRotatingCD ? 'active' : ''}`}
+            onClick={toggleRotatingCD}
+            title="Toggle rotating CD disc mode"
+          >
+            <div className="settings-switch-thumb" />
+          </div>
+        </div>
 
-          {/* Not Interested Tracks Section */}
-          <div style={{ marginBottom: '18px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
-              <Ban size={16} color="#e74c3c" />
-              <span>Not Interested Tracks ({dislikedTracks?.length || 0})</span>
+        {/* Autoplay Similar Tracks */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">
+              <span>Autoplay Endless Mix</span>
+              <span className="settings-badge" style={{ backgroundColor: autoplay ? 'rgba(46, 204, 113, 0.15)' : 'rgba(255,255,255,0.06)', color: autoplay ? '#2ecc71' : 'var(--text-secondary)' }}>
+                {autoplay ? 'On' : 'Off'}
+              </span>
             </div>
-
-            {(!dislikedTracks || dislikedTracks.length === 0) ? (
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '8px 12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                No songs hidden. When you choose "Not interested" on a track, it will be listed here.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {dislikedTracks.map(track => (
-                  <div 
-                    key={track.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '6px 12px',
-                      backgroundColor: 'rgba(255, 255, 255, 0.04)',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '20px',
-                      fontSize: '0.82rem',
-                      color: 'var(--text-primary)',
-                      maxWidth: '320px'
-                    }}
-                  >
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <strong>{track.title}</strong> &bull; {track.artist}
-                    </span>
-                    <button
-                      onClick={() => unmarkTrackNotInterested(track.id)}
-                      title="Restore song recommendations"
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        padding: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '50%',
-                        flexShrink: 0
-                      }}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div className="settings-row-desc">
+              Automatically keeps the music going with similar tracks when your queue or playlist finishes.
+            </div>
           </div>
+          <div 
+            className={`settings-switch ${autoplay ? 'active' : ''}`}
+            onClick={toggleAutoplay}
+            title="Toggle autoplay"
+          >
+            <div className="settings-switch-thumb" />
+          </div>
+        </div>
 
-          {/* Reset all Blocklists Button if anything is blocked */}
-          {((blockedArtists && blockedArtists.length > 0) || (dislikedTracks && dislikedTracks.length > 0)) && (
-            <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                onClick={clearDislikedAndBlocked}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 14px',
-                  borderRadius: '16px',
-                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid var(--border-color)',
-                  color: 'var(--text-secondary)',
-                  fontSize: '0.78rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease'
+        {/* Audio Engine Resolver Status */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">
+              <span>Studio Audio Stream Engine</span>
+            </div>
+            <div className="settings-row-desc">
+              Streams high-bitrate studio master tracks with automatic video ad and silence filtering.
+            </div>
+          </div>
+          <span className="settings-badge" style={{ backgroundColor: 'rgba(46, 204, 113, 0.15)', color: '#2ecc71' }}>
+            <CheckCircle2 size={12} />
+            <span>Studio 320kbps Active</span>
+          </span>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 2. OFFLINE & DOWNLOADS                                                    */}
+      {/* ========================================================================= */}
+      <div className="settings-group">
+        <div className="settings-group-header">
+          <div className="settings-group-title">
+            <HardDrive size={18} color="var(--accent-primary)" />
+            <span>Downloads & Offline Storage</span>
+          </div>
+          <span className="settings-badge" style={{ backgroundColor: 'rgba(52, 152, 219, 0.12)', color: 'var(--accent-primary)' }}>
+            {downloadCount} {downloadCount === 1 ? 'Track' : 'Tracks'} Stored
+          </span>
+        </div>
+
+        {/* Offline Library Status & Clear */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Offline Music Cache</div>
+            <div className="settings-row-desc">
+              Tracks stored in local IndexedDB database for instant zero-buffering offline playback.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button className="settings-btn-primary" onClick={() => navigate('/library?tab=downloads')}>
+              <ExternalLink size={13} />
+              <span>View Downloads</span>
+            </button>
+            {downloadCount > 0 && (
+              <button 
+                className="settings-btn-danger"
+                onClick={() => {
+                  if (window.confirm('Clear all offline downloaded songs?')) {
+                    clearAllDownloads();
+                  }
                 }}
               >
-                <Trash2 size={14} />
-                <span>Reset All Blocklists</span>
+                <Trash2 size={13} />
+                <span>Clear Cache</span>
               </button>
+            )}
+          </div>
+        </div>
+
+        {/* Download Folder Path */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">
+              <span>Download Directory</span>
             </div>
+            <div className="settings-row-desc">
+              {customDirName ? `Custom folder: "${customDirName}"` : 'Default: System Downloads folder'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {window.electronAPI?.isElectron && (
+              <button 
+                className="settings-btn-secondary"
+                onClick={() => window.electronAPI?.openFolder(customDirName || undefined)}
+                title="Open download folder in File Explorer"
+              >
+                <FolderOpen size={13} />
+                <span>Open Folder</span>
+              </button>
+            )}
+            <button className="settings-btn-secondary" onClick={handleChooseFolder}>
+              <Folder size={13} />
+              <span>{customDirName ? 'Change Folder' : 'Choose Folder'}</span>
+            </button>
+            {customDirName && (
+              <button className="settings-btn-secondary" onClick={handleResetFolder} title="Reset to default">
+                <RotateCcw size={13} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Export Audio Format */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Export Audio Format</div>
+            <div className="settings-row-desc">
+              Format used when exporting music files to your device.
+            </div>
+          </div>
+          <div className="settings-segment-group">
+            <button 
+              className={`settings-segment-btn ${downloadFormat === 'mp3' ? 'active' : ''}`}
+              onClick={() => handleFormatChange('mp3')}
+            >
+              .MP3 (Universal)
+            </button>
+            <button 
+              className={`settings-segment-btn ${downloadFormat === 'm4a' ? 'active' : ''}`}
+              onClick={() => handleFormatChange('m4a')}
+            >
+              .M4A (AAC)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 3. MULTI-DEVICE CONNECT                                                   */}
+      {/* ========================================================================= */}
+      <div className="settings-group">
+        <div className="settings-group-header">
+          <div className="settings-group-title">
+            <Wifi size={18} color="var(--accent-primary)" />
+            <span>Connected Devices</span>
+          </div>
+        </div>
+
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Spotify Connect Remote Sync</div>
+            <div className="settings-row-desc">
+              Pair your phone, tablet, or secondary computer to control playback in real-time.
+            </div>
+          </div>
+          <button className="settings-btn-primary" onClick={() => setShowSyncModal(true)}>
+            <Wifi size={13} />
+            <span>Pair Device</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 4. PRIVACY & ALGORITHM FILTERS                                            */}
+      {/* ========================================================================= */}
+      <div className="settings-group">
+        <div className="settings-group-header">
+          <div className="settings-group-title">
+            <Sliders size={18} color="var(--accent-primary)" />
+            <span>Privacy & Algorithm Preferences</span>
+          </div>
+          {blockedCount > 0 && (
+            <span className="settings-badge" style={{ backgroundColor: 'rgba(231, 76, 60, 0.15)', color: '#ff5252' }}>
+              {blockedCount} Excluded
+            </span>
           )}
         </div>
 
-        {/* ========================================================================= */}
-        {/* 2. MULTI-DEVICE SYNC                                                      */}
-        {/* ========================================================================= */}
-        <div style={{
-          backgroundColor: 'var(--bg-card)',
-          borderRadius: '12px',
-          padding: '24px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          border: '1px solid var(--border-color)',
-          flexWrap: 'wrap',
-          gap: '16px'
-        }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '1.1rem', marginBottom: '4px' }}>
-              <Wifi size={20} color="var(--accent-primary)" />
-              <span>Multi-Device Sync</span>
+        {/* Listening History Clean Slate */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Listening History & Recommendations</div>
+            <div className="settings-row-desc">
+              {historyCount > 0 
+                ? `${historyCount} tracks recorded. Clears Speed Dial, Quick Picks, and Dashboard taste clusters.` 
+                : 'No history recorded. Recommendations are fresh.'}
             </div>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              Connect your PC and Mobile phone to control playback remotely (Spotify Connect Style).
-            </p>
           </div>
-          <button className="hero-play-btn" onClick={() => setShowSyncModal(true)}>
-            Open Sync Modal
+          <button 
+            className="settings-btn-secondary"
+            onClick={handleClearHistory}
+            style={{ color: historyCleared ? '#2ecc71' : undefined, borderColor: historyCleared ? '#2ecc71' : undefined }}
+          >
+            {historyCleared ? <Check size={14} /> : <RotateCcw size={14} />}
+            <span>{historyCleared ? 'History Cleared' : 'Clear History'}</span>
           </button>
         </div>
 
-        {/* ========================================================================= */}
-        {/* 4. AUDIO ENGINE INTEGRATION                                               */}
-        {/* ========================================================================= */}
-        <div style={{
-          backgroundColor: 'var(--bg-card)',
-          borderRadius: '12px',
-          padding: '24px',
-          border: '1px solid var(--border-color)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '1.1rem', marginBottom: '4px' }}>
-            <ShieldCheck size={20} color="var(--accent-secondary)" />
-            <span>Official Audio Stream Resolver</span>
-          </div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
-            Always stream 100% official YouTube Music studio topic releases, filtering out music videos and fan visualizers.
-          </p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-secondary)', fontSize: '0.85rem', fontWeight: 600 }}>
-            <CheckCircle2 size={16} />
-            <span>Active (Universal Studio Topic Resolver Enabled)</span>
-          </div>
-        </div>
-
-        {/* ========================================================================= */}
-        {/* 5. OFFLINE STORAGE & DOWNLOADS                                            */}
-        {/* ========================================================================= */}
-        <div style={{
-          backgroundColor: 'var(--bg-card)',
-          borderRadius: '12px',
-          padding: '24px',
-          border: '1px solid var(--border-color)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px', flexWrap: 'wrap', gap: '10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '1.1rem' }}>
-              <HardDrive size={20} color="var(--accent-primary)" />
-              <span>Offline Downloads & Local Cache</span>
-            </div>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              backgroundColor: 'rgba(30, 144, 255, 0.12)',
-              color: 'var(--accent-primary)',
-              padding: '4px 10px',
-              borderRadius: '12px',
-              fontSize: '0.78rem',
-              fontWeight: 700
-            }}>
-              <CheckCircle2 size={13} />
-              <span>IndexedDB Active</span>
+        {/* Search Queries History */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Recent Search History</div>
+            <div className="settings-row-desc">
+              {searchCount > 0 
+                ? `${searchCount} recent search queries and suggestions.` 
+                : 'No recent searches.'}
             </div>
           </div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
-            Direct high-bitrate Opus & AAC audio streams are saved directly into your device's browser IndexedDB database for instant zero-buffering offline listening.
-          </p>
-
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '14px 18px',
-            backgroundColor: 'rgba(255, 255, 255, 0.03)',
-            borderRadius: '10px',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
-            flexWrap: 'wrap',
-            gap: '12px',
-            marginBottom: '16px'
-          }}>
-            <div>
-              <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {Object.keys(downloadedTrackIds || {}).length} {Object.keys(downloadedTrackIds || {}).length === 1 ? 'Track' : 'Tracks'} Downloaded
-              </div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                Offline tracks play with native HTML5 Audio & 64-band Web Audio Spectrum Analyzer
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                onClick={() => navigate('/library?tab=downloads')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  borderRadius: '20px',
-                  backgroundColor: 'var(--accent-primary)',
-                  color: '#000',
-                  border: 'none',
-                  fontSize: '0.82rem',
-                  fontWeight: 700,
-                  cursor: 'pointer'
-                }}
-              >
-                <ExternalLink size={14} />
-                <span>View Offline Library</span>
-              </button>
-
-              {Object.keys(downloadedTrackIds || {}).length > 0 && (
-                <button
-                  onClick={() => {
-                    if (window.confirm('Are you sure you want to clear all offline downloaded tracks?')) {
-                      clearAllDownloads();
-                    }
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '8px 14px',
-                    borderRadius: '20px',
-                    backgroundColor: 'rgba(231, 76, 60, 0.12)',
-                    color: '#e74c3c',
-                    border: '1px solid rgba(231, 76, 60, 0.3)',
-                    fontSize: '0.82rem',
-                    fontWeight: 600,
-                    cursor: 'pointer'
-                  }}
-                >
-                  <Trash2 size={14} />
-                  <span>Clear All Cache</span>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Custom Download Folder Pathway */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '14px 18px',
-            backgroundColor: 'rgba(255, 255, 255, 0.02)',
-            borderRadius: '10px',
-            border: '1px solid rgba(255, 255, 255, 0.05)',
-            flexWrap: 'wrap',
-            gap: '12px'
-          }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {customDirName ? <FolderOpen size={17} color="var(--accent-primary)" /> : <Folder size={17} color="var(--text-secondary)" />}
-                <span>Custom Music Download Folder</span>
-              </div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
-                {customDirName 
-                  ? `Active target folder: "${customDirName}" on your PC`
-                  : 'Default: Standard OS Downloads folder (e.g. C:\\Users\\...\\Downloads)'}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {window.electronAPI?.isElectron && (
-                <button
-                  onClick={() => window.electronAPI?.openFolder(customDirName || undefined)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '8px 14px',
-                    borderRadius: '20px',
-                    backgroundColor: 'rgba(255, 0, 127, 0.12)',
-                    color: 'var(--accent-primary)',
-                    border: '1px solid var(--accent-primary)',
-                    fontSize: '0.82rem',
-                    fontWeight: 700,
-                    cursor: 'pointer'
-                  }}
-                  title="Open music downloads folder in Windows File Explorer"
-                >
-                  <FolderOpen size={14} />
-                  <span>Open in Explorer</span>
-                </button>
-              )}
-
-              <button
-                onClick={handleChooseFolder}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 14px',
-                  borderRadius: '20px',
-                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border-color)',
-                  fontSize: '0.82rem',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
-              >
-                <Folder size={14} />
-                <span>{customDirName ? 'Change Folder' : 'Choose Music Folder'}</span>
-              </button>
-
-              {customDirName && (
-                <button
-                  onClick={handleResetFolder}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '8px 12px',
-                    borderRadius: '20px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-                    color: 'var(--text-secondary)',
-                    border: '1px solid var(--border-color)',
-                    fontSize: '0.82rem',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <RotateCcw size={13} />
-                  <span>Reset Default</span>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Preferred Offline Audio Format (.mp3 vs .m4a) */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '14px 18px',
-            backgroundColor: 'rgba(255, 255, 255, 0.02)',
-            borderRadius: '10px',
-            border: '1px solid rgba(255, 255, 255, 0.05)',
-            flexWrap: 'wrap',
-            gap: '12px',
-            marginTop: '12px'
-          }}>
-            <div>
-              <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                Preferred Audio Export Format
-              </div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
-                Select format for exported music files saved onto your device
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                onClick={() => handleFormatChange('mp3')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  borderRadius: '20px',
-                  backgroundColor: downloadFormat === 'mp3' ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.05)',
-                  color: downloadFormat === 'mp3' ? '#000000' : 'var(--text-primary)',
-                  border: `1px solid ${downloadFormat === 'mp3' ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                  fontSize: '0.82rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
-                }}
-              >
-                <span>.MP3 (Universal Standard)</span>
-              </button>
-
-              <button
-                onClick={() => handleFormatChange('m4a')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 16px',
-                  borderRadius: '20px',
-                  backgroundColor: downloadFormat === 'm4a' ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.05)',
-                  color: downloadFormat === 'm4a' ? '#000000' : 'var(--text-primary)',
-                  border: `1px solid ${downloadFormat === 'm4a' ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                  fontSize: '0.82rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
-                }}
-              >
-                <span>.M4A (Apple / AAC)</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* ========================================================================= */}
-        {/* 6. DATABASE STORAGE & FACTORY RESET                                       */}
-        {/* ========================================================================= */}
-        <div style={{
-          backgroundColor: 'var(--bg-card)',
-          borderRadius: '12px',
-          padding: '24px',
-          border: '1px solid var(--border-color)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '1.1rem', marginBottom: '4px' }}>
-            <Database size={20} color="var(--accent-primary)" />
-            <span>Local Database Storage & Reset</span>
-          </div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
-            Your liked songs, custom playlists, queue state, and volume settings are saved to browser local storage.
-          </p>
           <button 
-            className="secondary-btn"
-            onClick={() => setShowConfirmReset(true)}
-            style={{ 
-              color: '#ff4757', 
-              fontSize: '0.85rem', 
-              fontWeight: 600,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '8px 16px',
-              borderRadius: '8px',
-              borderColor: 'rgba(255, 71, 87, 0.3)'
-            }}
+            className="settings-btn-secondary"
+            onClick={handleClearSearches}
+            style={{ color: searchesCleared ? '#2ecc71' : undefined, borderColor: searchesCleared ? '#2ecc71' : undefined }}
           >
-            <Trash2 size={15} />
-            <span>Factory Reset All Data</span>
+            {searchesCleared ? <Check size={14} /> : <Trash2 size={14} />}
+            <span>{searchesCleared ? 'Cleared' : 'Clear Searches'}</span>
+          </button>
+        </div>
+
+        {/* Blocked Artists & Songs Section */}
+        {blockedCount > 0 && (
+          <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Excluded Content ({blockedCount})
+              </span>
+              <button 
+                onClick={clearDislikedAndBlocked}
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '0.75rem', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                Restore All
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              {/* Blocked Artists */}
+              {(blockedArtists || []).map(artist => (
+                <div 
+                  key={artist}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '4px 10px',
+                    borderRadius: '14px',
+                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    border: '1px solid rgba(231, 76, 60, 0.3)',
+                    color: '#ff6b6b',
+                    fontSize: '0.78rem',
+                    fontWeight: 600
+                  }}
+                >
+                  <UserX size={12} />
+                  <span>{artist}</span>
+                  <button
+                    onClick={() => unblockArtist(artist)}
+                    title={`Unblock ${artist}`}
+                    style={{ background: 'none', border: 'none', color: '#ff6b6b', cursor: 'pointer', display: 'flex', padding: '1px' }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+
+              {/* Hidden Songs */}
+              {(dislikedTracks || []).map(track => (
+                <div 
+                  key={track.id}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '4px 10px',
+                    borderRadius: '14px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.78rem',
+                    maxWidth: '260px'
+                  }}
+                >
+                  <Ban size={12} color="#ff6b6b" />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {track.title}
+                  </span>
+                  <button
+                    onClick={() => unmarkTrackNotInterested(track.id)}
+                    title="Restore song recommendations"
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', padding: '1px' }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 5. DATA & FACTORY RESET                                                   */}
+      {/* ========================================================================= */}
+      <div className="settings-group" style={{ borderColor: 'rgba(255, 71, 87, 0.25)' }}>
+        <div className="settings-group-header" style={{ backgroundColor: 'rgba(255, 71, 87, 0.04)' }}>
+          <div className="settings-group-title" style={{ color: '#ff5252' }}>
+            <Trash2 size={18} color="#ff5252" />
+            <span>Danger Zone</span>
+          </div>
+        </div>
+
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label" style={{ color: '#ff5252' }}>Factory Reset All Data</div>
+            <div className="settings-row-desc">
+              Permanently clears local database, custom playlists, liked songs, and restores factory defaults.
+            </div>
+          </div>
+          <button className="settings-btn-danger" onClick={() => setShowConfirmReset(true)}>
+            <AlertTriangle size={13} />
+            <span>Reset All Data</span>
           </button>
         </div>
       </div>

@@ -48,6 +48,7 @@ interface PlayerState {
   queueSessionId: string;
   activePlayerTab: 'up_next' | 'lyrics' | 'related';
   isPlayerDrawerOpen: boolean;
+  useRotatingCD: boolean;
   
   // Advanced Playback State & History
   isShuffle: boolean;
@@ -99,6 +100,7 @@ interface PlayerState {
   openPlayerDrawer: (tab?: 'up_next' | 'lyrics' | 'related') => void;
   closePlayerDrawer: () => void;
   togglePlayerDrawer: (tab?: 'up_next' | 'lyrics' | 'related') => void;
+  toggleRotatingCD: () => void;
 
   toggleShuffle: () => void;
   toggleRepeat: () => void;
@@ -168,6 +170,7 @@ export const usePlayerStore = create<PlayerState>()(
   queueSessionId: '',
   activePlayerTab: 'up_next',
   isPlayerDrawerOpen: false,
+  useRotatingCD: false,
 
   activeView: 'dashboard',
   searchQuery: '',
@@ -271,6 +274,7 @@ export const usePlayerStore = create<PlayerState>()(
     }
     return { isPlayerDrawerOpen: true, activePlayerTab: tab || state.activePlayerTab };
   }),
+  toggleRotatingCD: () => set((state) => ({ useRotatingCD: !state.useRotatingCD })),
 
   setQueue: (tracks, initialIndex = 0, playingFrom) => {
     const isShuffle = get().isShuffle;
@@ -1163,7 +1167,8 @@ export const usePlayerStore = create<PlayerState>()(
         dislikedTracks: state.dislikedTracks,
         blockedArtists: state.blockedArtists,
         downloadedTrackIds: state.downloadedTrackIds,
-        isOfflineOnly: state.isOfflineOnly
+        isOfflineOnly: state.isOfflineOnly,
+        useRotatingCD: state.useRotatingCD
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;

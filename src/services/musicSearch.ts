@@ -833,14 +833,17 @@ export function cleanGoogleImageUrl(url: string | undefined, size = 500): string
     cleanUrl = `https:${cleanUrl}`;
   }
   if (cleanUrl.startsWith('/vi/')) {
-    return `https://i.ytimg.com${cleanUrl}`;
+    cleanUrl = `https://i.ytimg.com${cleanUrl}`;
   }
   if (cleanUrl.includes('googleusercontent.com') || cleanUrl.includes('ggpht.com')) {
     const base = cleanUrl.split('=')[0];
-    return `${base}=s${size}-c`;
+    return `${base}=w${size}-h${size}-c-k-no`;
   }
   if (cleanUrl.includes('mzstatic.com') && cleanUrl.includes('100x100bb')) {
     return cleanUrl.replace('100x100bb', `${size}x${size}bb`);
+  }
+  if (cleanUrl.includes('i.ytimg.com/vi/') && cleanUrl.includes('?sqp=')) {
+    return cleanUrl.split('?')[0];
   }
   return cleanUrl;
 }
@@ -1431,7 +1434,15 @@ export async function fetchAlbumDetailsFromYTM(
                     r.navigationEndpoint?.watchEndpoint?.videoId;
     const videoId = extractOfficialAudioTrackId(r, rawVideoId);
     const durationStr = r.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text;
-    const trackArtist = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((s: any) => s.text).join('') || artist;
+    const artistRuns = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+    let trackArtist = '';
+    if (artistRuns.length > 0) {
+      const artistWithEndpoint = artistRuns.find((run: any) => run.navigationEndpoint?.browseEndpoint?.browseEndpointContextSupportedConfigs?.mainAppWebResponseContext?.commandContexts || run.navigationEndpoint?.browseEndpoint?.browseId?.startsWith('UC'));
+      trackArtist = artistWithEndpoint?.text || artistRuns[0]?.text || '';
+    }
+    if (!trackArtist) {
+      trackArtist = isPlaylist ? (fallbackArtistName || 'Various Artists') : artist;
+    }
     const rawTrackCover = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
     const trackCover = cleanGoogleImageUrl(rawTrackCover || cover, 500);
 
@@ -3451,9 +3462,22 @@ export async function fetchSimilarPlaylists(seedPlaylist: Playlist): Promise<Pub
   if (!seedPlaylist.tracks || seedPlaylist.tracks.length === 0) return [];
   
   const artistCounts: Record<string, number> = {};
+  const playlistAuthor = (seedPlaylist.author || '').toLowerCase().trim();
+
   seedPlaylist.tracks.forEach(t => {
     if (t.artist) {
-      artistCounts[t.artist] = (artistCounts[t.artist] || 0) + 1;
+      const cleanArt = t.artist.trim();
+      const artLower = cleanArt.toLowerCase();
+      // Ignore playlist author names, "Community", "Various Artists", etc.
+      if (
+        artLower !== playlistAuthor &&
+        artLower !== 'community' &&
+        artLower !== 'various artists' &&
+        artLower !== 'official audio' &&
+        artLower !== 'topic'
+      ) {
+        artistCounts[cleanArt] = (artistCounts[cleanArt] || 0) + 1;
+      }
     }
   });
   
