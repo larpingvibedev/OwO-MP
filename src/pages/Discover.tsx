@@ -92,6 +92,7 @@ export function Discover() {
     return () => {
       isMounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, artistProfile?.name]);
 
   // Handle clicking a recent query chip

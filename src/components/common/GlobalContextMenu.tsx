@@ -98,7 +98,7 @@ export const GlobalContextMenu: React.FC = () => {
     }
 
     setPos({ top, left, maxHeight: Math.max(180, maxHeight) });
-  }, [isOpen, x, y, type]);
+  }, [isOpen, x, y]);
 
   useEffect(() => {
     if (isOpen) {

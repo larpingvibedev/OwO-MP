@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -216,48 +216,51 @@ export function Dashboard() {
   }, [playHistory]);
 
   // Helper to filter out not interested / blocked tracks and artists
-  const isTrackBlocked = (t: Track) => {
+  const isTrackBlocked = useCallback((t: Track | undefined) => {
     if (!t) return true;
     const aLower = (t.artist || '').toLowerCase().trim();
     const isArtistBlocked = (blockedArtists || []).some(b => b && (aLower === b.toLowerCase() || aLower.includes(b.toLowerCase())));
     const isDisliked = (dislikedTracks || []).some(d => isSameTrack(d, t));
     return isArtistBlocked || isDisliked;
-  };
+  }, [blockedArtists, dislikedTracks]);
 
   // 1. Get Speed Dial & Quick Picks tracks (deduplicated by Title + Artist, excluding blocked items)
-  const historyArray = Object.values(playHistory || {}).filter(h => h.track && !isTrackBlocked(h.track));
-  const uniqueHistoryMap = new Map<string, { track: Track; playCount: number; lastPlayedAt: number }>();
-  historyArray.forEach(h => {
-    if (!h.track?.title || !h.track?.artist) return;
-    const key = `${h.track.title.toLowerCase().trim()}___${h.track.artist.toLowerCase().trim().replace(/\s*-\s*topic$/i, '')}`;
-    const existing = uniqueHistoryMap.get(key);
-    if (!existing) {
-      uniqueHistoryMap.set(key, h);
-    } else {
-      uniqueHistoryMap.set(key, {
-        track: (h.track.album && !existing.track.album) ? h.track : existing.track,
-        playCount: existing.playCount + h.playCount,
-        lastPlayedAt: Math.max(existing.lastPlayedAt, h.lastPlayedAt)
-      });
-    }
-  });
+  const { speedDialTracks, quickPicksTracks, historyArray } = useMemo(() => {
+    const histArr = Object.values(playHistory || {}).filter(h => h.track && !isTrackBlocked(h.track));
+    const uniqueHistoryMap = new Map<string, { track: Track; playCount: number; lastPlayedAt: number }>();
+    histArr.forEach(h => {
+      if (!h.track?.title || !h.track?.artist) return;
+      const key = `${h.track.title.toLowerCase().trim()}___${h.track.artist.toLowerCase().trim().replace(/\s*-\s*topic$/i, '')}`;
+      const existing = uniqueHistoryMap.get(key);
+      if (!existing) {
+        uniqueHistoryMap.set(key, h);
+      } else {
+        uniqueHistoryMap.set(key, {
+          track: (h.track.album && !existing.track.album) ? h.track : existing.track,
+          playCount: existing.playCount + h.playCount,
+          lastPlayedAt: Math.max(existing.lastPlayedAt, h.lastPlayedAt)
+        });
+      }
+    });
 
-  const speedDialTracks = Array.from(uniqueHistoryMap.values())
-    .sort((a, b) => b.playCount - a.playCount || b.lastPlayedAt - a.lastPlayedAt)
-    .slice(0, 9)
-    .map(h => h.track);
+    const speedDial = Array.from(uniqueHistoryMap.values())
+      .sort((a, b) => b.playCount - a.playCount || b.lastPlayedAt - a.lastPlayedAt)
+      .slice(0, 9)
+      .map(h => h.track);
+
+    const quickPicks = Array.from(uniqueHistoryMap.values())
+      .sort((a, b) => b.lastPlayedAt - a.lastPlayedAt)
+      .slice(0, 20)
+      .map(h => h.track);
+
+    return { speedDialTracks: speedDial, quickPicksTracks: quickPicks, historyArray: histArr };
+  }, [playHistory, isTrackBlocked]);
 
   // Fallback speed dial if empty
-  const defaultSpeedDial = speedDialTracks.length > 0 ? speedDialTracks : favorites.filter(t => !isTrackBlocked(t)).slice(0, 9);
-
-  // 2. Get Quick Picks (recent listening habits)
-  const quickPicksTracks = Array.from(uniqueHistoryMap.values())
-    .sort((a, b) => b.lastPlayedAt - a.lastPlayedAt)
-    .slice(0, 20)
-    .map(h => h.track);
+  const defaultSpeedDial = useMemo(() => speedDialTracks.length > 0 ? speedDialTracks : favorites.filter(t => !isTrackBlocked(t)).slice(0, 9), [speedDialTracks, favorites, isTrackBlocked]);
 
   // Fallback for quick picks
-  const displayQuickPicks = quickPicksTracks.length > 0 ? quickPicksTracks : favorites.filter(t => !isTrackBlocked(t));
+  const displayQuickPicks = useMemo(() => quickPicksTracks.length > 0 ? quickPicksTracks : favorites.filter(t => !isTrackBlocked(t)), [quickPicksTracks, favorites, isTrackBlocked]);
 
   // 3. Universal User Seed Resolution (History -> Favorites -> Playlists -> Current -> Discovery)
   const allUserTracks: Track[] = useMemo(() => [
@@ -370,7 +373,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, currentTrack, refreshNonce]);
+  }, [historyArray, allUserArtists, recommendedTracks.length, refreshNonce, isTrackBlocked]);
 
   // 6. Fetch dynamic "Covers and Remixes" strictly based on user's top played tracks
   useEffect(() => {
@@ -401,7 +404,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, currentTrack, refreshNonce]);
+  }, [historyArray, allUserTracks, coversAndRemixes.length, refreshNonce]);
 
   // 7. Fetch "Albums for you" and "From the community" (Public User Playlists)
   useEffect(() => {
@@ -438,7 +441,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, currentTrack, topArtists, refreshNonce]);
+  }, [topArtists, albumsForYou.length, communityPlaylists.length, refreshNonce]);
 
   // 8. Fetch "Similar to [Playlist Name]"
   useEffect(() => {
@@ -476,7 +479,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playlists, favorites, playHistory, topArtists, refreshNonce]);
+  }, [playlists, allUserTracks, similarPlaylists.length, topArtists, refreshNonce]);
 
   // 9. Fetch "New Releases" (Albums & Singles from Explore)
   useEffect(() => {
@@ -503,7 +506,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, topArtists, refreshNonce]);
+  }, [topArtists, newReleases.length, refreshNonce]);
 
   // 10. Fetch "Your Daily Discover"
   useEffect(() => {
@@ -537,7 +540,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, displayQuickPicks, refreshNonce]);
+  }, [historyArray, displayQuickPicks, dailyDiscover.length, playHistory, favorites, refreshNonce]);
 
   // Group user tracks by artist across history, favorites, playlists and recommendations
   const artistTrackMap = useMemo(() => {
@@ -557,15 +560,15 @@ export function Dashboard() {
     return map;
   }, [allUserTracks, recommendedTracks, dailyDiscover, coversAndRemixes]);
 
-  const getArtistTracks = (artistName?: string): Track[] => {
+  const getArtistTracks = useCallback((artistName?: string): Track[] => {
     if (!artistName) return [];
     const direct = artistTrackMap.get(artistName.trim().toLowerCase()) || [];
     if (direct.length > 0) return direct;
     return allUserTracks.filter(t => t?.artist && t.artist.toLowerCase().includes(artistName.toLowerCase()));
-  };
+  }, [artistTrackMap, allUserTracks]);
 
   // Helper to build a curated unique queue for a station
-  const buildStationQueue = (primaryPool: Track[], secondaryPool: Track[] = []): Track[] => {
+  const buildStationQueue = useCallback((primaryPool: Track[], secondaryPool: Track[] = []): Track[] => {
     const seen = new Set<string>();
     const result: Track[] = [];
     
@@ -577,9 +580,9 @@ export function Dashboard() {
     });
 
     return result.slice(0, 30);
-  };
+  }, [displayQuickPicks, favorites, isTrackBlocked]);
 
-  const handlePlayQuickPick = (track: Track) => {
+  const handlePlayQuickPick = useCallback((track: Track) => {
     if (track.artist) {
       recordArtistEngagement(track.artist);
     }
@@ -591,7 +594,7 @@ export function Dashboard() {
     setQueue(finalQueue, 0, `${track.title} Mix`);
     setIsPlaying(true);
     showToast(`Playing ${track.title} Mix`);
-  };
+  }, [buildStationQueue, getArtistTracks, dailyDiscover, recommendedTracks, displayQuickPicks, setQueue, setIsPlaying, showToast]);
 
   // Authentic YouTube Music "Mixed for You" Stations with Real Thumbnails & Multi-Track Queues
   const dynamicMixes = useMemo(() => {
@@ -774,8 +777,9 @@ export function Dashboard() {
       return [allMixes[5], allMixes[4], allMixes[1], allMixes[3], allMixes[0], allMixes[2], allMixes[6]]; // Chill -> Mix 4 -> Supermix
     }
   }, [
+    buildStationQueue,
+    getArtistTracks,
     topArtists, 
-    artistTrackMap, 
     displayQuickPicks, 
     favorites, 
     dailyDiscover, 
@@ -784,7 +788,10 @@ export function Dashboard() {
     defaultSpeedDial, 
     finalCollage, 
     allUserTracks,
-    timeContext
+    timeContext,
+    setQueue,
+    setIsPlaying,
+    showToast
   ]);
 
   return (

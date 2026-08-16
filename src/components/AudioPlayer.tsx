@@ -53,6 +53,7 @@ export const AudioPlayer = () => {
 
     window.addEventListener('click', handleUserInteraction, { once: true });
     window.addEventListener('keydown', handleUserInteraction, { once: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 2. Play / Pause Control
@@ -267,6 +268,7 @@ export const AudioPlayer = () => {
     return () => {
       isCancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.id, playNonce]);
 
   // 6. MediaSession Integration

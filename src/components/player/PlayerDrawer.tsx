@@ -97,6 +97,20 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     }
   }, [queueIndex, activePlayerTab, isPlayerDrawerOpen]);
 
+  // Allow pressing Escape to close the full view player
+  useEffect(() => {
+    if (!isPlayerDrawerOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea') return;
+      if (e.key === 'Escape') {
+        closePlayerDrawer();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlayerDrawerOpen, closePlayerDrawer]);
+
   // 1. Sync Up Next loading state with the active queue session without firing duplicate parallel fetches
   useEffect(() => {
     if (!currentTrack || activeQueue.length === 0) {
@@ -126,6 +140,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
       }, 3500);
       return () => clearTimeout(timer);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueSessionId, currentTrack?.id, recommendedUpNext.length]);
 
   // 2. Fetch Multi-Tier Lyrics from LRCLIB, Genius & Musixmatch
@@ -156,6 +171,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     return () => {
       isMounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, activePlayerTab]);
 
   // 3. Auto-Scroll Synced Lyrics strictly inside the content column without moving parent screens
@@ -212,6 +228,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     return () => {
       isMounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.id, currentTrack?.artist, activePlayerTab]);
 
   if (!currentTrack) return null;

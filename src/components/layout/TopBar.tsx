@@ -28,6 +28,7 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
     setQueue,
     setIsPlaying,
     downloadingTrackIds,
+    isPlayerDrawerOpen,
     closePlayerDrawer
   } = usePlayerStore();
 
@@ -170,9 +171,15 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
       <div className="nav-controls">
         <button 
           className="nav-btn" 
-          onClick={() => navigate(-1)} 
-          title="Go Back"
-          aria-label="Go Back"
+          onClick={() => {
+            if (isPlayerDrawerOpen) {
+              closePlayerDrawer();
+            } else {
+              navigate(-1);
+            }
+          }} 
+          title={isPlayerDrawerOpen ? "Close Full Player" : "Go Back"}
+          aria-label={isPlayerDrawerOpen ? "Close Full Player" : "Go Back"}
         >
           <ChevronLeft size={20} />
         </button>

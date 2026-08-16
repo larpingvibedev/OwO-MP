@@ -22,6 +22,7 @@ export function MainLayout({ onOpenDeviceModal }: MainLayoutProps) {
     if (isPlayerDrawerOpen) {
       closePlayerDrawer();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname, location.search]);
 
   return (

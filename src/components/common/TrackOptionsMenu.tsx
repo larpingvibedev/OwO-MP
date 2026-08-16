@@ -150,7 +150,7 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, calculatePosition]);
+  }, [isOpen, calculatePosition, syncOfflineTracks]);
 
   const handleStartMix = (e: React.MouseEvent) => {
     e.stopPropagation();
