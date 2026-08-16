@@ -263,7 +263,7 @@ export function Library() {
       const key = cleanTrackKey(d.artist, d.title);
       seenTrackKeys.add(key);
       seenTrackKeys.add(d.id);
-      if (d.filePath) seenFilePaths.add(d.filePath.toLowerCase());
+      if ((d as any).filePath) seenFilePaths.add((d as any).filePath.toLowerCase());
       merged.push(d);
     }
 
@@ -613,7 +613,7 @@ export function Library() {
                       className="card-play-hover-btn"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handlePlayAllOffline();
+                        handlePlayAllLocal();
                       }}
                       title="Play All Offline"
                     >
