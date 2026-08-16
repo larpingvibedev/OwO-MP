@@ -835,9 +835,14 @@ export function cleanGoogleImageUrl(url: string | undefined, size = 500): string
   if (cleanUrl.startsWith('/vi/')) {
     cleanUrl = `https://i.ytimg.com${cleanUrl}`;
   }
-  if (cleanUrl.includes('googleusercontent.com') || cleanUrl.includes('ggpht.com')) {
-    const base = cleanUrl.split('=')[0];
-    return `${base}=w${size}-h${size}-c-k-no`;
+  if (cleanUrl.includes('yt3.googleusercontent.com') || cleanUrl.includes('googleusercontent.com') || cleanUrl.includes('ggpht.com')) {
+    if (cleanUrl.includes('=s')) {
+      return cleanUrl.replace(/=s\d+/, `=s${Math.min(size, 800)}`);
+    }
+    if (cleanUrl.includes('=')) {
+      return cleanUrl.replace(/=[^=]*$/, `=s${Math.min(size, 800)}`);
+    }
+    return `${cleanUrl}=s${Math.min(size, 800)}`;
   }
   if (cleanUrl.includes('mzstatic.com') && cleanUrl.includes('100x100bb')) {
     return cleanUrl.replace('100x100bb', `${size}x${size}bb`);
@@ -3188,6 +3193,45 @@ export async function fetchCommunityPlaylistsForYou(topArtists: string[]): Promi
       } catch {}
     }
   }
+
+  // Resolve authentic permanent track cover for any playlists that returned temporary / broken studio thumbnails
+  await Promise.allSettled(
+    results.map(async (pl) => {
+      if (
+        !pl.cover ||
+        pl.cover.includes('/pl_c/') ||
+        pl.cover.includes('studio_square_thumbnail') ||
+        pl.cover.includes('unsplash.com')
+      ) {
+        const plId = pl.playlistId || pl.id || '';
+        if (plId) {
+          for (const ep of endpoints) {
+            try {
+              const base = ep.replace('/search', '');
+              const bRes = await fetch(`${base}/browse`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  context: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20230522.01.00' } },
+                  browseId: plId.startsWith('VL') ? plId : `VL${plId}`
+                })
+              });
+              if (bRes.ok) {
+                const bData = await bRes.json();
+                const section = bData?.contents?.twoColumnBrowseResultsRenderer?.secondaryContents?.sectionListRenderer?.contents?.[0]?.musicPlaylistShelfRenderer;
+                const firstItem = section?.contents?.[0]?.musicResponsiveListItemRenderer;
+                const trackThumb = firstItem?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
+                if (trackThumb) {
+                  pl.cover = cleanGoogleImageUrl(trackThumb, 500);
+                  break;
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+    })
+  );
 
   return results.slice(0, 20);
 }

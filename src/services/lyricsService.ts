@@ -15,6 +15,48 @@ export interface LyricsResult {
 }
 
 /**
+ * Universal title and artist similarity matcher to ensure search candidates match the target track.
+ */
+export function isTitleAndArtistMatch(
+  candTitle: string,
+  candArtist: string,
+  targetTitle: string,
+  targetArtist: string
+): boolean {
+  const norm = (s: string) => (s || '')
+    .toLowerCase()
+    .replace(/\s*[\(\[](feat\.?|ft\.?|with|prod\.?|official|music video|audio|visualizer|remix|slowed|reverb|lyrics|lyric video|sped up|nightcore|unreleased|full version|no ai|hq|hd|clean|explicit|deluxe|bonus|extended|live).*?[\)\]]/gi, '')
+    .replace(/\s*-\s*(official|music video|audio|visualizer|remix|single|ep|lyrics|lyric video|unreleased|full version).*$/gi, '')
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const cT = norm(candTitle);
+  const cA = norm(candArtist);
+  const tT = norm(targetTitle);
+  const tA = norm(targetArtist);
+
+  if (!cT || !tT) return false;
+
+  // Title must match or be a close substring/superstring
+  const titleMatches = cT === tT || cT.includes(tT) || tT.includes(cT);
+  if (!titleMatches) return false;
+
+  // Artist match check (if candidate artist is available)
+  if (tA && cA) {
+    const artistMatches = 
+      cA === tA || 
+      cA.includes(tA) || 
+      tA.includes(cA) || 
+      cA.includes('song') || 
+      cA.includes('video');
+    if (!artistMatches) return false;
+  }
+
+  return true;
+}
+
+/**
  * Clean plain lyric strings to remove stray LRC metadata tags (like [offset:xxx], [ar:xxx])
  */
 export function cleanPlainLyricsText(text: string): string {
@@ -66,7 +108,7 @@ export function cleanLyricsSearchQuery(title: string, artist: string): { cleanTi
 }
 
 /**
- * Fetch Official YouTube Music / Musixmatch Synchronized Subtitles via InnerTube
+ * Fetch Official YouTube Music / Musixmatch Synchronized Subtitles via InnerTube with Strict Candidate Validation
  */
 async function fetchYouTubeMusicMusixmatchLyrics(
   videoId?: string,
@@ -132,20 +174,6 @@ async function fetchYouTubeMusicMusixmatchLyrics(
             source: 'Musixmatch',
             isSynced: true
           };
-        } else {
-          // If no timing cues, use as static plain lyrics
-          const plain = timedLyrics
-            .map((item: any) => item?.lyricLine || '')
-            .filter((t: string) => t.trim())
-            .join('\n');
-          if (plain) {
-            return {
-              synced: null,
-              plain: cleanPlainLyricsText(plain),
-              source: 'Musixmatch',
-              isSynced: false
-            };
-          }
         }
       }
 
@@ -176,7 +204,7 @@ async function fetchYouTubeMusicMusixmatchLyrics(
     if (directResult && directResult.synced) return directResult;
   }
 
-  // 2. If direct videoId didn't have valid synced lyrics or wasn't provided, resolve official release candidates on YouTube Music
+  // 2. Structured Search with Strict Title & Artist Verification
   if (title && artist) {
     try {
       const { cleanTitle, cleanArtist } = cleanLyricsSearchQuery(title, artist);
@@ -198,9 +226,39 @@ async function fetchYouTubeMusicMusixmatchLyrics(
         });
         if (res.ok) {
           const data = await res.json();
-          const str = JSON.stringify(data);
-          const videoIdMatches = Array.from(str.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)).map(m => m[1]);
-          const uniqueIds = Array.from(new Set(videoIdMatches)).filter(id => id !== videoId).slice(0, 5);
+          const candidates: string[] = [];
+
+          const extractItems = (obj: any) => {
+            if (!obj || typeof obj !== 'object') return;
+            if (obj.musicResponsiveListItemRenderer) {
+              const r = obj.musicResponsiveListItemRenderer;
+              const itemTitle = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((x: any) => x.text).join('') || '';
+              const itemArtist = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((x: any) => x.text).join('') || '';
+              const vId = r.playlistItemData?.videoId ||
+                r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+                r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
+              if (vId && itemTitle && isTitleAndArtistMatch(itemTitle, itemArtist, cleanTitle, cleanArtist)) {
+                candidates.push(vId);
+              }
+            }
+            if (obj.musicCardShelfRenderer) {
+              const c = obj.musicCardShelfRenderer;
+              const itemTitle = c.title?.runs?.map((x: any) => x.text).join('') || '';
+              const itemArtist = c.subtitle?.runs?.map((x: any) => x.text).join('') || '';
+              const vId = c.title?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
+                c.onTap?.watchEndpoint?.videoId ||
+                c.contents?.[0]?.musicResponsiveListItemRenderer?.playlistItemData?.videoId;
+              if (vId && itemTitle && isTitleAndArtistMatch(itemTitle, itemArtist, cleanTitle, cleanArtist)) {
+                candidates.push(vId);
+              }
+            }
+            for (const k of Object.keys(obj)) {
+              extractItems(obj[k]);
+            }
+          };
+
+          extractItems(data);
+          const uniqueIds = Array.from(new Set(candidates)).filter(id => id !== videoId).slice(0, 3);
 
           for (const candId of uniqueIds) {
             const resolvedResult = await tryGetFromId(candId);
@@ -276,7 +334,7 @@ export function parseLrcLyrics(lrcText: string): ParsedLyricLine[] {
 }
 
 /**
- * Score and rank LRCLIB search candidates to pick the candidate with closest duration and accurate sync.
+ * Score and rank LRCLIB search candidates with strict Title & Artist verification
  */
 function rankLrcLibCandidates(
   candidates: any[],
@@ -286,7 +344,10 @@ function rankLrcLibCandidates(
 ): any | null {
   if (!Array.isArray(candidates) || candidates.length === 0) return null;
 
-  const scored = candidates.map(item => {
+  const valid = candidates.filter(item => isTitleAndArtistMatch(item.trackName, item.artistName, cleanTitle, cleanArtist));
+  if (valid.length === 0) return null;
+
+  const scored = valid.map(item => {
     let score = 0;
     if (item.syncedLyrics) score += 100;
     else if (item.plainLyrics) score += 20;
@@ -319,7 +380,7 @@ function rankLrcLibCandidates(
 }
 
 /**
- * LRCLIB Multi-step Resolution with Candidate Ranking
+ * LRCLIB Multi-step Resolution with Strict Candidate Matching
  */
 async function fetchLrcLib(
   title: string,
@@ -340,7 +401,11 @@ async function fetchLrcLib(
       const res = await fetch(url.toString());
       if (res.ok) {
         const data = await res.json();
-        if (data.syncedLyrics || data.plainLyrics) return data;
+        if (data.syncedLyrics || data.plainLyrics) {
+          if (isTitleAndArtistMatch(data.trackName, data.artistName, cleanTitle, cleanArtist)) {
+            return data;
+          }
+        }
       }
     } catch {}
     return null;
@@ -397,7 +462,7 @@ async function fetchLrcLib(
 }
 
 /**
- * Fetch Full Plain Lyrics from AZLyrics
+ * Fetch Full Plain Lyrics from AZLyrics with Strict Title/Artist Matching
  */
 async function fetchAZLyrics(
   title: string,
@@ -443,7 +508,7 @@ async function fetchAZLyrics(
 }
 
 /**
- * Fetch Genius Song Metadata & Full Plain Lyrics
+ * Fetch Genius Song Metadata & Full Plain Lyrics with Strict Title/Artist Matching
  */
 async function fetchGeniusMetadata(
   cleanTitle: string,
@@ -455,7 +520,7 @@ async function fetchGeniusMetadata(
   if ((window as any).electronAPI?.getGeniusLyrics) {
     try {
       const data = await (window as any).electronAPI.getGeniusLyrics(query);
-      if (data && data.plain) {
+      if (data && data.plain && isTitleAndArtistMatch(data.title, data.artist, cleanTitle, cleanArtist)) {
         return {
           ...data,
           plain: cleanPlainLyricsText(data.plain)
@@ -470,7 +535,12 @@ async function fetchGeniusMetadata(
     if (res.ok) {
       const data = await res.json();
       const sections = data?.response?.sections || [];
-      const songHit = sections.flatMap((s: any) => s.hits || []).find((h: any) => h.type === 'song' || h.result?._type === 'song');
+      const songHits = sections.flatMap((s: any) => s.hits || []).filter((h: any) => h.type === 'song' || h.result?._type === 'song');
+      
+      const songHit = songHits.find((h: any) => 
+        isTitleAndArtistMatch(h.result?.title, h.result?.primary_artist?.name, cleanTitle, cleanArtist)
+      );
+
       if (songHit?.result?.url) {
         const hit = songHit.result;
         let plain = '';
@@ -517,9 +587,9 @@ async function fetchGeniusMetadata(
 }
 
 /**
- * Multi-Tier Lyric Fetcher:
+ * Multi-Tier Lyric Fetcher with Strict Match Verification:
  * 1. YouTube Music / Musixmatch (Official studio synchronized karaoke lyrics with dynamic resolution)
- * 2. LRCLIB (Millisecond-accurate timed karaoke lyrics with duration matching)
+ * 2. LRCLIB (Millisecond-accurate timed karaoke lyrics with strict title/artist matching)
  * 3. AZLyrics (Full comprehensive static studio lyrics)
  * 4. Genius (Metadata, annotations, and plain text fallback)
  */

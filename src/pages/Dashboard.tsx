@@ -27,6 +27,11 @@ import {
   fetchDailyDiscover,
   getDirectYouTubeId
 } from '../services/musicSearch';
+import { 
+  recordArtistImpressions, 
+  recordArtistEngagement, 
+  getBanditArtistSeeds 
+} from '../services/discoveryBandit';
 
 interface DynamicMix {
   id: string;
@@ -45,12 +50,45 @@ const CACHE_KEYS = {
   REC_ARTIST: 'owo_dash_rec_artist_v2',
   COVERS: 'owo_dash_covers_remixes_v3',
   ALBUMS: 'owo_dash_albums_v3',
-  COMMUNITY: 'owo_dash_community_v3',
+  COMMUNITY: 'owo_dash_community_v4',
   SIMILAR: 'owo_dash_similar',
   SEED_PL_NAME: 'owo_dash_seed_pl_name',
   NEW_RELEASES: 'owo_dash_new_releases_v7',
   DAILY_DISCOVER: 'owo_dash_daily_discover_v3',
+  LAST_REFRESH_TIME: 'owo_dash_last_refresh_timestamp',
 };
+
+// 90 minutes TTL for smart lifecycle background refreshing
+const DASHBOARD_REFRESH_TTL = 90 * 60 * 1000;
+
+function getTimeOfDayContext() {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 12) {
+    return {
+      timeSlot: 'morning' as const,
+      greeting: 'Good morning',
+      subtitle: 'Start your day with handpicked favorites and fresh sound.'
+    };
+  } else if (hour >= 12 && hour < 17) {
+    return {
+      timeSlot: 'afternoon' as const,
+      greeting: 'Good afternoon',
+      subtitle: 'Keep your momentum going with personalized mixes and beats.'
+    };
+  } else if (hour >= 17 && hour < 22) {
+    return {
+      timeSlot: 'evening' as const,
+      greeting: 'Good evening',
+      subtitle: 'Unwind and turn up the vibe with your top artists and mixes.'
+    };
+  } else {
+    return {
+      timeSlot: 'night' as const,
+      greeting: 'Late night vibes',
+      subtitle: 'Mellow grooves, deep cuts, and chill soundscapes for late hours.'
+    };
+  }
+}
 
 function getLocalCache<T>(key: string, fallback: T): T {
   try {
@@ -83,6 +121,9 @@ export function Dashboard() {
   const { openTrackContextMenu, openPlaylistContextMenu, openAlbumContextMenu } = useContextMenuStore();
   
   const navigate = useNavigate();
+
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const timeContext = useMemo(() => getTimeOfDayContext(), []);
   
   // Local state for recommendation carousels initialized instantly from local cache
   const [recommendedTracks, setRecommendedTracks] = useState<Track[]>(() => 
@@ -120,6 +161,46 @@ export function Dashboard() {
   const lastSimilarFetchRef = useRef<string>('');
   const lastNewReleasesFetchRef = useRef<string>('');
   const lastDailyDiscoverFetchRef = useRef<string>('');
+
+  // Smart lifecycle detection: background refresh if stale on focus/visibility change
+  useEffect(() => {
+    const checkAndTriggerLifecycleRefresh = () => {
+      try {
+        const lastRefresh = parseInt(localStorage.getItem(CACHE_KEYS.LAST_REFRESH_TIME) || '0', 10);
+        const now = Date.now();
+        if (now - lastRefresh > DASHBOARD_REFRESH_TTL) {
+          lastArtistFetchRef.current = '';
+          lastCoversFetchRef.current = '';
+          lastAlbumsFetchRef.current = '';
+          lastSimilarFetchRef.current = '';
+          lastNewReleasesFetchRef.current = '';
+          lastDailyDiscoverFetchRef.current = '';
+          localStorage.setItem(CACHE_KEYS.LAST_REFRESH_TIME, now.toString());
+          setRefreshNonce(n => n + 1);
+        }
+      } catch {}
+    };
+
+    checkAndTriggerLifecycleRefresh();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkAndTriggerLifecycleRefresh();
+      }
+    };
+
+    const handleFocus = () => {
+      checkAndTriggerLifecycleRefresh();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
 
   // When play history is explicitly reset, clear history-specific recommendations
   useEffect(() => {
@@ -240,11 +321,12 @@ export function Dashboard() {
         .map(e => e[0])
         .filter(a => a.toLowerCase() !== 'various artists');
 
-      const targetArtists = (sorted.length > 0)
-        ? sorted.slice(0, 4)
-        : (allUserArtists.length > 0 ? allUserArtists.slice(0, 4) : ['bunii', 'DC The Don', 'slayr', 'Kid Moon']);
+      const candidatePool = ['bunii', 'DC The Don', 'slayr', 'Kid Moon', 'Malcolm Todd', 'overnight', 'jaydes', 'nettspend', 'scruff'];
+      const userSeeds = sorted.length > 0 ? sorted : (allUserArtists.length > 0 ? allUserArtists : ['bunii', 'DC The Don', 'slayr', 'Kid Moon']);
+      const { blended } = getBanditArtistSeeds(userSeeds, candidatePool);
+      const targetArtists = blended.slice(0, 4);
 
-      const seedKey = targetArtists.join('|');
+      const seedKey = `${targetArtists.join('|')}_${refreshNonce}`;
       if (lastArtistFetchRef.current === seedKey && recommendedTracks.length > 0) return;
       lastArtistFetchRef.current = seedKey;
 
@@ -276,6 +358,7 @@ export function Dashboard() {
         if (!isCancelled && merged.length > 0) {
           setRecommendedTracks(merged.slice(0, 20));
           setLocalCache(CACHE_KEYS.REC_TRACKS, merged.slice(0, 20));
+          recordArtistImpressions(targetArtists);
         }
       } catch (err) {
         console.warn('Failed to fetch multi-artist recommendations:', err);
@@ -287,7 +370,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, currentTrack]);
+  }, [playHistory, favorites, currentTrack, refreshNonce]);
 
   // 6. Fetch dynamic "Covers and Remixes" strictly based on user's top played tracks
   useEffect(() => {
@@ -298,7 +381,7 @@ export function Dashboard() {
       const topTracks = topHistory.map(h => h.track);
       const seedsToUse = topTracks.length > 0 ? topTracks : allUserTracks.slice(0, 3);
       
-      const seedKey = seedsToUse.map(s => s.id || s.title).join('|');
+      const seedKey = `${seedsToUse.map(s => s.id || s.title).join('|')}_${refreshNonce}`;
       if (lastCoversFetchRef.current === seedKey && coversAndRemixes.length > 0) return;
       lastCoversFetchRef.current = seedKey;
 
@@ -318,14 +401,14 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, currentTrack]);
+  }, [playHistory, favorites, currentTrack, refreshNonce]);
 
   // 7. Fetch "Albums for you" and "From the community" (Public User Playlists)
   useEffect(() => {
     let isCancelled = false;
     
     const fetchPlaylistsAndAlbums = async () => {
-      const seedKey = topArtists.join('|');
+      const seedKey = `${topArtists.join('|')}_${refreshNonce}`;
       if (lastAlbumsFetchRef.current === seedKey && albumsForYou.length > 0 && communityPlaylists.length > 0) return;
       lastAlbumsFetchRef.current = seedKey;
 
@@ -355,7 +438,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, currentTrack, topArtists]);
+  }, [playHistory, favorites, currentTrack, topArtists, refreshNonce]);
 
   // 8. Fetch "Similar to [Playlist Name]"
   useEffect(() => {
@@ -370,7 +453,7 @@ export function Dashboard() {
       if (!seedPlaylist || seedPlaylist.tracks.length === 0) return;
 
       const seedName = seedPlaylist.name;
-      const seedKey = `${seedName}|${seedPlaylist.tracks.length}|${topArtists.join('-')}`;
+      const seedKey = `${seedName}|${seedPlaylist.tracks.length}|${topArtists.join('-')}_${refreshNonce}`;
       if (lastSimilarFetchRef.current === seedKey && similarPlaylists.length > 0) return;
       lastSimilarFetchRef.current = seedKey;
 
@@ -393,14 +476,14 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playlists, favorites, playHistory, topArtists]);
+  }, [playlists, favorites, playHistory, topArtists, refreshNonce]);
 
   // 9. Fetch "New Releases" (Albums & Singles from Explore)
   useEffect(() => {
     let isCancelled = false;
 
     const fetchReleases = async () => {
-      const seedKey = topArtists.join('|');
+      const seedKey = `${topArtists.join('|')}_${refreshNonce}`;
       if (lastNewReleasesFetchRef.current === seedKey && newReleases.length > 0) return;
       lastNewReleasesFetchRef.current = seedKey;
 
@@ -420,7 +503,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, topArtists]);
+  }, [playHistory, favorites, topArtists, refreshNonce]);
 
   // 10. Fetch "Your Daily Discover"
   useEffect(() => {
@@ -430,7 +513,7 @@ export function Dashboard() {
       const topHistory = [...historyArray].sort((a, b) => b.playCount - a.playCount);
       const topTracks = topHistory.map(h => h.track);
       const seedTracks = topTracks.length > 0 ? topTracks.slice(0, 5) : (displayQuickPicks.length > 0 ? displayQuickPicks.slice(0, 5) : []);
-      const seedKey = seedTracks.map(t => t.id || t.title).join('|');
+      const seedKey = `${seedTracks.map(t => t.id || t.title).join('|')}_${refreshNonce}`;
       if (lastDailyDiscoverFetchRef.current === seedKey && dailyDiscover.length > 0) return;
       lastDailyDiscoverFetchRef.current = seedKey;
 
@@ -441,6 +524,8 @@ export function Dashboard() {
         if (!isCancelled && tracks.length > 0) {
           setDailyDiscover(tracks);
           setLocalCache(CACHE_KEYS.DAILY_DISCOVER, tracks);
+          const discoveredArtists = Array.from(new Set(tracks.map(t => t.artist).filter(Boolean)));
+          recordArtistImpressions(discoveredArtists);
         }
       } catch (err) {
         console.warn('Failed to fetch daily discover tracks:', err);
@@ -452,7 +537,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playHistory, favorites, displayQuickPicks]);
+  }, [playHistory, favorites, displayQuickPicks, refreshNonce]);
 
   // Group user tracks by artist across history, favorites, playlists and recommendations
   const artistTrackMap = useMemo(() => {
@@ -494,6 +579,20 @@ export function Dashboard() {
     return result.slice(0, 30);
   };
 
+  const handlePlayQuickPick = (track: Track) => {
+    if (track.artist) {
+      recordArtistEngagement(track.artist);
+    }
+    const stationTracks = buildStationQueue(
+      [track],
+      [...getArtistTracks(track.artist), ...dailyDiscover, ...recommendedTracks, ...displayQuickPicks]
+    );
+    const finalQueue = stationTracks.length > 0 ? stationTracks : [track];
+    setQueue(finalQueue, 0, `${track.title} Mix`);
+    setIsPlaying(true);
+    showToast(`Playing ${track.title} Mix`);
+  };
+
   // Authentic YouTube Music "Mixed for You" Stations with Real Thumbnails & Multi-Track Queues
   const dynamicMixes = useMemo(() => {
     const mix1Tracks = buildStationQueue(
@@ -531,7 +630,7 @@ export function Dashboard() {
       [...displayQuickPicks, ...recommendedTracks]
     );
 
-    return [
+    const allMixes = [
       {
         id: 'mix-1',
         stripeTitle: 'My Mix',
@@ -542,6 +641,7 @@ export function Dashboard() {
         covers: undefined,
         tracks: mix1Tracks,
         onPlay: () => {
+          if (topArtists[0]) recordArtistEngagement(topArtists[0]);
           const q = mix1Tracks.length > 0 ? mix1Tracks : (displayQuickPicks.length > 0 ? displayQuickPicks : allUserTracks);
           if (q.length > 0) {
             setQueue(q, 0, 'My Mix 1');
@@ -578,6 +678,7 @@ export function Dashboard() {
         covers: undefined,
         tracks: mix2Tracks,
         onPlay: () => {
+          if (topArtists[1]) recordArtistEngagement(topArtists[1]);
           const q = mix2Tracks.length > 0 ? mix2Tracks : (displayQuickPicks.length > 1 ? displayQuickPicks.slice(1) : displayQuickPicks);
           if (q.length > 0) {
             setQueue(q, 0, 'My Mix 2');
@@ -596,6 +697,7 @@ export function Dashboard() {
         covers: undefined,
         tracks: mix3Tracks,
         onPlay: () => {
+          if (topArtists[2]) recordArtistEngagement(topArtists[2]);
           const q = mix3Tracks.length > 0 ? mix3Tracks : (dailyDiscover.length > 0 ? dailyDiscover : displayQuickPicks);
           if (q.length > 0) {
             setQueue(q, 0, 'My Mix 3');
@@ -614,6 +716,7 @@ export function Dashboard() {
         covers: undefined,
         tracks: mix4Tracks,
         onPlay: () => {
+          if (topArtists[3]) recordArtistEngagement(topArtists[3]);
           const q = mix4Tracks.length > 0 ? mix4Tracks : (coversAndRemixes.length > 0 ? coversAndRemixes : displayQuickPicks);
           if (q.length > 0) {
             setQueue(q, 0, 'My Mix 4');
@@ -659,6 +762,17 @@ export function Dashboard() {
         }
       }
     ];
+
+    // Contextually prioritize mixes based on time of day
+    if (timeContext.timeSlot === 'morning') {
+      return [allMixes[5], allMixes[0], allMixes[1], allMixes[2], allMixes[3], allMixes[6], allMixes[4]]; // Chill -> Mix 1 -> Supermix
+    } else if (timeContext.timeSlot === 'afternoon') {
+      return [allMixes[6], allMixes[2], allMixes[1], allMixes[0], allMixes[3], allMixes[4], allMixes[5]]; // Energy -> Mix 2 -> Supermix
+    } else if (timeContext.timeSlot === 'evening') {
+      return [allMixes[1], allMixes[6], allMixes[0], allMixes[2], allMixes[3], allMixes[4], allMixes[5]]; // Supermix -> Energy -> Mix 1
+    } else {
+      return [allMixes[5], allMixes[4], allMixes[1], allMixes[3], allMixes[0], allMixes[2], allMixes[6]]; // Chill -> Mix 4 -> Supermix
+    }
   }, [
     topArtists, 
     artistTrackMap, 
@@ -669,20 +783,21 @@ export function Dashboard() {
     coversAndRemixes, 
     defaultSpeedDial, 
     finalCollage, 
-    allUserTracks
+    allUserTracks,
+    timeContext
   ]);
 
   return (
     <div style={{ paddingBottom: '120px', position: 'relative' }}>
       
-      {/* Header Info */}
+      {/* Header Info with Time-of-Day Context */}
       <div style={{ marginBottom: '32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
           <h2 style={{ fontSize: '2.25rem', fontWeight: 900, letterSpacing: '-0.02em', margin: '0 0 4px 0' }}>
-            Listen Now
+            {timeContext.greeting}
           </h2>
           <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            Welcome back to OwO Music Player. Handpicked favorites and smart recommendations.
+            {timeContext.subtitle}
           </span>
         </div>
       </div>
@@ -693,10 +808,10 @@ export function Dashboard() {
           tracks={defaultSpeedDial} 
           currentTrack={currentTrack}
           onTrackClick={(track) => {
-            setQueue([track], 0, `${track.title} Mix`);
-            setIsPlaying(true);
+            handlePlayQuickPick(track);
           }}
           onArtistClick={(artistName) => {
+            if (artistName) recordArtistEngagement(artistName);
             navigate(`/artist/${encodeURIComponent(artistName)}`);
           }}
         />
@@ -719,8 +834,9 @@ export function Dashboard() {
           actionButton={
             <button 
               onClick={() => {
-                setQueue(displayQuickPicks, 0, 'Quick Picks');
-                setIsPlaying(true);
+                if (displayQuickPicks.length > 0) {
+                  handlePlayQuickPick(displayQuickPicks[0]);
+                }
               }}
               className="play-all-pill-btn"
               title="Play all tracks in Quick Picks"
@@ -729,7 +845,7 @@ export function Dashboard() {
               <span>Play all</span>
             </button>
           }
-          renderItem={(track, idx) => {
+          renderItem={(track) => {
             const isPlayingThis = isSameTrack(currentTrack, track);
             const isFav = favorites.some(f => f.id === track.id);
             
@@ -747,10 +863,7 @@ export function Dashboard() {
                   backgroundColor: isPlayingThis ? 'rgba(30, 144, 255, 0.08)' : 'transparent',
                   transition: 'background-color 0.15s ease'
                 }}
-                onClick={() => {
-                  setQueue(displayQuickPicks, idx, 'Quick Picks');
-                  setIsPlaying(true);
-                }}
+                onClick={() => handlePlayQuickPick(track)}
                 onContextMenu={(e) => openTrackContextMenu(e, track)}
               >
                 {/* Image Cover with Hover Play Icon */}
@@ -929,6 +1042,7 @@ export function Dashboard() {
                   alt={item.name} 
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   loading="lazy"
+                  referrerPolicy="no-referrer"
                   onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80'; }}
                 />
                 <div className="card-play-overlay">
@@ -965,6 +1079,7 @@ export function Dashboard() {
                   alt={item.name} 
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   loading="lazy"
+                  referrerPolicy="no-referrer"
                   onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80'; }}
                 />
                 <div className="card-play-overlay">
@@ -1008,6 +1123,7 @@ export function Dashboard() {
               key={`discover-${track.id}`}
               className="daily-discover-card"
               onClick={() => {
+                if (track.artist) recordArtistEngagement(track.artist);
                 const unblocked = dailyDiscover.filter(t => !isTrackBlocked(t));
                 setQueue([track, ...unblocked.filter(t => t.id !== track.id)], 0, 'Daily Discover');
                 setIsPlaying(true);
@@ -1019,6 +1135,7 @@ export function Dashboard() {
                 alt={track.title} 
                 className="daily-discover-bg"
                 loading="lazy"
+                referrerPolicy="no-referrer"
                 onError={(e) => {
                   const fallback = `https://i.ytimg.com/vi/${getDirectYouTubeId(track)}/hqdefault.jpg`;
                   if ((e.currentTarget as HTMLImageElement).src !== fallback) {
@@ -1055,10 +1172,7 @@ export function Dashboard() {
             <div 
               key={`rec-${track.id}`}
               className="album-card"
-              onClick={() => {
-                setQueue([track], 0, `${track.title} Mix`);
-                setIsPlaying(true);
-              }}
+              onClick={() => handlePlayQuickPick(track)}
               onContextMenu={(e) => openTrackContextMenu(e, track)}
             >
               <div 
@@ -1070,6 +1184,7 @@ export function Dashboard() {
                   alt={track.title} 
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   loading="lazy"
+                  referrerPolicy="no-referrer"
                   onError={(e) => {
                     const fallback = `https://i.ytimg.com/vi/${getDirectYouTubeId(track)}/hqdefault.jpg`;
                     if ((e.currentTarget as HTMLImageElement).src !== fallback) {
@@ -1111,10 +1226,7 @@ export function Dashboard() {
             <div 
               key={`cover-${track.id}`}
               className="album-card"
-              onClick={() => {
-                setQueue([track], 0, `${track.title} Mix`);
-                setIsPlaying(true);
-              }}
+              onClick={() => handlePlayQuickPick(track)}
             >
               <div 
                 className="album-art" 
@@ -1125,6 +1237,7 @@ export function Dashboard() {
                   alt={track.title} 
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   loading="lazy"
+                  referrerPolicy="no-referrer"
                   onError={(e) => {
                     const fallback = `https://i.ytimg.com/vi/${getDirectYouTubeId(track)}/hqdefault.jpg`;
                     if ((e.currentTarget as HTMLImageElement).src !== fallback) {
@@ -1174,6 +1287,7 @@ export function Dashboard() {
                   alt={item.name} 
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   loading="lazy"
+                  referrerPolicy="no-referrer"
                   onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80'; }}
                 />
                 <div className="card-play-overlay">
@@ -1206,6 +1320,7 @@ export function Dashboard() {
                   alt={item.name} 
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   loading="lazy"
+                  referrerPolicy="no-referrer"
                   onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80'; }}
                 />
                 <div className="card-play-overlay">
@@ -1230,10 +1345,7 @@ export function Dashboard() {
             <div 
               key={`forgotten-${track.id}`}
               className="album-card"
-              onClick={() => {
-                setQueue([track], 0, `${track.title} Mix`);
-                setIsPlaying(true);
-              }}
+              onClick={() => handlePlayQuickPick(track)}
             >
               <div 
                 className="album-art" 
