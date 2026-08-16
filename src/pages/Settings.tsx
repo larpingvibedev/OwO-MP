@@ -280,9 +280,9 @@ export function Settings() {
             {downloadCount > 0 && (
               <button 
                 className="settings-btn-danger"
-                onClick={() => {
+                onClick={async () => {
                   if (window.confirm('Clear all offline downloaded songs?')) {
-                    clearAllDownloads();
+                    await clearAllDownloads();
                   }
                 }}
               >

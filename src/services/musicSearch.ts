@@ -251,7 +251,7 @@ export async function resolveArtistChannel(artistName: string): Promise<{ author
           }
         }
       }
-    } catch (e) {
+    } catch {
       // try next instance
     }
   }
@@ -317,7 +317,7 @@ export async function resolveAlbumPlaylist(artistName: string, albumName: string
           }
         }
       }
-    } catch (e) {
+    } catch {
       // try next instance
     }
   }
@@ -519,7 +519,7 @@ export async function searchFreeMusic(query: string, signal?: AbortSignal): Prom
         if (res.ok) {
           return await res.json();
         }
-      } catch (e) {}
+      } catch {}
     }
     return null;
   })();
@@ -896,7 +896,7 @@ export async function resolveArtistAvatar(artistName: string): Promise<string> {
         }
       }
     }
-  } catch (e) {}
+  } catch {}
 
   // 2. iTunes Artist Search fallback
   try {
@@ -910,7 +910,7 @@ export async function resolveArtistAvatar(artistName: string): Promise<string> {
         return thumb;
       }
     }
-  } catch (e) {}
+  } catch {}
 
   const fallback = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
   artistAvatarCache.set(lower, fallback);
@@ -982,7 +982,7 @@ export async function fetchArtistProfileFromYTM(
           }
           if (targetBrowseId) break;
         }
-      } catch (e) {}
+      } catch {}
     }
   }
 
@@ -1010,7 +1010,7 @@ export async function fetchArtistProfileFromYTM(
         usedBase = base;
         break;
       }
-    } catch (e) {}
+    } catch {}
   }
 
   if (!browseData) return null;
@@ -1394,7 +1394,7 @@ export async function fetchAlbumDetailsFromYTM(
         data = await browseRes.json();
         break;
       }
-    } catch (e) {}
+    } catch {}
   }
 
   if (!data) return null;
@@ -1904,7 +1904,7 @@ async function fetchFastFromInvidious(query: string): Promise<any[]> {
           return data;
         }
       }
-    } catch (e) {
+    } catch {
       clearTimeout(timer);
     }
     throw new Error('Instance failed or empty');
@@ -2016,7 +2016,7 @@ export async function resolveYouTubeMusicATV(primaryArtist: string, cleanTitle: 
           }
         }
       }
-    } catch (e) {}
+    } catch {}
   }
 
   return null;
@@ -2049,7 +2049,7 @@ export async function resolveYouTubeVideoId(
       videoIdCache.set(cacheKey, videoId);
       return videoId;
     }
-  } catch (e) {}
+  } catch {}
 
   const artistVariants = Array.from(new Set([
     primaryArtist.toLowerCase(),
@@ -2481,7 +2481,7 @@ export async function fetchUpNextMix(
       }
       similarArtistPools.set(artistName, similarTracks);
 
-    } catch (e) {}
+    } catch {}
 
     artistPools.set(artistName, artistTracks);
     collabPools.set(artistName, collabTracks);
@@ -2672,7 +2672,7 @@ export async function searchPublicPlaylists(
             if (playlists.length >= 6) break;
           }
         }
-      } catch (e) {}
+      } catch {}
     }
   })();
 
@@ -2716,7 +2716,7 @@ export async function fetchPublicPlaylistTracks(playlist: PublicPlaylist): Promi
             }));
           }
         }
-      } catch (e) {}
+      } catch {}
     }
   }
 
@@ -2808,7 +2808,7 @@ export async function fetchArtistDeepTracks(artistName: string): Promise<Track[]
         });
       }
     });
-  } catch (e) {}
+  } catch {}
 
   // 2. iTunes Exact Match Query (Only items where artistName strictly matches)
   try {
@@ -2844,7 +2844,7 @@ export async function fetchArtistDeepTracks(artistName: string): Promise<Track[]
         }
       });
     }
-  } catch (e) {}
+  } catch {}
 
   return results;
 }
@@ -2926,7 +2926,7 @@ export async function fetchCoversAndRemixes(seedTracks: Track[]): Promise<Track[
             }
           }
           break;
-        } catch (e) {}
+        } catch {}
       }
     }
   }
@@ -3057,7 +3057,7 @@ export async function fetchAlbumsForYou(topArtists: string[]): Promise<PublicPla
         const secSubtitle = header?.secondSubtitle?.runs?.map((x: any) => x.text).join('') || '';
         const m = /(\d+)\s+(songs|tracks)/i.exec(secSubtitle);
         if (m) return parseInt(m[1], 10);
-      } catch (e) {}
+      } catch {}
     }
     return 10;
   };
@@ -3080,7 +3080,7 @@ export async function fetchAlbumsForYou(topArtists: string[]): Promise<PublicPla
           }
         });
       }
-    } catch (e) {}
+    } catch {}
   }
 
   // If no albums found for those artists, fallback to their singles / EPs
@@ -3101,7 +3101,7 @@ export async function fetchAlbumsForYou(topArtists: string[]): Promise<PublicPla
             }
           });
         }
-      } catch (e) {}
+      } catch {}
     }
   }
 
@@ -3185,7 +3185,7 @@ export async function fetchCommunityPlaylistsForYou(topArtists: string[]): Promi
           }
           if (results.length >= 6) break;
         }
-      } catch (e) {}
+      } catch {}
     }
   }
 
@@ -3295,7 +3295,7 @@ export async function fetchNewReleases(topArtists?: string[]): Promise<PublicPla
           }
         }
         break; // Stop endpoints loop on success
-      } catch (e) {}
+      } catch {}
     }
   };
 
@@ -3355,7 +3355,7 @@ export async function fetchNewReleases(topArtists?: string[]): Promise<PublicPla
           }
         }
         break;
-      } catch (e) {}
+      } catch {}
     }
   }
 
@@ -3424,7 +3424,7 @@ export async function fetchDailyDiscover(
             }
           }
         }
-      } catch (e) {}
+      } catch {}
     }
   }
 
@@ -3447,7 +3447,7 @@ export async function fetchDailyDiscover(
             }
           }
         }
-      } catch (e) {}
+      } catch {}
     }
   }
 
@@ -3531,7 +3531,7 @@ export async function fetchSimilarPlaylists(seedPlaylist: Playlist): Promise<Pub
             }
           }
         }
-      } catch (e) {}
+      } catch {}
     }
   }
 
@@ -3574,7 +3574,7 @@ export async function fetchSimilarArtists(artistName: string, videoIdOrTrackId?:
       .trim();
     
     // Strip surrounding brackets and quotes
-    trimmed = trimmed.replace(/^[(\["']+|[)\]"']+$/g, '').trim();
+    trimmed = trimmed.replace(/^[(["']+|[)\]"']+$/g, '').trim();
     const tLower = trimmed.toLowerCase();
 
     // Disqualify invalid names, channel keywords, or current artist
@@ -3661,7 +3661,7 @@ export async function fetchSimilarArtists(artistName: string, videoIdOrTrackId?:
               }
             }
           }
-        } catch (e) {}
+        } catch {}
       }
     }
 
@@ -3681,7 +3681,7 @@ export async function fetchSimilarArtists(artistName: string, videoIdOrTrackId?:
       ];
 
       allTitles.forEach(title => {
-        const featMatch = /(?:feat\.?|ft\.?|featuring|with|\bx\b|\b&\b)\s+([^()\[\]]+)/i.exec(title);
+        const featMatch = /(?:feat\.?|ft\.?|featuring|with|\bx\b|\b&\b)\s+([^()[\]]+)/i.exec(title);
         if (featMatch) {
           const collabPart = featMatch[1];
           const names = collabPart.split(/[,&/]| and /i);
@@ -3716,7 +3716,7 @@ export async function fetchSimilarArtists(artistName: string, videoIdOrTrackId?:
             }
           });
         }
-      } catch (e) {}
+      } catch {}
     }
 
     // 4. Resolve authentic, dedicated avatars in parallel for all artists missing a dedicated avatar
@@ -3792,7 +3792,7 @@ export async function fetchDirectAudioStream(videoId: string): Promise<string | 
                 if (best?.url) return best.url;
               }
             }
-          } catch (e) {}
+          } catch {}
           return null;
         })
       );
@@ -3802,7 +3802,7 @@ export async function fetchDirectAudioStream(videoId: string): Promise<string | 
         directStreamCache.set(videoId, found);
         return found;
       }
-    } catch (e) {}
+    } catch {}
   }
 
   return null;

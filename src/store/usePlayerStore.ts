@@ -623,7 +623,7 @@ export const usePlayerStore = create<PlayerState>()(
       'owo_dash_seed_pl_name',
     ];
     dashCacheKeys.forEach(k => {
-      try { localStorage.removeItem(k); } catch (e) {}
+      try { localStorage.removeItem(k); } catch {}
     });
 
     // 2. Reset history and recommendation store state to a clean slate
@@ -738,9 +738,13 @@ export const usePlayerStore = create<PlayerState>()(
       p => p.id === playlist.id || p.name.toLowerCase() === playlist.name.toLowerCase()
     );
     if (isSaved) {
+      supabaseSync.syncPlaylistDelete(playlist.id);
       return {
         playlists: state.playlists.filter(
           p => p.id !== playlist.id && p.name.toLowerCase() !== playlist.name.toLowerCase()
+        ),
+        savedAlbums: state.savedAlbums.filter(
+          a => a.id !== playlist.id && a.name.toLowerCase() !== playlist.name.toLowerCase()
         ),
         toastMessage: `Removed "${playlist.name}" from Playlists`
       };
@@ -881,9 +885,11 @@ export const usePlayerStore = create<PlayerState>()(
       const pl = state.playlists.find(p => p.id === playlistId);
       return {
         playlists: state.playlists.filter(p => p.id !== playlistId),
+        savedAlbums: state.savedAlbums.filter(a => a.id !== playlistId && a.id !== `album-${playlistId}` && a.id !== `playlist-${playlistId}`),
         toastMessage: pl ? `Deleted "${pl.name}"` : 'Deleted playlist'
       };
     });
+    supabaseSync.syncPlaylistDelete(playlistId);
   },
 
   updatePlaylist: (playlistId, updates) => set((state) => {
@@ -975,7 +981,7 @@ export const usePlayerStore = create<PlayerState>()(
       const radioQueue = [seedTrack, ...mix.filter(t => t.id !== seedTrack.id)];
       get().setQueue(radioQueue, 0, `${seedTrack.title} Mix`);
       set({ isPlaying: true });
-    } catch (e) {
+    } catch {
       get().setQueue([seedTrack], 0, `${seedTrack.title} Mix`);
       set({ isPlaying: true });
     }
@@ -1027,7 +1033,7 @@ export const usePlayerStore = create<PlayerState>()(
       const radioQueue = [...seedTracks, ...tracks.slice(0, 20 - seedTracks.length)];
       get().setQueue(radioQueue, 0);
       set({ isPlaying: true });
-    } catch (e) {
+    } catch {
       get().setQueue(seedTracks, 0);
       set({ isPlaying: true });
     }
@@ -1225,36 +1231,12 @@ export const usePlayerStore = create<PlayerState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
-        // Clean migration: Separate playlists from savedAlbums
+        // Clean migration: Ensure savedAlbums strictly contains official albums, never playlists
         const currentSavedAlbums = state.savedAlbums || [];
-        const currentPlaylists = state.playlists || [];
-
-        const realAlbums: typeof currentSavedAlbums = [];
-        const playlistsToMigrate: typeof currentPlaylists = [];
-
-        currentSavedAlbums.forEach(item => {
+        state.savedAlbums = currentSavedAlbums.filter(item => {
           const isPlaylist = item.id.startsWith('PL') || item.id.startsWith('VLPL') || item.id.startsWith('community-') || item.id.startsWith('mix-') || (item.releaseDate && item.releaseDate.toLowerCase().includes('playlist')) || (item.releaseDate && item.releaseDate.toLowerCase().includes('mix'));
-          if (isPlaylist) {
-            const alreadyExists = currentPlaylists.some(p => p.id === item.id || p.name.toLowerCase() === item.name.toLowerCase());
-            if (!alreadyExists) {
-              playlistsToMigrate.push({
-                id: item.id,
-                name: item.name,
-                cover: item.cover,
-                author: item.artist,
-                tracks: [],
-                createdAt: item.savedAt || Date.now()
-              });
-            }
-          } else {
-            realAlbums.push(item);
-          }
+          return !isPlaylist;
         });
-
-        if (playlistsToMigrate.length > 0 || realAlbums.length !== currentSavedAlbums.length) {
-          state.savedAlbums = realAlbums;
-          state.playlists = [...playlistsToMigrate, ...currentPlaylists];
-        }
       }
     }
   )

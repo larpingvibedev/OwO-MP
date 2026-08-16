@@ -136,7 +136,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     setIsLyricsLoading(true);
     setLyricsResult(null);
 
-    fetchLyrics(currentTrack.title, currentTrack.artist, currentTrack.album, currentTrack.duration)
+    fetchLyrics(currentTrack.title, currentTrack.artist, currentTrack.album, currentTrack.duration, currentTrack.id)
       .then(result => {
         if (!isMounted) return;
         setLyricsResult(result);
@@ -958,7 +958,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                         borderRadius: '50%',
                         backgroundColor: lyricsResult.isSynced ? 'var(--accent-primary)' : 'var(--text-secondary)'
                       }} />
-                      <span>{lyricsResult.isSynced ? 'Synced • LRCLIB' : lyricsResult.source}</span>
+                      <span>{lyricsResult.isSynced ? `Synced • ${lyricsResult.source}` : lyricsResult.source}</span>
                     </div>
                   )}
                 </div>
@@ -1082,8 +1082,9 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '32px' }}>
                 {lyricsResult.synced.map((line, index) => {
                   const nextLine = lyricsResult.synced![index + 1];
-                  const isCurrent = currentTime >= line.time && (!nextLine || currentTime < nextLine.time);
-                  const isPast = nextLine && currentTime >= nextLine.time;
+                  const adjustedTime = currentTime + 0.08;
+                  const isCurrent = adjustedTime >= line.time && (!nextLine || adjustedTime < nextLine.time);
+                  const isPast = nextLine && adjustedTime >= nextLine.time;
 
                   return (
                     <div

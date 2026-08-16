@@ -140,6 +140,26 @@ export const AudioPlayer = () => {
       isSwitchingRef.current = true;
       recordPlay(currentTrack);
 
+      // A0. Check Local PC Audio File (Direct High-Speed Local Proxy Streaming)
+      const localFilePath = (currentTrack as any).filePath || (currentTrack.id.startsWith('local-') ? (currentTrack as any).filePath : null);
+      if (localFilePath) {
+        const electronAPI = (window as any).electronAPI;
+        let proxyPort = 41721;
+        if (electronAPI?.getProxyPort) {
+          proxyPort = await electronAPI.getProxyPort();
+        }
+        const localStreamUrl = `http://127.0.0.1:${proxyPort}/api/local-file?path=${encodeURIComponent(localFilePath)}`;
+        audioRef.current.src = localStreamUrl;
+        audioEngine.setVolume(volume);
+        if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
+        audioEngine.resume();
+        audioRef.current.play().catch(console.warn);
+        setIsPlaying(true);
+        activeLoadedNonceRef.current = playNonce;
+        isSwitchingRef.current = false;
+        return;
+      }
+
       // A. Check Offline Local Storage First (0ms Instant Audio)
       const offlineBlobUrl = await getOfflineTrackBlobUrl(currentTrack.id);
       if (isCancelled) return;

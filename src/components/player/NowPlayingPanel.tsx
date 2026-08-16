@@ -15,7 +15,7 @@ export function NowPlayingPanel() {
     setLoading(true);
     setLyricsResult(null);
 
-    fetchLyrics(currentTrack.title, currentTrack.artist, currentTrack.album, currentTrack.duration)
+    fetchLyrics(currentTrack.title, currentTrack.artist, currentTrack.album, currentTrack.duration, currentTrack.id)
       .then(res => {
         if (isMounted) setLyricsResult(res);
       })

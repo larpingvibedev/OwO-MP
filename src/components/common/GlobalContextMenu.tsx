@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { 
   Play, Shuffle, Radio, ListPlus, Plus, Heart, FolderPlus, 
   User, Disc, Info, Share2, Music2,
-  Trash2, X, Download, Loader2, HardDrive, Pencil, Check
+  Trash2, X, Download, Loader2, HardDrive, Pencil, Check,
+  Ban, UserX
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
@@ -73,21 +74,30 @@ export const GlobalContextMenu: React.FC = () => {
     }
     if (left < 12) left = 12;
 
-    const spaceBelow = window.innerHeight - y - 16;
-    const spaceAbove = y - 16;
+    const estimatedMenuHeight = 390;
+    const windowH = window.innerHeight;
 
     let top: number;
     let maxHeight: number;
 
-    if (spaceBelow < 280 && spaceAbove > spaceBelow) {
-      maxHeight = Math.max(220, Math.min(520, spaceAbove));
-      top = Math.max(12, y - maxHeight);
-    } else {
-      maxHeight = Math.max(220, Math.min(520, spaceBelow));
-      top = y;
+    // Check if menu fits completely downwards
+    if (y + estimatedMenuHeight <= windowH - 16) {
+      top = Math.max(12, y);
+      maxHeight = windowH - top - 16;
+    } 
+    // Check if menu fits completely upwards
+    else if (y - estimatedMenuHeight >= 12) {
+      top = Math.max(12, y - estimatedMenuHeight);
+      maxHeight = estimatedMenuHeight;
+    } 
+    // If it doesn't fully fit in either single direction, center/clamp intelligently:
+    else {
+      // Position top so as much of the menu is visible as possible while staying within [12, windowH - 16]
+      top = Math.max(12, Math.min(y - (estimatedMenuHeight / 2), windowH - estimatedMenuHeight - 16));
+      maxHeight = windowH - top - 16;
     }
 
-    setPos({ top, left, maxHeight });
+    setPos({ top, left, maxHeight: Math.max(180, maxHeight) });
   }, [isOpen, x, y, type]);
 
   useEffect(() => {
@@ -116,20 +126,28 @@ export const GlobalContextMenu: React.FC = () => {
       }
     };
 
-    const handleScrollOrResize = () => {
+    const handleScroll = (e: Event) => {
+      // If the scroll happened inside the context menu itself, DO NOT dismiss the menu!
+      if (menuRef.current && (e.target === menuRef.current || menuRef.current.contains(e.target as Node))) {
+        return;
+      }
+      closeContextMenu();
+    };
+
+    const handleResize = () => {
       closeContextMenu();
     };
 
     window.addEventListener('mousedown', handleOutsideClick);
     window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('resize', handleScrollOrResize);
-    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('scroll', handleScroll, true);
 
     return () => {
       window.removeEventListener('mousedown', handleOutsideClick);
       window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('resize', handleScrollOrResize);
-      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [isOpen, closeContextMenu]);
 
@@ -294,6 +312,7 @@ export const GlobalContextMenu: React.FC = () => {
           ref={menuRef}
           className="global-context-menu"
           onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
           style={{
             position: 'fixed',
             top: `${pos.top}px`,
@@ -447,14 +466,22 @@ export const GlobalContextMenu: React.FC = () => {
 
                   <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
 
-                  <button className="track-menu-item" onClick={() => { closeContextMenu(); markTrackNotInterested(track); }}>
-                    <X size={16} />
-                    <span>Not interested</span>
+                  <button 
+                    className="track-menu-item" 
+                    style={{ color: '#ff4d4d' }}
+                    onClick={() => { closeContextMenu(); markTrackNotInterested(track); }}
+                  >
+                    <Ban size={16} color="#ff4d4d" />
+                    <span style={{ color: '#ff4d4d' }}>Not interested</span>
                   </button>
 
-                  <button className="track-menu-item" onClick={() => { closeContextMenu(); blockArtist(track.artist); }}>
-                    <User size={16} />
-                    <span>Don't recommend artist</span>
+                  <button 
+                    className="track-menu-item" 
+                    style={{ color: '#ff4d4d' }}
+                    onClick={() => { closeContextMenu(); blockArtist(track.artist); }}
+                  >
+                    <UserX size={16} color="#ff4d4d" />
+                    <span style={{ color: '#ff4d4d' }}>Don't recommend artist</span>
                   </button>
                 </div>
               ) : (

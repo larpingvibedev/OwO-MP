@@ -394,9 +394,11 @@ export async function removeOfflineTrack(trackId: string, trackInfo?: { title?: 
 }
 
 /**
- * Clears all downloaded offline music.
+ * Clears all downloaded offline music from IndexedDB and disk storage.
  */
 export async function clearAllOfflineStorage(): Promise<void> {
+  const records = await getAllOfflineRecords();
+
   for (const url of activeBlobUrls.values()) {
     URL.revokeObjectURL(url);
   }
@@ -404,6 +406,26 @@ export async function clearAllOfflineStorage(): Promise<void> {
 
   const db = await getDB();
   await db.clear(STORE_TRACKS);
+
+  // If running in Electron, also delete the audio files from the disk music folder
+  if ((window as any).electronAPI?.deleteAudioFromDisk) {
+    try {
+      const targetDir = await db.get(STORE_CONFIG, 'custom_directory_name');
+      for (const r of records) {
+        const title = r.track?.title;
+        const artist = r.track?.artist;
+        if (title) {
+          await (window as any).electronAPI.deleteAudioFromDisk({
+            title,
+            artist,
+            targetDir: targetDir || undefined
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to clear disk audio files:', e);
+    }
+  }
 }
 
 /**

@@ -179,20 +179,20 @@ export function Dashboard() {
   const displayQuickPicks = quickPicksTracks.length > 0 ? quickPicksTracks : favorites.filter(t => !isTrackBlocked(t));
 
   // 3. Universal User Seed Resolution (History -> Favorites -> Playlists -> Current -> Discovery)
-  const allUserTracks: Track[] = [
+  const allUserTracks: Track[] = useMemo(() => [
     ...historyArray.map(h => h.track),
     ...favorites.filter(t => !isTrackBlocked(t)),
     ...playlists.flatMap(p => p.tracks).filter(t => !isTrackBlocked(t)),
     ...(currentTrack && !isTrackBlocked(currentTrack) ? [currentTrack] : [])
-  ];
+  ], [historyArray, favorites, playlists, currentTrack, isTrackBlocked]);
 
-  const allUserArtists = Array.from(
+  const allUserArtists = useMemo(() => Array.from(
     new Set(allUserTracks.map(t => t.artist).filter(Boolean))
-  );
+  ), [allUserTracks]);
 
-  const topArtists = allUserArtists.length > 0 
+  const topArtists = useMemo(() => allUserArtists.length > 0 
     ? allUserArtists.slice(0, 5) 
-    : ['bunii', 'slayr', 'jaydes', 'nettspend'];
+    : ['bunii', 'slayr', 'jaydes', 'nettspend'], [allUserArtists]);
 
   // Top distinct covers for Supermix collage
   const collageCovers = Array.from(

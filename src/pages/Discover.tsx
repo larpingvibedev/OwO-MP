@@ -411,7 +411,7 @@ export function Discover() {
         tracks,
         isLoading: false
       });
-    } catch (err) {
+    } catch {
       setActivePlaylistDetail(prev => prev ? { ...prev, isLoading: false } : null);
     }
   };

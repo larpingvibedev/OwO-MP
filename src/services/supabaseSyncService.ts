@@ -315,6 +315,32 @@ class SupabaseSyncService {
   }
 
   /**
+   * Deletes a playlist from Supabase
+   */
+  public async syncPlaylistDelete(playlistId: string) {
+    const user = useAuthStore.getState().user;
+    if (!user || this.isSyncingDown) return;
+
+    try {
+      const supabase = getSupabase();
+      await supabase
+        .from('user_playlists')
+        .delete()
+        .eq('id', playlistId)
+        .eq('user_id', user.id);
+
+      // Broadcast update event to other devices
+      this.channel?.send({
+        type: 'broadcast',
+        event: 'library_updated',
+        payload: { type: 'playlist_deleted', id: playlistId }
+      });
+    } catch (err: any) {
+      console.warn('[Supabase syncPlaylistDelete Error]:', err?.message);
+    }
+  }
+
+  /**
    * Uploads favorite track status to Supabase
    */
   public async syncFavoriteUp(track: Track, isFavorite: boolean) {

@@ -275,7 +275,7 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
             title="Active offline download in progress (Click to view Library Downloads)"
           >
             <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
-            <span>{activeDownloadCount === 1 ? `Saving... ${activeDownloadPercent}%` : `${activeDownloadCount} songs (${activeDownloadPercent}%)`}</span>
+            <span>{activeDownloadCount === 1 ? `Downloading (${activeDownloadPercent}%)` : `Downloading (${activeDownloadCount} active • ${activeDownloadPercent}%)`}</span>
           </div>
         )}
 

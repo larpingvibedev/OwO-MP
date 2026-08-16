@@ -458,15 +458,15 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
               <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
 
               {/* 11. Not interested */}
-              <button className="track-menu-item" onClick={handleNotInterested}>
-                <Ban size={16} color="#e74c3c" />
-                <span>Not interested</span>
+              <button className="track-menu-item" style={{ color: '#ff4d4d' }} onClick={handleNotInterested}>
+                <Ban size={16} color="#ff4d4d" />
+                <span style={{ color: '#ff4d4d' }}>Not interested</span>
               </button>
 
               {/* 12. Don't recommend artist */}
-              <button className="track-menu-item" onClick={handleDontRecommendArtist}>
-                <UserX size={16} color="#e74c3c" />
-                <span>Don't recommend artist</span>
+              <button className="track-menu-item" style={{ color: '#ff4d4d' }} onClick={handleDontRecommendArtist}>
+                <UserX size={16} color="#ff4d4d" />
+                <span style={{ color: '#ff4d4d' }}>Don't recommend artist</span>
               </button>
             </div>
           ) : (

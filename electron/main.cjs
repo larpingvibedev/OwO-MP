@@ -238,6 +238,48 @@ function startInternalProxyServer() {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
 
+      if (url.pathname === '/api/local-file') {
+        const filePath = url.searchParams.get('path');
+        if (!filePath || !fs.existsSync(filePath)) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: 'Local file not found' }));
+          return;
+        }
+
+        const stat = fs.statSync(filePath);
+        const fileSize = stat.size;
+        const range = req.headers.range;
+        const ext = path.extname(filePath).toLowerCase();
+        let mimeType = 'audio/mpeg';
+        if (ext === '.m4a' || ext === '.mp4' || ext === '.aac') mimeType = 'audio/mp4';
+        else if (ext === '.wav') mimeType = 'audio/wav';
+        else if (ext === '.flac') mimeType = 'audio/flac';
+        else if (ext === '.ogg' || ext === '.opus') mimeType = 'audio/ogg';
+
+        res.setHeader('Accept-Ranges', 'bytes');
+
+        if (range) {
+          const parts = range.replace(/bytes=/, '').split('-');
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+          const chunksize = (end - start) + 1;
+          const fileStream = fs.createReadStream(filePath, { start, end });
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Content-Length': chunksize,
+            'Content-Type': mimeType
+          });
+          fileStream.pipe(res);
+        } else {
+          res.writeHead(200, {
+            'Content-Length': fileSize,
+            'Content-Type': mimeType
+          });
+          fs.createReadStream(filePath).pipe(res);
+        }
+        return;
+      }
+
       if (url.pathname === '/api/download-stream' || url.pathname === '/api/stream') {
         const videoId = url.searchParams.get('videoId') || url.searchParams.get('id');
         if (!videoId) {
@@ -617,6 +659,168 @@ ipcMain.handle('get-disk-audio-files', async (event, targetDir) => {
   } catch (e) {
     return [];
   }
+});
+
+// ----------------------------------------------------
+// LOCAL MUSIC LIBRARY SCANNER & FOLDER MANAGEMENT
+// ----------------------------------------------------
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.wav', '.flac', '.ogg', '.aac', '.opus', '.wma', '.m4b']);
+
+function getLocalMusicConfigPath() {
+  try {
+    return path.join(app.getPath('userData'), 'local_music_folders.json');
+  } catch (e) {
+    return path.join(__dirname, 'local_music_folders.json');
+  }
+}
+
+function getSavedLocalMusicFolders() {
+  const configFile = getLocalMusicConfigPath();
+  const defaultFolders = [
+    path.join(os.homedir(), 'Music'),
+    path.join(os.homedir(), 'Downloads')
+  ].filter(p => fs.existsSync(p));
+
+  if (fs.existsSync(configFile)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      if (Array.isArray(data)) {
+        const combined = Array.from(new Set([...defaultFolders, ...data]))
+          .filter(p => fs.existsSync(p) && !p.toLowerCase().endsWith('owo music'));
+        return combined;
+      }
+    } catch (e) {}
+  }
+  return defaultFolders;
+}
+
+function saveLocalMusicFolders(folders) {
+  try {
+    const configFile = getLocalMusicConfigPath();
+    const sanitized = (folders || []).filter(p => !p.toLowerCase().endsWith('owo music'));
+    fs.writeFileSync(configFile, JSON.stringify(sanitized, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('[Local Music Config Save Error]:', e.message);
+  }
+}
+
+async function scanDirectoryForAudio(dirPath, currentDepth = 0, maxDepth = 3) {
+  const results = [];
+  if (!dirPath || !fs.existsSync(dirPath) || currentDepth > maxDepth) return results;
+  if (dirPath.toLowerCase().endsWith('owo music') || dirPath.toLowerCase().includes('owo music')) return results;
+
+  try {
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const lowerName = entry.name.toLowerCase();
+      if (
+        lowerName.startsWith('.') || 
+        lowerName.startsWith('$') || 
+        lowerName === 'node_modules' || 
+        lowerName === 'appdata' || 
+        lowerName === 'windows' ||
+        lowerName === 'owo music'
+      ) {
+        continue;
+      }
+      const fullPath = path.join(dirPath, entry.name);
+
+      if (entry.isDirectory()) {
+        const sub = await scanDirectoryForAudio(fullPath, currentDepth + 1, maxDepth);
+        results.push(...sub);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (AUDIO_EXTENSIONS.has(ext)) {
+          try {
+            const stat = await fs.promises.stat(fullPath);
+            const baseName = path.basename(entry.name, ext);
+            let artist = 'Local Artist';
+            let title = baseName;
+
+            if (baseName.includes(' - ')) {
+              const parts = baseName.split(' - ');
+              artist = parts[0].trim() || 'Local Artist';
+              title = parts.slice(1).join(' - ').trim() || baseName;
+            }
+
+            results.push({
+              id: 'local-' + Buffer.from(fullPath).toString('base64'),
+              title,
+              artist,
+              album: path.basename(dirPath) || 'Local Audio',
+              duration: 0,
+              cover: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&q=80',
+              filePath: fullPath,
+              fileName: entry.name,
+              sizeBytes: stat.size,
+              addedAt: stat.mtimeMs,
+              folder: dirPath,
+              ext: ext.replace('.', '').toUpperCase(),
+              isLocal: true,
+              isOffline: true
+            });
+          } catch (e) {}
+        }
+      }
+    }
+  } catch (e) {}
+  return results;
+}
+
+ipcMain.handle('scan-local-music-files', async (event, customDirs) => {
+  const folders = Array.isArray(customDirs) && customDirs.length > 0 
+    ? customDirs 
+    : getSavedLocalMusicFolders();
+
+  const allTracks = [];
+  const seenPaths = new Set();
+
+  for (const f of folders) {
+    if (fs.existsSync(f)) {
+      const scanned = await scanDirectoryForAudio(f, 0, 3);
+      for (const t of scanned) {
+        if (!seenPaths.has(t.filePath)) {
+          seenPaths.add(t.filePath);
+          allTracks.push(t);
+        }
+      }
+    }
+  }
+
+  // Sort by newest modified first
+  allTracks.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  return allTracks;
+});
+
+ipcMain.handle('get-local-music-folders', async () => {
+  return getSavedLocalMusicFolders();
+});
+
+ipcMain.handle('add-local-music-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Select Folder with Music Files to Scan',
+    defaultPath: path.join(os.homedir(), 'Music')
+  });
+
+  if (!result.canceled && result.filePaths.length > 0) {
+    const selected = result.filePaths[0];
+    const current = getSavedLocalMusicFolders();
+    if (!current.includes(selected)) {
+      const updated = [...current, selected];
+      saveLocalMusicFolders(updated);
+      return { success: true, folder: selected, folders: updated };
+    }
+    return { success: true, folder: selected, folders: current };
+  }
+  return { success: false };
+});
+
+ipcMain.handle('remove-local-music-folder', async (event, folderPath) => {
+  const current = getSavedLocalMusicFolders();
+  const updated = current.filter(p => p !== folderPath);
+  saveLocalMusicFolders(updated);
+  return { success: true, folders: updated };
 });
 
 let musicFolderWatcher = null;

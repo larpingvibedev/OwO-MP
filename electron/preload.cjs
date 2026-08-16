@@ -52,6 +52,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDiskAudioFiles: async (targetDir) => {
     return await ipcRenderer.invoke('get-disk-audio-files', targetDir);
   },
+  scanLocalMusicFiles: async (customDirs) => {
+    return await ipcRenderer.invoke('scan-local-music-files', customDirs);
+  },
+  getLocalMusicFolders: async () => {
+    return await ipcRenderer.invoke('get-local-music-folders');
+  },
+  addLocalMusicFolder: async () => {
+    return await ipcRenderer.invoke('add-local-music-folder');
+  },
+  removeLocalMusicFolder: async (dir) => {
+    return await ipcRenderer.invoke('remove-local-music-folder', dir);
+  },
   onDownloadProgress: (callback) => {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('download-progress-event', listener);
