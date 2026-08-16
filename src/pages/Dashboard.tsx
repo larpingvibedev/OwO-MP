@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -14,6 +14,7 @@ import { Carousel } from '../components/Carousel';
 import { SpeedDialGrid } from '../components/SpeedDialGrid';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
+import { useContextMenuStore } from '../store/useContextMenuStore';
 import { isSameTrack } from '../utils/trackUtils';
 import type { Track, PublicPlaylist } from '../types';
 import { 
@@ -26,6 +27,18 @@ import {
   fetchDailyDiscover,
   getDirectYouTubeId
 } from '../services/musicSearch';
+
+interface DynamicMix {
+  id: string;
+  stripeTitle: string;
+  stripeNumber: string;
+  title: string;
+  subtitle: string;
+  cover?: string;
+  covers?: string[];
+  tracks: Track[];
+  onPlay: () => void;
+}
 
 const CACHE_KEYS = {
   REC_TRACKS: 'owo_dash_rec_tracks_v2',
@@ -66,6 +79,8 @@ export function Dashboard() {
     toggleFavorite, 
     showToast 
   } = usePlayerStore();
+
+  const { openTrackContextMenu, openPlaylistContextMenu, openAlbumContextMenu } = useContextMenuStore();
   
   const navigate = useNavigate();
   
@@ -170,17 +185,6 @@ export function Dashboard() {
     ...playlists.flatMap(p => p.tracks).filter(t => !isTrackBlocked(t)),
     ...(currentTrack && !isTrackBlocked(currentTrack) ? [currentTrack] : [])
   ];
-
-  // Group user tracks by artist
-  const artistTrackMap = new Map<string, Track[]>();
-  historyArray.forEach(h => {
-    if (!h.track?.artist) return;
-    const art = h.track.artist;
-    if (!artistTrackMap.has(art)) {
-      artistTrackMap.set(art, []);
-    }
-    artistTrackMap.get(art)!.push(h.track);
-  });
 
   const allUserArtists = Array.from(
     new Set(allUserTracks.map(t => t.artist).filter(Boolean))
@@ -450,127 +454,223 @@ export function Dashboard() {
     };
   }, [playHistory, favorites, displayQuickPicks]);
 
-  // Authentic YouTube Music "Mixed for You" Stations with Real Thumbnails & Collages
-  const dynamicMixes = [
-    {
-      id: 'mix-1',
-      stripeTitle: 'My Mix',
-      stripeNumber: '01',
-      title: 'My Mix 1',
-      subtitle: [topArtists[0], topArtists[1], topArtists[2], topArtists[3]].filter(Boolean).join(', '),
-      cover: artistTrackMap.get(topArtists[0])?.[0]?.cover || displayQuickPicks[0]?.cover || finalCollage[0],
-      covers: undefined,
-      onPlay: () => {
-        const seed = artistTrackMap.get(topArtists[0])?.[0] || displayQuickPicks[0];
-        if (seed) {
-          setQueue([seed], 0, 'My Mix 1');
-          setIsPlaying(true);
-          showToast('Playing My Mix 1');
+  // Group user tracks by artist across history, favorites, playlists and recommendations
+  const artistTrackMap = useMemo(() => {
+    const map = new Map<string, Track[]>();
+    const pool = [...allUserTracks, ...recommendedTracks, ...dailyDiscover, ...coversAndRemixes];
+    pool.forEach(t => {
+      if (!t || !t.artist) return;
+      const art = t.artist.trim().toLowerCase();
+      if (!map.has(art)) {
+        map.set(art, []);
+      }
+      const list = map.get(art)!;
+      if (!list.some(existing => existing.id === t.id)) {
+        list.push(t);
+      }
+    });
+    return map;
+  }, [allUserTracks, recommendedTracks, dailyDiscover, coversAndRemixes]);
+
+  const getArtistTracks = (artistName?: string): Track[] => {
+    if (!artistName) return [];
+    const direct = artistTrackMap.get(artistName.trim().toLowerCase()) || [];
+    if (direct.length > 0) return direct;
+    return allUserTracks.filter(t => t?.artist && t.artist.toLowerCase().includes(artistName.toLowerCase()));
+  };
+
+  // Helper to build a curated unique queue for a station
+  const buildStationQueue = (primaryPool: Track[], secondaryPool: Track[] = []): Track[] => {
+    const seen = new Set<string>();
+    const result: Track[] = [];
+    
+    [...primaryPool, ...secondaryPool, ...displayQuickPicks, ...favorites].forEach(t => {
+      if (t && t.id && !isTrackBlocked(t) && !seen.has(t.id)) {
+        seen.add(t.id);
+        result.push(t);
+      }
+    });
+
+    return result.slice(0, 30);
+  };
+
+  // Authentic YouTube Music "Mixed for You" Stations with Real Thumbnails & Multi-Track Queues
+  const dynamicMixes = useMemo(() => {
+    const mix1Tracks = buildStationQueue(
+      getArtistTracks(topArtists[0]),
+      [...getArtistTracks(topArtists[1]), ...recommendedTracks]
+    );
+
+    const supermixTracks = buildStationQueue(
+      displayQuickPicks,
+      [...favorites, ...dailyDiscover, ...recommendedTracks]
+    );
+
+    const mix2Tracks = buildStationQueue(
+      getArtistTracks(topArtists[1] || topArtists[0]),
+      [...getArtistTracks(topArtists[2]), ...dailyDiscover]
+    );
+
+    const mix3Tracks = buildStationQueue(
+      getArtistTracks(topArtists[2] || topArtists[0]),
+      [...getArtistTracks(topArtists[3]), ...coversAndRemixes]
+    );
+
+    const mix4Tracks = buildStationQueue(
+      getArtistTracks(topArtists[3] || topArtists[1] || topArtists[0]),
+      [...coversAndRemixes, ...recommendedTracks]
+    );
+
+    const chillMixTracks = buildStationQueue(
+      coversAndRemixes,
+      [...dailyDiscover.slice(4), ...displayQuickPicks.slice(2)]
+    );
+
+    const energyMixTracks = buildStationQueue(
+      defaultSpeedDial,
+      [...displayQuickPicks, ...recommendedTracks]
+    );
+
+    return [
+      {
+        id: 'mix-1',
+        stripeTitle: 'My Mix',
+        stripeNumber: '01',
+        title: 'My Mix 1',
+        subtitle: [topArtists[0], topArtists[1], topArtists[2], topArtists[3]].filter(Boolean).join(', '),
+        cover: mix1Tracks[0]?.cover || finalCollage[0],
+        covers: undefined,
+        tracks: mix1Tracks,
+        onPlay: () => {
+          const q = mix1Tracks.length > 0 ? mix1Tracks : (displayQuickPicks.length > 0 ? displayQuickPicks : allUserTracks);
+          if (q.length > 0) {
+            setQueue(q, 0, 'My Mix 1');
+            setIsPlaying(true);
+            showToast('Playing My Mix 1');
+          }
+        }
+      },
+      {
+        id: 'supermix',
+        stripeTitle: 'My',
+        stripeNumber: 'Supermix',
+        title: 'My Supermix',
+        subtitle: [topArtists[0], topArtists[1], topArtists[2], topArtists[3]].filter(Boolean).join(', '),
+        cover: undefined,
+        covers: finalCollage,
+        tracks: supermixTracks,
+        onPlay: () => {
+          const q = supermixTracks.length > 0 ? supermixTracks : (displayQuickPicks.length > 0 ? displayQuickPicks : allUserTracks);
+          if (q.length > 0) {
+            setQueue(q, 0, 'My Supermix');
+            setIsPlaying(true);
+            showToast('Playing My Supermix');
+          }
+        }
+      },
+      {
+        id: 'mix-2',
+        stripeTitle: 'My Mix',
+        stripeNumber: '02',
+        title: 'My Mix 2',
+        subtitle: [topArtists[1] || 'Fresh Sound', topArtists[2], topArtists[0]].filter(Boolean).join(', '),
+        cover: mix2Tracks[0]?.cover || finalCollage[1],
+        covers: undefined,
+        tracks: mix2Tracks,
+        onPlay: () => {
+          const q = mix2Tracks.length > 0 ? mix2Tracks : (displayQuickPicks.length > 1 ? displayQuickPicks.slice(1) : displayQuickPicks);
+          if (q.length > 0) {
+            setQueue(q, 0, 'My Mix 2');
+            setIsPlaying(true);
+            showToast('Playing My Mix 2');
+          }
+        }
+      },
+      {
+        id: 'mix-3',
+        stripeTitle: 'My Mix',
+        stripeNumber: '03',
+        title: 'My Mix 3',
+        subtitle: [topArtists[2] || 'Alternative', topArtists[3], topArtists[1]].filter(Boolean).join(', '),
+        cover: mix3Tracks[0]?.cover || finalCollage[2],
+        covers: undefined,
+        tracks: mix3Tracks,
+        onPlay: () => {
+          const q = mix3Tracks.length > 0 ? mix3Tracks : (dailyDiscover.length > 0 ? dailyDiscover : displayQuickPicks);
+          if (q.length > 0) {
+            setQueue(q, 0, 'My Mix 3');
+            setIsPlaying(true);
+            showToast('Playing My Mix 3');
+          }
+        }
+      },
+      {
+        id: 'mix-4',
+        stripeTitle: 'My Mix',
+        stripeNumber: '04',
+        title: 'My Mix 4',
+        subtitle: [topArtists[3] || 'Vibes', topArtists[0], topArtists[2]].filter(Boolean).join(', '),
+        cover: mix4Tracks[0]?.cover || finalCollage[3],
+        covers: undefined,
+        tracks: mix4Tracks,
+        onPlay: () => {
+          const q = mix4Tracks.length > 0 ? mix4Tracks : (coversAndRemixes.length > 0 ? coversAndRemixes : displayQuickPicks);
+          if (q.length > 0) {
+            setQueue(q, 0, 'My Mix 4');
+            setIsPlaying(true);
+            showToast('Playing My Mix 4');
+          }
+        }
+      },
+      {
+        id: 'chill-mix',
+        stripeTitle: 'Chill',
+        stripeNumber: 'Mix',
+        title: 'Chill Mix',
+        subtitle: 'Mellow grooves & relaxing soundscapes',
+        cover: chillMixTracks[0]?.cover || coversAndRemixes[0]?.cover || finalCollage[0],
+        covers: undefined,
+        tracks: chillMixTracks,
+        onPlay: () => {
+          const q = chillMixTracks.length > 0 ? chillMixTracks : (coversAndRemixes.length > 0 ? coversAndRemixes : displayQuickPicks);
+          if (q.length > 0) {
+            setQueue(q, 0, 'Chill Mix');
+            setIsPlaying(true);
+            showToast('Playing Chill Mix');
+          }
+        }
+      },
+      {
+        id: 'energy-mix',
+        stripeTitle: 'Energy',
+        stripeNumber: 'Mix',
+        title: 'Energy Mix',
+        subtitle: 'High tempo beats & hype tracks',
+        cover: energyMixTracks[0]?.cover || defaultSpeedDial[0]?.cover || finalCollage[1],
+        covers: undefined,
+        tracks: energyMixTracks,
+        onPlay: () => {
+          const q = energyMixTracks.length > 0 ? energyMixTracks : (defaultSpeedDial.length > 0 ? defaultSpeedDial : displayQuickPicks);
+          if (q.length > 0) {
+            setQueue(q, 0, 'Energy Mix');
+            setIsPlaying(true);
+            showToast('Playing Energy Mix');
+          }
         }
       }
-    },
-    {
-      id: 'supermix',
-      stripeTitle: 'My',
-      stripeNumber: 'Supermix',
-      title: 'My Supermix',
-      subtitle: [topArtists[0], topArtists[1], topArtists[2], topArtists[3]].filter(Boolean).join(', '),
-      cover: undefined,
-      covers: finalCollage,
-      onPlay: () => {
-        if (displayQuickPicks.length > 0) {
-          setQueue(displayQuickPicks, 0, 'My Supermix');
-          setIsPlaying(true);
-          showToast('Playing My Supermix');
-        }
-      }
-    },
-    {
-      id: 'mix-2',
-      stripeTitle: 'My Mix',
-      stripeNumber: '02',
-      title: 'My Mix 2',
-      subtitle: [topArtists[1] || 'Fresh Sound', topArtists[2], topArtists[0]].filter(Boolean).join(', '),
-      cover: artistTrackMap.get(topArtists[1])?.[0]?.cover || displayQuickPicks[1]?.cover || finalCollage[1],
-      covers: undefined,
-      onPlay: () => {
-        const seed = artistTrackMap.get(topArtists[1])?.[0] || displayQuickPicks[1] || displayQuickPicks[0];
-        if (seed) {
-          setQueue([seed], 0, 'My Mix 2');
-          setIsPlaying(true);
-          showToast('Playing My Mix 2');
-        }
-      }
-    },
-    {
-      id: 'mix-3',
-      stripeTitle: 'My Mix',
-      stripeNumber: '03',
-      title: 'My Mix 3',
-      subtitle: [topArtists[2] || 'Alternative', topArtists[3], topArtists[1]].filter(Boolean).join(', '),
-      cover: artistTrackMap.get(topArtists[2])?.[0]?.cover || dailyDiscover[0]?.cover || finalCollage[2],
-      covers: undefined,
-      onPlay: () => {
-        const seed = artistTrackMap.get(topArtists[2])?.[0] || dailyDiscover[0] || displayQuickPicks[0];
-        if (seed) {
-          setQueue([seed], 0, 'My Mix 3');
-          setIsPlaying(true);
-          showToast('Playing My Mix 3');
-        }
-      }
-    },
-    {
-      id: 'mix-4',
-      stripeTitle: 'My Mix',
-      stripeNumber: '04',
-      title: 'My Mix 4',
-      subtitle: [topArtists[3] || 'Vibes', topArtists[0], topArtists[2]].filter(Boolean).join(', '),
-      cover: artistTrackMap.get(topArtists[3])?.[0]?.cover || coversAndRemixes[0]?.cover || finalCollage[3],
-      covers: undefined,
-      onPlay: () => {
-        const seed = artistTrackMap.get(topArtists[3])?.[0] || coversAndRemixes[0] || displayQuickPicks[0];
-        if (seed) {
-          setQueue([seed], 0, 'My Mix 4');
-          setIsPlaying(true);
-          showToast('Playing My Mix 4');
-        }
-      }
-    },
-    {
-      id: 'chill-mix',
-      stripeTitle: 'Chill',
-      stripeNumber: 'Mix',
-      title: 'Chill Mix',
-      subtitle: 'Mellow grooves & relaxing soundscapes',
-      cover: coversAndRemixes[0]?.cover || displayQuickPicks[2]?.cover || finalCollage[0],
-      covers: undefined,
-      onPlay: () => {
-        const seed = coversAndRemixes[0] || displayQuickPicks[2] || displayQuickPicks[0];
-        if (seed) {
-          setQueue([seed], 0, 'Chill Mix');
-          setIsPlaying(true);
-          showToast('Playing Chill Mix');
-        }
-      }
-    },
-    {
-      id: 'energy-mix',
-      stripeTitle: 'Energy',
-      stripeNumber: 'Mix',
-      title: 'Energy Mix',
-      subtitle: 'High tempo beats & hype tracks',
-      cover: defaultSpeedDial[0]?.cover || displayQuickPicks[0]?.cover || finalCollage[1],
-      covers: undefined,
-      onPlay: () => {
-        const seed = defaultSpeedDial[0] || displayQuickPicks[0];
-        if (seed) {
-          setQueue([seed], 0, 'Energy Mix');
-          setIsPlaying(true);
-          showToast('Playing Energy Mix');
-        }
-      }
-    }
-  ];
+    ];
+  }, [
+    topArtists, 
+    artistTrackMap, 
+    displayQuickPicks, 
+    favorites, 
+    dailyDiscover, 
+    recommendedTracks, 
+    coversAndRemixes, 
+    defaultSpeedDial, 
+    finalCollage, 
+    allUserTracks
+  ]);
 
   return (
     <div style={{ paddingBottom: '120px', position: 'relative' }}>
@@ -629,29 +729,29 @@ export function Dashboard() {
               <span>Play all</span>
             </button>
           }
-          renderItem={(track) => {
+          renderItem={(track, idx) => {
             const isPlayingThis = isSameTrack(currentTrack, track);
             const isFav = favorites.some(f => f.id === track.id);
             
             return (
               <div 
-                key={`quick-pick-${track.id}`}
-                className={`quick-pick-row ${isPlayingThis ? 'playing' : ''}`}
-                onClick={() => {
-                  setQueue([track], 0, `${track.title} Mix`);
-                  setIsPlaying(true);
-                }}
+                key={`qp-${track.id}`}
+                className={`quick-pick-row ${isPlayingThis ? 'playing-active' : ''}`}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
-                  padding: '6px 10px',
-                  borderRadius: '8px',
-                  backgroundColor: isPlayingThis ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+                  padding: '8px 12px',
+                  borderRadius: '10px',
                   cursor: 'pointer',
-                  transition: 'background-color 0.15s ease',
-                  position: 'relative'
+                  backgroundColor: isPlayingThis ? 'rgba(30, 144, 255, 0.08)' : 'transparent',
+                  transition: 'background-color 0.15s ease'
                 }}
+                onClick={() => {
+                  setQueue(displayQuickPicks, idx, 'Quick Picks');
+                  setIsPlaying(true);
+                }}
+                onContextMenu={(e) => openTrackContextMenu(e, track)}
               >
                 {/* Image Cover with Hover Play Icon */}
                 <div 
@@ -761,11 +861,17 @@ export function Dashboard() {
       <Carousel 
         title="Mixed for you"
         items={dynamicMixes}
-        renderItem={(mix) => (
+        renderItem={(mix: DynamicMix) => (
           <div 
             key={`dyn-mix-${mix.id}`}
             className="ytm-mix-card"
             onClick={mix.onPlay}
+            onContextMenu={(e) => openPlaylistContextMenu(e, {
+              id: mix.id,
+              name: mix.title,
+              cover: mix.cover,
+              tracks: mix.tracks
+            })}
           >
             <div className="ytm-mix-art-wrapper">
               {mix.covers && mix.covers.length >= 4 ? (
@@ -810,6 +916,12 @@ export function Dashboard() {
               key={`community-${item.id}`}
               className="album-card"
               onClick={() => navigate(`/album/${item.playlistId || item.id}?name=${encodeURIComponent(item.name || (item as any).title || '')}&artist=${encodeURIComponent(item.author || '')}&cover=${encodeURIComponent(item.cover || '')}`)}
+              onContextMenu={(e) => openPlaylistContextMenu(e, {
+                id: item.playlistId || item.id,
+                name: item.name || (item as any).title || 'Playlist',
+                cover: item.cover,
+                author: item.author
+              })}
             >
               <div className="album-art" style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)', position: 'relative' }}>
                 <img 
@@ -840,6 +952,12 @@ export function Dashboard() {
               key={`release-${item.id}`}
               className="album-card"
               onClick={() => navigate(`/album/${item.playlistId || item.id}?name=${encodeURIComponent(item.name || (item as any).title || '')}&artist=${encodeURIComponent(item.author || '')}&cover=${encodeURIComponent(item.cover || '')}`)}
+              onContextMenu={(e) => openAlbumContextMenu(e, {
+                id: item.playlistId || item.id,
+                name: item.name || (item as any).title || 'Release',
+                artist: item.author || 'Artist',
+                cover: item.cover
+              })}
             >
               <div className="album-art" style={{ overflow: 'hidden', backgroundColor: 'var(--bg-main)', position: 'relative' }}>
                 <img 
@@ -894,6 +1012,7 @@ export function Dashboard() {
                 setQueue([track, ...unblocked.filter(t => t.id !== track.id)], 0, 'Daily Discover');
                 setIsPlaying(true);
               }}
+              onContextMenu={(e) => openTrackContextMenu(e, track)}
             >
               <img 
                 src={track.cover || `https://i.ytimg.com/vi/${getDirectYouTubeId(track)}/hqdefault.jpg`} 
@@ -940,6 +1059,7 @@ export function Dashboard() {
                 setQueue([track], 0, `${track.title} Mix`);
                 setIsPlaying(true);
               }}
+              onContextMenu={(e) => openTrackContextMenu(e, track)}
             >
               <div 
                 className="album-art" 

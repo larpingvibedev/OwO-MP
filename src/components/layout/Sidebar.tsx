@@ -5,18 +5,23 @@ import {
   Search, 
   Library, 
   Settings, 
-  Disc3, 
   Menu, 
   Plus, 
   Heart, 
-  ListMusic, 
-  Sparkles,
-  Check
+  Sparkles, 
+  Check,
+  Download
 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 
+import { PlaylistCover } from '../common/PlaylistCover';
+import { useContextMenuStore } from '../../store/useContextMenuStore';
+import { ImportPlaylistModal } from '../common/ImportPlaylistModal';
+import appLogo from '../../assets/app_logo.png';
+
 export function Sidebar() {
   const navigate = useNavigate();
+  const { openPlaylistContextMenu } = useContextMenuStore();
   const { 
     isSidebarCollapsed, 
     toggleSidebar, 
@@ -27,16 +32,17 @@ export function Sidebar() {
   } = usePlayerStore();
 
   const [showQuickCreate, setShowQuickCreate] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [quickPlaylistName, setQuickPlaylistName] = useState('');
 
   const handleCreatePlaylist = (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickPlaylistName.trim()) return;
-    createPlaylist(quickPlaylistName.trim());
+    const newId = createPlaylist(quickPlaylistName.trim());
     setQuickPlaylistName('');
     setShowQuickCreate(false);
     closePlayerDrawer();
-    navigate('/library?tab=playlists');
+    navigate(`/playlist/${newId}`);
   };
 
   return (
@@ -53,9 +59,19 @@ export function Sidebar() {
         </button>
 
         {!isSidebarCollapsed && (
-          <NavLink to="/" className="sidebar-logo" onClick={() => closePlayerDrawer()}>
-            <Disc3 className="brand-disc-icon" size={24} color="var(--accent-primary)" />
-            <span className="brand-text">OwO Music</span>
+          <NavLink 
+            to="/" 
+            className="sidebar-logo" 
+            onClick={() => closePlayerDrawer()} 
+          >
+            <img 
+              src={appLogo} 
+              alt="OwO" 
+              className="brand-logo-img"
+            />
+            <span className="brand-text">
+              Music
+            </span>
           </NavLink>
         )}
       </div>
@@ -99,7 +115,7 @@ export function Sidebar() {
         <div className="sidebar-library-section">
           <div className="sidebar-divider" />
 
-          {/* New Playlist Action Button */}
+          {/* Clean Single New Playlist Pill Button */}
           <button 
             className="sidebar-new-playlist-btn"
             onClick={() => setShowQuickCreate(prev => !prev)}
@@ -109,31 +125,75 @@ export function Sidebar() {
             <span>New playlist</span>
           </button>
 
-          {/* Inline Quick Playlist Input */}
+          {/* Inline Quick Playlist Drawer / Form */}
           {showQuickCreate && (
-            <form onSubmit={handleCreatePlaylist} className="sidebar-quick-create-form">
-              <input 
-                type="text" 
-                placeholder="Playlist name..."
-                value={quickPlaylistName}
-                onChange={(e) => setQuickPlaylistName(e.target.value)}
-                autoFocus
-                className="sidebar-quick-input"
-              />
-              <button type="submit" className="sidebar-quick-submit-btn">
-                <Check size={14} />
+            <div style={{ marginBottom: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <form onSubmit={handleCreatePlaylist} className="sidebar-quick-create-form" style={{ margin: 0 }}>
+                <input 
+                  type="text" 
+                  placeholder="Playlist name..."
+                  value={quickPlaylistName}
+                  onChange={(e) => setQuickPlaylistName(e.target.value)}
+                  autoFocus
+                  className="sidebar-quick-input"
+                />
+                <button type="submit" className="sidebar-quick-submit-btn" title="Create Playlist">
+                  <Check size={14} />
+                </button>
+              </form>
+
+              {/* Seamless Import Option */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowQuickCreate(false);
+                  setShowImportModal(true);
+                }}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  border: '1px dashed rgba(255, 255, 255, 0.15)',
+                  borderRadius: '12px',
+                  padding: '6px 10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  color: 'rgba(255, 255, 255, 0.7)',
+                  fontSize: '0.78rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                  e.currentTarget.style.color = '#fff';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
+                  e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                }}
+              >
+                <Download size={13} color="var(--accent-primary)" />
+                <span>Or import from Spotify / YouTube</span>
               </button>
-            </form>
+            </div>
           )}
 
           {/* Scrollable Playlist List (YouTube Music / Spotify Style) */}
           <div className="sidebar-playlists-scroll">
             {/* Auto-Playlist: Liked Music */}
             <NavLink 
-              to="/library?tab=songs"
+              to="/playlist/liked"
               className={({ isActive }) => `sidebar-playlist-item ${isActive ? 'active' : ''}`}
               title="Liked Music"
               onClick={() => closePlayerDrawer()}
+              onContextMenu={(e) => openPlaylistContextMenu(e, {
+                id: 'liked',
+                name: 'Liked Music',
+                tracks: favorites
+              })}
             >
               <div className="playlist-item-icon-box liked-box">
                 <Heart size={13} fill="#ffffff" color="#ffffff" />
@@ -147,25 +207,36 @@ export function Sidebar() {
             </NavLink>
 
             {/* Custom User Playlists */}
-            {playlists.map((pl) => (
-              <NavLink 
-                key={pl.id}
-                to={`/library?tab=playlists`}
-                className="sidebar-playlist-item"
-                title={pl.name}
-                onClick={() => closePlayerDrawer()}
-              >
-                <div className="playlist-item-icon-box">
-                  <ListMusic size={14} color="var(--text-secondary)" />
-                </div>
-                <div className="playlist-item-meta">
-                  <span className="playlist-name">{pl.name}</span>
-                  <span className="playlist-sub">
-                    Playlist • {pl.tracks.length} {pl.tracks.length === 1 ? 'song' : 'songs'}
-                  </span>
-                </div>
-              </NavLink>
-            ))}
+            {playlists.map((pl) => {
+              const count = Array.isArray(pl?.tracks) ? pl.tracks.length : 0;
+              return (
+                <NavLink 
+                  key={pl.id}
+                  to={`/playlist/${pl.id}`}
+                  className={({ isActive }) => `sidebar-playlist-item ${isActive ? 'active' : ''}`}
+                  title={pl.name}
+                  onClick={() => closePlayerDrawer()}
+                  onContextMenu={(e) => openPlaylistContextMenu(e, pl)}
+                >
+                  <div className="playlist-item-icon-box" style={{ padding: 0, overflow: 'hidden' }}>
+                    <PlaylistCover 
+                      tracks={pl.tracks} 
+                      cover={pl.cover} 
+                      name={pl.name} 
+                      size={36} 
+                      borderRadius={4} 
+                      fallbackIconSize={14} 
+                    />
+                  </div>
+                  <div className="playlist-item-meta">
+                    <span className="playlist-name">{pl.name || 'Playlist'}</span>
+                    <span className="playlist-sub">
+                      Playlist • {count} {count === 1 ? 'song' : 'songs'}
+                    </span>
+                  </div>
+                </NavLink>
+              );
+            })}
           </div>
         </div>
       )}
@@ -182,6 +253,12 @@ export function Sidebar() {
           {!isSidebarCollapsed && <span className="nav-label">Settings</span>}
         </NavLink>
       </div>
+
+      {/* Import Playlist Modal */}
+      <ImportPlaylistModal 
+        isOpen={showImportModal} 
+        onClose={() => setShowImportModal(false)} 
+      />
     </aside>
   );
 }

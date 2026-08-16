@@ -13,6 +13,7 @@ interface TrackOptionsMenuProps {
   track: Track;
   variant?: 'row' | 'card' | 'player-bar' | 'icon';
   onRemoveFromQueue?: () => void;
+  onRemoveFromPlaylist?: () => void;
   className?: string;
   style?: React.CSSProperties;
 }
@@ -21,6 +22,7 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
   track,
   variant = 'row',
   onRemoveFromQueue,
+  onRemoveFromPlaylist,
   className = '',
   style
 }) => {
@@ -416,6 +418,14 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
                 <button className="track-menu-item" onClick={() => { setIsOpen(false); onRemoveFromQueue(); }}>
                   <Trash2 size={16} color="#e74c3c" />
                   <span style={{ color: '#e74c3c' }}>Remove from queue</span>
+                </button>
+              )}
+
+              {/* Remove from Playlist (if custom playlist) */}
+              {onRemoveFromPlaylist && (
+                <button className="track-menu-item" onClick={() => { setIsOpen(false); onRemoveFromPlaylist(); }}>
+                  <Trash2 size={16} color="#e74c3c" />
+                  <span style={{ color: '#e74c3c' }}>Remove from playlist</span>
                 </button>
               )}
 

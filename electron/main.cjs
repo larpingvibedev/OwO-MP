@@ -317,6 +317,7 @@ function startInternalProxyServer() {
 }
 
 function createWindow() {
+  const iconPath = path.join(__dirname, '../public/app.png');
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -324,6 +325,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#0e0e11',
     title: 'OwO Music Player',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

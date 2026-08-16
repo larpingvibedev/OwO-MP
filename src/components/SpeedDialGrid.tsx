@@ -2,6 +2,7 @@ import type { Track } from '../types';
 import { isSameTrack } from '../utils/trackUtils';
 import { Play } from 'lucide-react';
 import { TrackOptionsMenu } from './common/TrackOptionsMenu';
+import { useContextMenuStore } from '../store/useContextMenuStore';
 
 interface SpeedDialGridProps {
   tracks: Track[];
@@ -16,6 +17,7 @@ export function SpeedDialGrid({
   onTrackClick,
   onArtistClick
 }: SpeedDialGridProps) {
+  const { openTrackContextMenu } = useContextMenuStore();
   if (!tracks || tracks.length === 0) return null;
 
   return (
@@ -39,6 +41,7 @@ export function SpeedDialGrid({
             <div
               key={`speed-dial-${track.id}`}
               onClick={() => onTrackClick(track, index)}
+              onContextMenu={(e) => openTrackContextMenu(e, track)}
               className={`speed-dial-card ${isActive ? 'active' : ''}`}
               style={{
                 display: 'flex',

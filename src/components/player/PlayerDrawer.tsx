@@ -10,6 +10,7 @@ import { fetchUpNextMix, fetchSimilarArtists, fetchArtistDeepTracks, cleanGoogle
 import { fetchLyrics, type LyricsResult } from '../../services/lyricsService';
 import type { Track, SimilarArtist } from '../../types';
 import { TrackOptionsMenu } from '../common/TrackOptionsMenu';
+import { useContextMenuStore } from '../../store/useContextMenuStore';
 import { AudioVisualizer } from './AudioVisualizer';
 
 function formatDuration(seconds: number): string {
@@ -25,6 +26,7 @@ interface PlayerDrawerProps {
 
 export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
   const navigate = useNavigate();
+  const { openTrackContextMenu } = useContextMenuStore();
   const {
     currentTrack,
     isPlaying,
@@ -567,6 +569,9 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                         key={`queue-item-${track.id}-${idx}`}
                         ref={isCurrent ? currentQueueItemRef : null}
                         onClick={() => usePlayerStore.setState({ queueIndex: idx, currentTrack: track, currentTime: 0, isPlaying: true })}
+                        onContextMenu={(e) => openTrackContextMenu(e, track, {
+                          onRemoveFromQueue: !isCurrent ? () => removeFromQueue(idx) : undefined
+                        })}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -763,11 +768,12 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                         if (filtered.length > 0) list = filtered;
                       }
 
-                      return list.map((track) => {
+                      return list.map((track, idx) => {
                         const isAdded = addedTrackIds.has(track.id);
                         return (
                           <div 
-                            key={`rec-${track.id}`}
+                            key={`rec-upnext-${track.id}-${idx}`}
+                            onContextMenu={(e) => openTrackContextMenu(e, track)}
                             style={{
                               display: 'flex',
                               alignItems: 'center',

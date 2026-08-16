@@ -13,6 +13,8 @@ import { DeviceConnectModal } from './components/connect/DeviceConnectModal';
 import { useAuthStore } from './store/useAuthStore';
 import { usePlayerStore } from './store/usePlayerStore';
 import { supabaseSync } from './services/supabaseSyncService';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { GlobalContextMenu } from './components/common/GlobalContextMenu';
 import './App.css';
 
 function App() {
@@ -45,10 +47,11 @@ function App() {
   }, [syncOfflineTracks]);
 
   return (
-    <>
+    <ErrorBoundary>
       <AuthModal />
       <EditProfileModal />
       <DeviceConnectModal isOpen={showDeviceModal} onClose={() => setShowDeviceModal(false)} />
+      <GlobalContextMenu />
       
       <Routes>
         <Route path="/" element={<MainLayout onOpenDeviceModal={() => setShowDeviceModal(true)} />}>
@@ -62,9 +65,10 @@ function App() {
           <Route path="settings" element={<Settings />} />
           <Route path="artist/:artistName" element={<Artist />} />
           <Route path="album/:albumId" element={<Album />} />
+          <Route path="playlist/:albumId" element={<Album />} />
         </Route>
       </Routes>
-    </>
+    </ErrorBoundary>
   );
 }
 

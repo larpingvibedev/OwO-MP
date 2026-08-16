@@ -6,6 +6,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { TrackOptionsMenu } from '../common/TrackOptionsMenu';
+import { useContextMenuStore } from '../../store/useContextMenuStore';
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -20,6 +21,7 @@ interface BottomPlayerProps {
 
 export function BottomPlayer({ onOpenDeviceModal }: BottomPlayerProps = {}) {
   const navigate = useNavigate();
+  const { openTrackContextMenu } = useContextMenuStore();
   const progressBarRef = useRef<HTMLDivElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
 
@@ -243,7 +245,14 @@ export function BottomPlayer({ onOpenDeviceModal }: BottomPlayerProps = {}) {
       </div>
 
       {/* Now Playing Info */}
-      <div className="now-playing">
+      <div 
+        className="now-playing"
+        onContextMenu={(e) => {
+          if (currentTrack) {
+            openTrackContextMenu(e, currentTrack);
+          }
+        }}
+      >
         <div 
           className="current-art"
           onClick={() => togglePlayerDrawer('up_next')}

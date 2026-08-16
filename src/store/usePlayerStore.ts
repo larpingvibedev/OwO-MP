@@ -135,8 +135,11 @@ interface PlayerState {
   playNext: (track: Track) => void;
   createPlaylist: (name: string) => string;
   deletePlaylist: (playlistId: string) => void;
+  updatePlaylist: (playlistId: string, updates: { name?: string; description?: string; cover?: string }) => void;
+  removeTrackFromPlaylist: (playlistId: string, trackId: string) => void;
   addToPlaylist: (playlistId: string, track: Track) => void;
   createPlaylistWithTrack: (name: string, track: Track) => void;
+  createImportedPlaylist: (playlist: { name: string; cover?: string; author?: string; tracks: Track[] }) => string;
   saveQueueAsPlaylist: (customName?: string) => void;
   generateRadio: (seedTrack: Track) => Promise<void>;
   generateMultiRadio: (seedTracks: Track[]) => Promise<void>;
@@ -722,7 +725,7 @@ export const usePlayerStore = create<PlayerState>()(
     const isFav = state.favorites.some((t) => t.id === track.id);
     const newFavorites = isFav 
       ? state.favorites.filter((t) => t.id !== track.id)
-      : [{ ...track, savedAt: Date.now() }, ...state.favorites];
+      : [...state.favorites, { ...track, savedAt: Date.now() }];
     
     // Trigger background cloud sync
     supabaseSync.syncFavoriteUp(track, !isFav);
@@ -883,6 +886,38 @@ export const usePlayerStore = create<PlayerState>()(
     });
   },
 
+  updatePlaylist: (playlistId, updates) => set((state) => {
+    const pl = state.playlists.find(p => p.id === playlistId);
+    if (!pl) return {};
+    const updatedPl: Playlist = {
+      ...pl,
+      name: updates.name !== undefined ? updates.name.trim() || pl.name : pl.name,
+      description: updates.description !== undefined ? updates.description : pl.description,
+      cover: updates.cover !== undefined ? updates.cover : pl.cover
+    };
+    const updated = state.playlists.map(p => p.id === playlistId ? updatedPl : p);
+    supabaseSync.syncPlaylistUp(updatedPl);
+    return {
+      playlists: updated,
+      toastMessage: `Updated "${updatedPl.name}"`
+    };
+  }),
+
+  removeTrackFromPlaylist: (playlistId, trackId) => set((state) => {
+    const pl = state.playlists.find(p => p.id === playlistId);
+    if (!pl) return {};
+    const updatedPl: Playlist = {
+      ...pl,
+      tracks: pl.tracks.filter(t => t.id !== trackId)
+    };
+    const updated = state.playlists.map(p => p.id === playlistId ? updatedPl : p);
+    supabaseSync.syncPlaylistUp(updatedPl);
+    return {
+      playlists: updated,
+      toastMessage: `Removed from "${pl.name}"`
+    };
+  }),
+
   addToPlaylist: (playlistId, track) => set((state) => {
     const pl = state.playlists.find(p => p.id === playlistId);
     if (!pl) return {};
@@ -913,6 +948,24 @@ export const usePlayerStore = create<PlayerState>()(
       toastMessage: `Created playlist "${newPl.name}"`
     };
   }),
+
+  createImportedPlaylist: (playlist) => {
+    const newId = `pl-${Date.now()}`;
+    const newPl: Playlist = {
+      id: newId,
+      name: playlist.name.trim() || 'Imported Playlist',
+      cover: playlist.cover,
+      author: playlist.author,
+      tracks: playlist.tracks || [],
+      createdAt: Date.now()
+    };
+    set((state) => ({
+      playlists: [newPl, ...state.playlists],
+      toastMessage: `Imported playlist "${newPl.name}" (${newPl.tracks.length} songs)`
+    }));
+    supabaseSync.syncPlaylistUp(newPl);
+    return newId;
+  },
 
   generateRadio: async (seedTrack) => {
     set({ isPlaying: false });

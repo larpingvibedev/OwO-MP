@@ -6,6 +6,7 @@ import { isSameTrack } from '../utils/trackUtils';
 import { Play, CheckCircle, Loader2, Heart } from 'lucide-react';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
+import { useContextMenuStore } from '../store/useContextMenuStore';
 import type { ArtistProfile, Track } from '../types';
 
 function formatTime(seconds: number): string {
@@ -21,6 +22,7 @@ export function Artist() {
   const channelId = searchParams.get('channelId') || undefined;
   const artistId = searchParams.get('artistId') || undefined;
   const navigate = useNavigate();
+  const { openTrackContextMenu, openAlbumContextMenu } = useContextMenuStore();
   const [profile, setProfile] = useState<ArtistProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const { 
@@ -184,6 +186,7 @@ export function Artist() {
                     key={track.id} 
                     className={`track-row ${isSameTrack(currentTrack, track) ? 'active-playing' : ''}`}
                     onClick={() => handlePlayTrack(track)}
+                    onContextMenu={(e) => openTrackContextMenu(e, track)}
                   >
                     <span className="track-row-index">{idx + 1}</span>
                     <div 
@@ -242,6 +245,13 @@ export function Artist() {
                   key={album.id} 
                   className="album-card"
                   onClick={() => navigate(`/album/${album.id}?name=${encodeURIComponent(album.name)}&artist=${encodeURIComponent(album.artist)}&cover=${encodeURIComponent(album.cover || '')}`)}
+                  onContextMenu={(e) => openAlbumContextMenu(e, {
+                    id: album.id,
+                    name: album.name,
+                    artist: album.artist,
+                    cover: album.cover,
+                    releaseDate: album.releaseDate
+                  })}
                 >
                   <div 
                     className="album-art"
@@ -275,6 +285,13 @@ export function Artist() {
                   key={single.id} 
                   className="album-card"
                   onClick={() => navigate(`/album/${single.id}?name=${encodeURIComponent(single.name)}&artist=${encodeURIComponent(single.artist)}&cover=${encodeURIComponent(single.cover || '')}`)}
+                  onContextMenu={(e) => openAlbumContextMenu(e, {
+                    id: single.id,
+                    name: single.name,
+                    artist: single.artist,
+                    cover: single.cover,
+                    releaseDate: single.releaseDate
+                  })}
                 >
                   <div 
                     className="album-art"

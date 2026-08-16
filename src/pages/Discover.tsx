@@ -24,6 +24,7 @@ import { isSameTrack } from '../utils/trackUtils';
 import { searchPublicPlaylists, fetchPublicPlaylistTracks } from '../services/musicSearch';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
+import { useContextMenuStore } from '../store/useContextMenuStore';
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -33,6 +34,7 @@ function formatTime(seconds: number): string {
 }
 
 export function Discover() {
+  const { openTrackContextMenu, openPlaylistContextMenu } = useContextMenuStore();
   const { 
     searchResults, 
     searchQuery, 
@@ -307,6 +309,7 @@ export function Discover() {
                     key={`rec-track-${track.id}`} 
                     className={`album-card ${isCurrent ? 'active-playing' : ''}`}
                     onClick={() => handlePlayTrack(track, [track], 0, 'Recent Searches')}
+                    onContextMenu={(e) => openTrackContextMenu(e, track)}
                     style={{ position: 'relative' }}
                   >
                     <div 
@@ -540,9 +543,10 @@ export function Discover() {
                   const isFav = favorites.some(f => f.id === track.id);
                   return (
                     <div 
-                      key={track.id}
+                      key={`top-${track.id}`}
                       className={`track-row ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
-                      onClick={() => handlePlayTrack(track, [track], 0, `${track.title} Mix`)}
+                      onClick={() => handlePlayTrack(track, artistProfile.topTracks, idx, `${artistProfile.name} Top Tracks`)}
+                      onContextMenu={(e) => openTrackContextMenu(e, track)}
                     >
                       <span className="track-row-index">{idx + 1}</span>
                       <div 
@@ -615,6 +619,7 @@ export function Discover() {
                 key={`recent-${track.id}`}
                 className={`album-card ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
                 onClick={() => handlePlayTrack(track, [track], 0, `${track.title} Mix`)}
+                onContextMenu={(e) => openTrackContextMenu(e, track)}
               >
                 <div 
                   className="album-art" 
@@ -680,8 +685,14 @@ export function Discover() {
               {publicPlaylists.map((pl) => (
                 <div 
                   key={pl.id} 
-                  className="album-card"
+                  className="album-card public-playlist-card"
                   onClick={() => handleOpenPlaylist(pl)}
+                  onContextMenu={(e) => openPlaylistContextMenu(e, {
+                    id: pl.id,
+                    name: pl.name,
+                    cover: pl.cover,
+                    author: pl.author
+                  })}
                   style={{ position: 'relative', cursor: 'pointer' }}
                 >
                   {/* Playlist Art */}
@@ -790,6 +801,7 @@ export function Discover() {
                 key={track.id} 
                 className={`album-card ${currentTrack?.id === track.id ? 'active-playing' : ''}`}
                 onClick={() => handlePlayTrack(track, [track], 0, `${track.title} Mix`)}
+                onContextMenu={(e) => openTrackContextMenu(e, track)}
               >
                 <div 
                   className="album-art" 

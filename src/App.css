@@ -68,21 +68,33 @@
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: var(--text-primary);
+  gap: 8px;
   text-decoration: none;
   white-space: nowrap;
+  user-select: none;
 }
 
-.sidebar-logo .brand-disc-icon {
-  animation: spinSlow 12s linear infinite;
+.sidebar-logo .brand-logo-img {
+  height: 26px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
 }
 
-@keyframes spinSlow {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+.sidebar-logo:hover .brand-logo-img {
+  transform: scale(1.06);
+}
+
+.sidebar-logo .brand-text {
+  font-weight: 800;
+  font-size: 1.25rem;
+  letter-spacing: -0.03em;
+  color: #ffffff;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
 }
 
 .sidebar-nav {

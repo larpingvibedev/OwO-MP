@@ -3,23 +3,25 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   Plus, 
   Heart, 
-  ListMusic, 
   Disc3, 
   User, 
   ArrowUpDown, 
   Play, 
-  Trash2, 
+  Trash2,
   Music2, 
-  Sparkles,
-  Check,
-  Shuffle,
-  Download,
-  HardDrive
+  Sparkles, 
+  Check, 
+  Shuffle, 
+  Download, 
+  HardDrive 
 } from 'lucide-react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import type { Playlist, LibraryFilterType, SavedAlbum, FollowedArtist } from '../types';
 import { getAllOfflineRecords, type OfflineRecord } from '../services/downloadService';
 import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
+import { PlaylistCover } from '../components/common/PlaylistCover';
+import { useContextMenuStore } from '../store/useContextMenuStore';
+import { ImportPlaylistModal } from '../components/common/ImportPlaylistModal';
 
 interface UnifiedLibraryItem {
   id: string;
@@ -68,15 +70,16 @@ export function Library() {
     setIsPlaying, 
     toggleFavorite,
     createPlaylist, 
-    deletePlaylist, 
     showToast 
   } = usePlayerStore();
+
+  const { openTrackContextMenu, openPlaylistContextMenu, openAlbumContextMenu } = useContextMenuStore();
 
   const [activeFilter, setActiveFilter] = useState<LibraryFilterType>(tabParam);
   const [sortBy, setSortBy] = useState<'recent' | 'added' | 'alpha'>('recent');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
-  const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [offlineRecords, setOfflineRecords] = useState<OfflineRecord[]>([]);
 
   useEffect(() => {
@@ -188,15 +191,17 @@ export function Library() {
 
     // Playlists (User created & Saved Community Playlists)
     playlists.forEach(pl => {
+      if (!pl) return;
+      const trackCount = Array.isArray(pl.tracks) ? pl.tracks.length : 0;
       const subtitle = pl.author 
         ? `Playlist • ${pl.author}`
-        : `Playlist • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'track' : 'tracks'}`;
+        : `Playlist • ${trackCount} ${trackCount === 1 ? 'track' : 'tracks'}`;
       items.push({
         id: pl.id,
         type: 'playlist',
-        title: pl.name,
+        title: pl.name || 'Playlist',
         subtitle,
-        cover: pl.cover || pl.tracks[0]?.cover || '',
+        cover: pl.cover || (pl.tracks && pl.tracks[0]?.cover) || '',
         savedAt: pl.createdAt || 0,
         lastPlayedAt: pl.createdAt || 0,
         data: pl
@@ -246,9 +251,10 @@ export function Library() {
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPlaylistName.trim()) return;
-    createPlaylist(newPlaylistName.trim());
+    const newId = createPlaylist(newPlaylistName.trim());
     setNewPlaylistName('');
     setShowCreateModal(false);
+    navigate(`/playlist/${newId}`);
   };
 
   const handlePlayLikedMusic = () => {
@@ -324,13 +330,38 @@ export function Library() {
             </p>
           </div>
 
-          <button 
-            className="new-playlist-primary-btn"
-            onClick={() => setShowCreateModal(true)}
-          >
-            <Plus size={18} />
-            <span>New playlist</span>
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button 
+              className="library-import-playlist-btn"
+              onClick={() => setShowImportModal(true)}
+              title="Import playlist from Spotify or YouTube"
+              style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                borderRadius: '24px',
+                padding: '10px 18px',
+                color: '#ffffff',
+                fontSize: '0.88rem',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <Download size={16} />
+              <span>Import</span>
+            </button>
+
+            <button 
+              className="new-playlist-primary-btn"
+              onClick={() => setShowCreateModal(true)}
+            >
+              <Plus size={18} />
+              <span>New playlist</span>
+            </button>
+          </div>
         </div>
 
         {/* YouTube Music Style Filter Chips */}
@@ -415,11 +446,11 @@ export function Library() {
                 <div 
                   key={item.id}
                   className="library-card liked-music-hero-card"
-                  onClick={handlePlayLikedMusic}
+                  onClick={() => navigate('/playlist/liked')}
                 >
                   <div className="liked-music-art">
                     <Heart size={36} fill="#ffffff" color="#ffffff" className="heart-icon-glow" />
-                    <div className="card-play-hover-btn">
+                    <div className="card-play-hover-btn" onClick={(e) => { e.stopPropagation(); handlePlayLikedMusic(); }}>
                       <Play size={22} fill="#000" color="#000" />
                     </div>
                   </div>
@@ -441,26 +472,17 @@ export function Library() {
                   key={item.id} 
                   className="library-card playlist-card"
                   onClick={() => {
-                    if (pl.tracks.length === 0 && (pl.id.startsWith('PL') || pl.id.startsWith('VLPL') || pl.id.startsWith('community-') || pl.id.startsWith('mix-'))) {
-                      navigate(`/album/${pl.id}?name=${encodeURIComponent(pl.name)}&artist=${encodeURIComponent(pl.author || '')}&cover=${encodeURIComponent(pl.cover || '')}`);
-                    } else {
-                      setSelectedPlaylist(pl);
-                    }
+                    navigate(`/playlist/${pl.id}`);
                   }}
+                  onContextMenu={(e) => openPlaylistContextMenu(e, pl)}
                 >
-                  <div 
-                    className="card-cover-wrapper"
-                    style={{
-                      backgroundImage: item.cover ? `url(${item.cover})` : 'none',
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center'
-                    }}
-                  >
-                    {!item.cover && (
-                      <div className="empty-cover-placeholder">
-                        <ListMusic size={36} color="var(--text-secondary)" />
-                      </div>
-                    )}
+                  <div className="card-cover-wrapper" style={{ position: 'relative' }}>
+                    <PlaylistCover 
+                      tracks={pl.tracks} 
+                      cover={pl.cover} 
+                      name={pl.name} 
+                      borderRadius="8px"
+                    />
                     <div 
                       className="card-play-hover-btn"
                       onClick={(e) => {
@@ -487,6 +509,7 @@ export function Library() {
                   key={item.id} 
                   className="library-card album-card"
                   onClick={() => navigate(`/album/${alb.id}?name=${encodeURIComponent(alb.name)}&artist=${encodeURIComponent(alb.artist)}&cover=${encodeURIComponent(alb.cover)}`)}
+                  onContextMenu={(e) => openAlbumContextMenu(e, alb)}
                 >
                   <div 
                     className="card-cover-wrapper"
@@ -548,11 +571,11 @@ export function Library() {
           {favorites.length > 0 && (
             <div 
               className="library-card liked-music-hero-card"
-              onClick={handlePlayLikedMusic}
+              onClick={() => navigate('/playlist/liked')}
             >
               <div className="liked-music-art">
                 <Heart size={36} fill="#ffffff" color="#ffffff" className="heart-icon-glow" />
-                <div className="card-play-hover-btn">
+                <div className="card-play-hover-btn" onClick={(e) => { e.stopPropagation(); handlePlayLikedMusic(); }}>
                   <Play size={22} fill="#000" color="#000" />
                 </div>
               </div>
@@ -568,32 +591,22 @@ export function Library() {
 
           {/* Sorted User Playlists & Saved Community Playlists */}
           {sortedPlaylists.map(pl => {
-            const displayCover = pl.cover || pl.tracks[0]?.cover;
             return (
               <div 
                 key={pl.id} 
                 className="library-card playlist-card"
                 onClick={() => {
-                  if (pl.tracks.length === 0 && (pl.id.startsWith('PL') || pl.id.startsWith('VLPL') || pl.id.startsWith('community-') || pl.id.startsWith('mix-'))) {
-                    navigate(`/album/${pl.id}?name=${encodeURIComponent(pl.name)}&artist=${encodeURIComponent(pl.author || '')}&cover=${encodeURIComponent(pl.cover || '')}`);
-                  } else {
-                    setSelectedPlaylist(pl);
-                  }
+                  navigate(`/playlist/${pl.id}`);
                 }}
+                onContextMenu={(e) => openPlaylistContextMenu(e, pl)}
               >
-                <div 
-                  className="card-cover-wrapper"
-                  style={{
-                    backgroundImage: displayCover ? `url(${displayCover})` : 'none',
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center'
-                  }}
-                >
-                  {!displayCover && (
-                    <div className="empty-cover-placeholder">
-                      <ListMusic size={36} color="var(--text-secondary)" />
-                    </div>
-                  )}
+                <div className="card-cover-wrapper" style={{ position: 'relative' }}>
+                  <PlaylistCover 
+                    tracks={pl.tracks} 
+                    cover={pl.cover} 
+                    name={pl.name} 
+                    borderRadius="8px"
+                  />
                   <div 
                     className="card-play-hover-btn"
                     onClick={(e) => {
@@ -608,7 +621,7 @@ export function Library() {
                 <div className="card-meta">
                   <div className="card-title" title={pl.name}>{pl.name}</div>
                   <div className="card-subtitle">
-                    {pl.author ? `Playlist • ${pl.author}` : `Playlist • ${pl.tracks.length} ${pl.tracks.length === 1 ? 'track' : 'tracks'}`}
+                    {pl.author ? `Playlist • ${pl.author}` : `Playlist • ${Array.isArray(pl.tracks) ? pl.tracks.length : 0} ${(Array.isArray(pl.tracks) && pl.tracks.length === 1) ? 'track' : 'tracks'}`}
                   </div>
                 </div>
               </div>
@@ -666,6 +679,7 @@ export function Library() {
                     setQueue(favorites, idx, 'Liked Music');
                     setIsPlaying(true);
                   }}
+                  onContextMenu={(e) => openTrackContextMenu(e, track)}
                 >
                   <span className="track-idx-num">{idx + 1}</span>
                   <img src={track.cover} alt={track.title} className="track-row-thumb" />
@@ -700,6 +714,7 @@ export function Library() {
               key={alb.id} 
               className="library-card album-card"
               onClick={() => navigate(`/album/${alb.id}?name=${encodeURIComponent(alb.name)}&artist=${encodeURIComponent(alb.artist)}&cover=${encodeURIComponent(alb.cover)}`)}
+              onContextMenu={(e) => openAlbumContextMenu(e, alb)}
             >
               <div 
                 className="card-cover-wrapper"
@@ -933,6 +948,7 @@ export function Library() {
                       setQueue(offlineRecords.map(r => r.track), index, 'Offline Downloads');
                       setIsPlaying(true);
                     }}
+                    onContextMenu={(e) => openTrackContextMenu(e, trk)}
                   >
                     {/* Index or Play indicator */}
                     <div style={{ width: '28px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600 }}>
@@ -1095,98 +1111,7 @@ export function Library() {
         </div>
       )}
 
-      {/* Playlist Details / Tracklist Modal */}
-      {selectedPlaylist && (
-        <div className="playlist-detail-modal-backdrop" onClick={() => setSelectedPlaylist(null)}>
-          <div className="playlist-detail-modal-dialog" onClick={e => e.stopPropagation()}>
-            <div className="modal-header-row">
-              <div className="modal-title-group">
-                <h2 className="modal-title">{selectedPlaylist.name}</h2>
-                <span className="modal-subtitle">{selectedPlaylist.tracks.length} tracks</span>
-              </div>
-              
-              <div className="modal-actions-group">
-                <button 
-                  className="modal-play-all-btn"
-                  onClick={() => {
-                    handlePlayPlaylist(selectedPlaylist);
-                    setSelectedPlaylist(null);
-                  }}
-                >
-                  <Play size={16} fill="#000" color="#000" />
-                  <span>Play All</span>
-                </button>
 
-                {selectedPlaylist.tracks.length > 0 && (
-                  <button 
-                    className="modal-play-all-btn"
-                    style={{
-                      backgroundColor: 'rgba(255,255,255,0.08)',
-                      color: 'var(--text-primary)',
-                      border: '1px solid var(--border-color)'
-                    }}
-                    onClick={() => {
-                      downloadTrackBatch(selectedPlaylist.tracks, selectedPlaylist.name);
-                    }}
-                    title="Download entire playlist offline"
-                  >
-                    <Download size={16} />
-                    <span>Download</span>
-                  </button>
-                )}
-
-                <button 
-                  className="modal-delete-btn"
-                  onClick={() => {
-                    deletePlaylist(selectedPlaylist.id);
-                    setSelectedPlaylist(null);
-                  }}
-                  title="Delete playlist"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            </div>
-
-            {selectedPlaylist.tracks.length === 0 ? (
-              <div className="modal-empty-tracks">
-                <ListMusic size={40} style={{ opacity: 0.4, marginBottom: '12px' }} />
-                <p>This playlist is empty. Add songs using the 3-dot menu on any track.</p>
-              </div>
-            ) : (
-              <div className="modal-tracklist-scroll">
-                {selectedPlaylist.tracks.map((track, idx) => (
-                  <div 
-                    key={`${track.id}-${idx}`} 
-                    className="modal-track-row"
-                    onClick={() => {
-                      setQueue(selectedPlaylist.tracks, idx, `${selectedPlaylist.name} Playlist`);
-                      setIsPlaying(true);
-                      setSelectedPlaylist(null);
-                    }}
-                  >
-                    <span className="track-idx">{idx + 1}</span>
-                    <img src={track.cover} alt={track.title} className="track-thumb" />
-                    <div className="track-info-col">
-                      <span className="track-name">{track.title}</span>
-                      <span className="track-artist">{track.artist}</span>
-                    </div>
-                    <span className="track-dur">
-                      {formatDuration(track.duration)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="modal-footer">
-              <button className="modal-close-btn" onClick={() => setSelectedPlaylist(null)}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* New Playlist Creation Dialog */}
       {showCreateModal && (
@@ -1215,6 +1140,12 @@ export function Library() {
           </div>
         </div>
       )}
+
+      {/* Import Playlist Modal */}
+      <ImportPlaylistModal 
+        isOpen={showImportModal} 
+        onClose={() => setShowImportModal(false)} 
+      />
     </div>
   );
 }

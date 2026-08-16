@@ -20,6 +20,7 @@ export interface Track {
 export interface Playlist {
   id: string;
   name: string;
+  description?: string;
   cover?: string;
   author?: string;
   tracks: Track[];
@@ -77,6 +78,7 @@ export interface AlbumDetail {
   artist: string;
   artistId?: string | number;
   cover: string;
+  description?: string;
   releaseDate?: string;
   tracks: Track[];
   channelId?: string;

@@ -1,10 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { fetchAlbumDetails, fetchArtistProfileFromYTM, cleanGoogleImageUrl, resolveArtistAvatar } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { isSameTrack } from '../utils/trackUtils';
-import { Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, Check, Download, HardDrive, ListMusic } from 'lucide-react';
+import { 
+  Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, 
+  Check, Download, HardDrive, ListMusic, Trash2, Pencil, MoreVertical, 
+  Search, Share2, ListPlus, X 
+} from 'lucide-react';
+import { PlaylistCover } from '../components/common/PlaylistCover';
+import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
+import { useContextMenuStore } from '../store/useContextMenuStore';
 import type { AlbumDetail, Track, Album as ReleaseItem } from '../types';
+
+function safeDecode(str?: string): string {
+  if (!str) return '';
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    return str;
+  }
+}
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -34,7 +50,19 @@ export function Album() {
   const [artistAvatar, setArtistAvatar] = useState<string>('');
   const [moreReleases, setMoreReleases] = useState<ReleaseItem[]>([]);
   const [addedTrackId, setAddedTrackId] = useState<string | null>(null);
-  const [addedAllToast, setAddedAllToast] = useState(false);
+
+  // Edit Playlist Modal State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editCover, setEditCover] = useState('');
+
+  // 3-Dots Menu & In-Playlist Search State
+  const [showOptionsMenu, setShowOptionsMenu] = useState(false);
+  const [showFilter, setShowFilter] = useState(false);
+  const [filterQuery, setFilterQuery] = useState('');
+
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const { 
     currentTrack, 
@@ -46,38 +74,144 @@ export function Album() {
     favorites,
     toggleFavorite,
     addToQueue,
+    playNext,
     playlists,
+    updatePlaylist,
+    removeTrackFromPlaylist,
     toggleSavePlaylist,
+    deletePlaylist,
     savedAlbums,
     toggleSaveAlbum,
     downloadedTrackIds,
     downloadingTrackIds,
-    downloadTrackBatch
+    downloadTrackBatch,
+    showToast
   } = usePlayerStore();
+
+  const { openTrackContextMenu, openPlaylistContextMenu, openAlbumContextMenu } = useContextMenuStore();
 
   const albumName = searchParams.get('name') || '';
   const artistName = searchParams.get('artist') || '';
   const initialCover = searchParams.get('cover') || '';
 
+  const safeTracks = useMemo(() => {
+    return (album && Array.isArray(album.tracks)) ? album.tracks.filter(Boolean) : [];
+  }, [album]);
+
+  const trackCount = safeTracks.length;
+
+  const filteredTracks = useMemo(() => {
+    if (!album || !safeTracks.length) return [];
+    if (!filterQuery.trim()) return safeTracks;
+    const q = filterQuery.toLowerCase().trim();
+    return safeTracks.filter(t => 
+      (t.title && t.title.toLowerCase().includes(q)) ||
+      (t.artist && t.artist.toLowerCase().includes(q)) ||
+      (t.album && t.album.toLowerCase().includes(q))
+    );
+  }, [album, safeTracks, filterQuery]);
+
+  // Close options menu when clicking outside
   useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowOptionsMenu(false);
+      }
+    }
+    if (showOptionsMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showOptionsMenu]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    setAlbum(null);
+    setLoading(true);
+    setArtistAvatar('');
+    setMoreReleases([]);
+    setShowFilter(false);
+    setFilterQuery('');
+    setShowOptionsMenu(false);
+
     if (!albumId) {
       setLoading(false);
       return;
     }
 
-    const resolvedAlbumName = albumName || decodeURIComponent(albumId).replace('album-', '').replace('single-', '');
+    // 1. Auto-Playlist: Liked Music
+    if (albumId === 'liked' || albumId === 'liked-music' || albumId === 'favorites') {
+      const seen = new Set<string>();
+      const uniqueFavs = (favorites || []).filter(t => {
+        if (!t || !t.id || seen.has(t.id)) return false;
+        seen.add(t.id);
+        return true;
+      });
+
+      setAlbum({
+        id: 'liked',
+        name: 'Liked Music',
+        artist: 'Auto playlist',
+        cover: uniqueFavs[0]?.cover || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+        tracks: uniqueFavs,
+        releaseDate: 'Playlist'
+      });
+      setLoading(false);
+      return;
+    }
+
+    // 2. Custom User Playlists
+    const decodedId = safeDecode(albumId).toLowerCase();
+    const localPl = (playlists || []).find(p => p && (p.id === albumId || (p.name && p.name.toLowerCase() === decodedId)));
+    if (localPl) {
+      const seen = new Set<string>();
+      const uniqueTracks = (localPl.tracks || []).filter(t => {
+        if (!t || !t.id || seen.has(t.id)) return false;
+        seen.add(t.id);
+        return true;
+      });
+
+      setAlbum({
+        id: localPl.id,
+        name: localPl.name || 'Playlist',
+        description: localPl.description,
+        artist: localPl.author || 'Playlist',
+        cover: localPl.cover || '',
+        tracks: uniqueTracks,
+        releaseDate: 'Playlist'
+      });
+      setLoading(false);
+      return;
+    }
+
+    // 3. Online Releases & Community Playlists
+    const resolvedAlbumName = albumName || safeDecode(albumId).replace('album-', '').replace('single-', '');
     const resolvedArtistName = artistName || '';
 
-    setLoading(true);
     fetchAlbumDetails(albumId, resolvedAlbumName, resolvedArtistName, initialCover)
       .then(data => {
-        setAlbum(data);
+        if (!isCancelled && data) {
+          const seen = new Set<string>();
+          const uniqueTracks = (data.tracks || []).filter(t => {
+            if (!t || !t.id || seen.has(t.id)) return false;
+            seen.add(t.id);
+            return true;
+          });
+          setAlbum({
+            ...data,
+            tracks: uniqueTracks
+          });
+        }
       })
       .catch(err => {
-        console.warn('Error loading album details:', err);
+        if (!isCancelled) {
+          console.warn('Error loading album details:', err);
+        }
       })
       .finally(() => {
-        setLoading(false);
+        if (!isCancelled) {
+          setLoading(false);
+        }
       });
 
     const cleanAlbumId = (albumId || '').replace('album-', '').replace('album-derived-', '');
@@ -92,21 +226,21 @@ export function Album() {
     if (resolvedArtistName && !isPlaylistId) {
       // Fetch artist avatar for header
       resolveArtistAvatar(resolvedArtistName).then(avatar => {
-        if (avatar) setArtistAvatar(avatar);
+        if (!isCancelled && avatar) setArtistAvatar(avatar);
       });
 
       // Fetch more releases by the artist for the bottom shelf
       fetchArtistProfileFromYTM(resolvedArtistName).then(profile => {
-        if (profile) {
+        if (!isCancelled && profile) {
           const combined = [
             ...(profile.singlesAndEPs || []),
             ...(profile.albums || [])
-          ].filter(r => r.name.toLowerCase() !== resolvedAlbumName.toLowerCase());
+          ].filter(r => r && r.name && r.name.toLowerCase() !== resolvedAlbumName.toLowerCase());
           
           // Deduplicate by name
           const uniqueMap = new Map<string, ReleaseItem>();
           combined.forEach(r => {
-            if (!uniqueMap.has(r.name.toLowerCase())) {
+            if (r && r.name && !uniqueMap.has(r.name.toLowerCase())) {
               uniqueMap.set(r.name.toLowerCase(), r);
             }
           });
@@ -114,13 +248,17 @@ export function Album() {
         }
       });
     }
-  }, [albumId, albumName, artistName, initialCover]);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [albumId, albumName, artistName, initialCover, favorites, playlists]);
 
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', color: 'var(--accent-primary)', gap: '12px' }}>
         <Loader2 size={32} className="animate-spin" />
-        <span style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>Loading official release...</span>
+        <span style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>Loading release...</span>
       </div>
     );
   }
@@ -152,9 +290,9 @@ export function Album() {
   );
 
   const releaseTypeLower = (album.releaseDate || '').toLowerCase();
-  const isSingle = !isPlaylist && (releaseTypeLower.includes('single') || album.tracks.length === 1);
-  const isEP = !isPlaylist && (releaseTypeLower.includes('ep') || (album.tracks.length > 1 && album.tracks.length <= 6));
-  const isAlbum = !isPlaylist && (releaseTypeLower.includes('album') || album.tracks.length > 6);
+  const isSingle = !isPlaylist && (releaseTypeLower.includes('single') || trackCount === 1);
+  const isEP = !isPlaylist && (releaseTypeLower.includes('ep') || (trackCount > 1 && trackCount <= 6));
+  const isAlbum = !isPlaylist && (releaseTypeLower.includes('album') || trackCount > 6);
   
   const releaseLabel = isPlaylist ? 'Playlist' : (isSingle ? 'Single' : (isEP ? 'EP' : (isAlbum ? 'Album' : 'Official Release')));
   const playButtonText = isPlaylist ? 'Play Playlist' : (isSingle ? 'Play Single' : (isEP ? 'Play EP' : (isAlbum ? 'Play Album' : 'Play Release')));
@@ -165,7 +303,7 @@ export function Album() {
   const cleanAlbumName = (album.name || '').trim().toLowerCase();
   const isThisReleaseActive = Boolean(
     currentTrack &&
-    album.tracks.some(t => isSameTrack(t, currentTrack)) &&
+    safeTracks.some(t => isSameTrack(t, currentTrack)) &&
     (
       cleanPlayingFrom === cleanAlbumName ||
       cleanPlayingFrom === `${cleanAlbumName} (shuffle)` ||
@@ -174,24 +312,24 @@ export function Album() {
   );
 
   const isCurrentReleasePlaying = isPlaying && isThisReleaseActive;
-  const totalSeconds = album.tracks.reduce((acc, t) => acc + (t.duration || 180), 0);
+  const totalSeconds = safeTracks.reduce((acc, t) => acc + (t?.duration || 180), 0);
 
   const isSavedToLibrary = Boolean(
     isPlaylist
-      ? playlists.some(p => p.id === album.id || p.name.toLowerCase() === album.name.toLowerCase())
-      : (album && savedAlbums.some(
-          a => a.id === album.id || (a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase())
+      ? (playlists || []).some(p => p && (p.id === album.id || (p.name && album.name && p.name.toLowerCase() === album.name.toLowerCase())))
+      : (album && (savedAlbums || []).some(
+          a => a && (a.id === album.id || (a.name && album.name && a.artist && album.artist && a.name.toLowerCase() === album.name.toLowerCase() && a.artist.toLowerCase() === album.artist.toLowerCase()))
         ))
   );
-  const isAllAlbumDownloaded = Boolean(album && album.tracks.length > 0 && album.tracks.every(t => Boolean(downloadedTrackIds[t.id])));
-  const isAlbumDownloading = Boolean(album && album.tracks.some(t => downloadingTrackIds[t.id] !== undefined));
+  const isAllAlbumDownloaded = Boolean(album && trackCount > 0 && safeTracks.every(t => t && t.id && Boolean(downloadedTrackIds[t.id])));
+  const isAlbumDownloading = Boolean(album && safeTracks.some(t => t && t.id && downloadingTrackIds[t.id] !== undefined));
 
   const handlePlayTrack = (track: Track) => {
     if (isThisReleaseActive && isSameTrack(currentTrack, track)) {
       togglePlayPause();
     } else {
-      const idx = album.tracks.findIndex(t => isSameTrack(t, track));
-      setQueue(album.tracks, Math.max(0, idx), `${album.name}`);
+      const idx = safeTracks.findIndex(t => isSameTrack(t, track));
+      setQueue(safeTracks, Math.max(0, idx), `${album.name}`);
       setIsPlaying(true);
     }
   };
@@ -199,24 +337,25 @@ export function Album() {
   const handlePlayRelease = () => {
     if (isThisReleaseActive) {
       togglePlayPause();
-    } else if (album.tracks.length > 0) {
-      setQueue(album.tracks, 0, `${album.name}`);
+    } else if (safeTracks.length > 0) {
+      setQueue(safeTracks, 0, `${album.name}`);
       setIsPlaying(true);
     }
   };
 
+  const isCustomUserPlaylist = Boolean(album && (playlists || []).some(p => p && p.id === album.id) && album.id !== 'liked');
+
   const handleShuffleRelease = () => {
-    if (album.tracks.length > 0) {
-      const shuffled = [...album.tracks].sort(() => Math.random() - 0.5);
-      setQueue(shuffled, 0, `${album.name} (Shuffle)`);
-      setIsPlaying(true);
-    }
+    if (!album || safeTracks.length === 0) return;
+    const shuffled = [...safeTracks].sort(() => Math.random() - 0.5);
+    setQueue(shuffled, 0, `${album.name} (Shuffle)`);
+    setIsPlaying(true);
   };
 
   const handleAddAllToQueue = () => {
-    album.tracks.forEach(t => addToQueue(t));
-    setAddedAllToast(true);
-    setTimeout(() => setAddedAllToast(false), 2500);
+    if (!album || !safeTracks.length) return;
+    safeTracks.forEach(t => addToQueue(t));
+    showToast(`Added ${safeTracks.length} tracks to queue`);
   };
 
   const handleAddSingleToQueue = (e: React.MouseEvent, track: Track) => {
@@ -252,35 +391,68 @@ export function Album() {
           alignItems: 'flex-end',
           flexWrap: 'wrap'
         }}
+        onContextMenu={(e) => {
+          if (isPlaylist) {
+            openPlaylistContextMenu(e, {
+              id: album.id,
+              name: album.name,
+              description: album.description,
+              cover: album.cover,
+              author: album.artist,
+              tracks: safeTracks
+            });
+          } else {
+            openAlbumContextMenu(e, {
+              id: album.id,
+              name: album.name,
+              artist: album.artist,
+              cover: album.cover || initialCover,
+              releaseDate: album.releaseDate,
+              tracks: safeTracks,
+              artistId: album.artistId
+            });
+          }
+        }}
       >
         {/* Cover Artwork */}
-        <div 
-          className="album-hero-cover" 
-          style={{ 
-            width: '240px', 
-            height: '240px', 
-            borderRadius: '12px', 
-            overflow: 'hidden', 
-            backgroundColor: 'var(--bg-main)',
-            boxShadow: '0 16px 40px rgba(0,0,0,0.6)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            flexShrink: 0,
-            position: 'relative'
-          }}
-        >
-          <img 
-            src={displayCover} 
-            alt={album.name} 
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            onError={(e) => {
-              if (initialCover && (e.currentTarget as HTMLImageElement).src !== initialCover) {
-                (e.currentTarget as HTMLImageElement).src = initialCover;
-              } else {
-                (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
-              }
-            }}
+        {isPlaylist ? (
+          <PlaylistCover 
+            tracks={safeTracks}
+            cover={album.cover}
+            name={album.name}
+            size={240}
+            borderRadius="12px"
+            fallbackIconSize={48}
           />
-        </div>
+        ) : (
+          <div 
+            className="album-hero-cover" 
+            style={{ 
+              width: '240px', 
+              height: '240px', 
+              borderRadius: '12px', 
+              overflow: 'hidden', 
+              backgroundColor: 'var(--bg-main)',
+              boxShadow: '0 16px 40px rgba(0,0,0,0.6)',
+              border: '1px solid rgba(255,255,255,0.08)',
+              flexShrink: 0,
+              position: 'relative'
+            }}
+          >
+            <img 
+              src={displayCover} 
+              alt={album.name} 
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              onError={(e) => {
+                if (initialCover && (e.currentTarget as HTMLImageElement).src !== initialCover) {
+                  (e.currentTarget as HTMLImageElement).src = initialCover;
+                } else {
+                  (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
+                }
+              }}
+            />
+          </div>
+        )}
 
         {/* Hero Details */}
         <div className="album-hero-details" style={{ flex: 1, minWidth: '280px' }}>
@@ -304,17 +476,55 @@ export function Album() {
             <span>{releaseLabel}</span>
           </div>
 
-          {/* Title */}
-          <h1 style={{ 
-            fontSize: 'clamp(2rem, 4vw, 3.2rem)', 
-            fontWeight: 800, 
-            margin: '4px 0 12px', 
-            lineHeight: 1.15,
-            letterSpacing: '-0.02em',
-            color: 'var(--text-primary)'
-          }}>
-            {album.name}
-          </h1>
+          {/* Title & Pencil Edit Icon */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', margin: '4px 0 8px' }}>
+            <h1 style={{ 
+              fontSize: 'clamp(2rem, 4vw, 3.2rem)', 
+              fontWeight: 800, 
+              margin: 0,
+              lineHeight: 1.15,
+              letterSpacing: '-0.02em',
+              color: 'var(--text-primary)'
+            }}>
+              {album.name}
+            </h1>
+
+            {isCustomUserPlaylist && (
+              <button 
+                onClick={() => {
+                  setEditName(album.name);
+                  setEditDescription(album.description || '');
+                  setEditCover(album.cover || '');
+                  setShowEditModal(true);
+                }}
+                title="Edit playlist name & description"
+                style={{
+                  backgroundColor: 'rgba(255,255,255,0.08)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '50%',
+                  width: '36px',
+                  height: '36px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--text-primary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.08)'}
+              >
+                <Pencil size={17} />
+              </button>
+            )}
+          </div>
+
+          {/* Optional Playlist Description */}
+          {album.description && (
+            <p style={{ margin: '0 0 12px', fontSize: '0.92rem', color: 'var(--text-secondary)', maxWidth: '640px', lineHeight: 1.45 }}>
+              {album.description}
+            </p>
+          )}
 
           {/* Subtitle & Metadata Row */}
           <div style={{ 
@@ -353,7 +563,7 @@ export function Album() {
             </div>
 
             <span>• {isPlaylist ? 'Playlist' : (album.releaseDate || 'Official Release')}</span>
-            <span>• {album.tracks.length} {album.tracks.length === 1 ? 'track' : 'tracks'}</span>
+            <span>• {trackCount} {trackCount === 1 ? 'track' : 'tracks'}</span>
             <span>• {formatTotalTime(totalSeconds)}</span>
           </div>
 
@@ -372,7 +582,7 @@ export function Album() {
                 gap: '10px', 
                 color: '#000', 
                 fontWeight: 700, 
-                fontSize: '0.95rem',
+                fontSize: '0.95rem', 
                 border: 'none', 
                 cursor: 'pointer',
                 boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
@@ -395,7 +605,7 @@ export function Album() {
             </button>
 
             {/* Shuffle Button (for multi-track releases) */}
-            {album.tracks.length > 1 && (
+            {trackCount > 1 && (
               <button 
                 onClick={handleShuffleRelease}
                 title="Shuffle release"
@@ -428,9 +638,9 @@ export function Album() {
                   toggleSavePlaylist({
                     id: album.id,
                     name: album.name,
-                    cover: album.cover || initialCover,
-                    tracks: album.tracks,
-                    author: album.artist
+                    author: album.artist,
+                    cover: album.cover,
+                    tracks: safeTracks
                   });
                 } else {
                   toggleSaveAlbum({
@@ -439,82 +649,220 @@ export function Album() {
                     artist: album.artist,
                     cover: album.cover || initialCover,
                     releaseDate: album.releaseDate,
-                    trackCount: album.tracks.length,
+                    trackCount: trackCount,
                     artistId: album.artistId
                   });
                 }
               }}
-              title={isSavedToLibrary ? (isPlaylist ? "Remove playlist from Library" : "Remove album from Library") : (isPlaylist ? "Save playlist to Library" : "Save album to Library")}
-              style={{ 
-                width: '44px',
-                height: '44px',
-                borderRadius: '50%',
-                backgroundColor: isSavedToLibrary ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.06)',
+              title={isSavedToLibrary ? "Remove from library" : "Save to library"}
+              style={{
+                backgroundColor: isSavedToLibrary ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255,255,255,0.06)',
                 border: '1px solid var(--border-color)',
+                borderRadius: '50%',
+                width: '46px',
+                height: '46px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                color: isSavedToLibrary ? 'var(--accent-primary)' : 'var(--text-primary)',
                 cursor: 'pointer',
-                color: isSavedToLibrary ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                transition: 'transform 0.15s, color 0.15s, background-color 0.15s'
+                transition: 'all 0.2s'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.08)'}
-              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isSavedToLibrary ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255,255,255,0.06)'}
             >
               <Heart size={18} fill={isSavedToLibrary ? "currentColor" : "none"} />
             </button>
 
-            {/* Download Entire Album Button */}
+            {/* Download Album / Playlist Button */}
             <button 
-              onClick={() => downloadTrackBatch(album.tracks, album.name)}
-              title={isAllAlbumDownloaded ? "Album downloaded for offline playback" : "Download album offline"}
-              style={{ 
-                width: '44px',
-                height: '44px',
-                borderRadius: '50%',
-                backgroundColor: isAllAlbumDownloaded ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.06)',
+              onClick={() => {
+                if (isAllAlbumDownloaded) {
+                  showToast('Entire release is already downloaded for offline listening!');
+                  return;
+                }
+                const unDownloaded = safeTracks.filter(t => t && t.id && !downloadedTrackIds[t.id]);
+                if (unDownloaded.length > 0) {
+                  downloadTrackBatch(unDownloaded, album.name);
+                }
+              }}
+              disabled={isAlbumDownloading}
+              title={isAllAlbumDownloaded ? "All tracks downloaded" : "Download release for offline playback"}
+              style={{
+                backgroundColor: isAllAlbumDownloaded ? 'rgba(30, 144, 255, 0.18)' : 'rgba(255,255,255,0.06)',
                 border: '1px solid var(--border-color)',
+                borderRadius: '50%',
+                width: '46px',
+                height: '46px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                cursor: 'pointer',
-                color: isAllAlbumDownloaded ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                transition: 'transform 0.15s, color 0.15s, background-color 0.15s'
+                color: isAllAlbumDownloaded ? '#60a5fa' : 'var(--text-primary)',
+                cursor: isAlbumDownloading ? 'not-allowed' : 'pointer',
+                transition: 'all 0.2s',
+                opacity: isAlbumDownloading ? 0.7 : 1
               }}
-              onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.08)'}
-              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              onMouseEnter={(e) => {
+                if (!isAlbumDownloading) e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)';
+              }}
+              onMouseLeave={(e) => {
+                if (!isAlbumDownloading) e.currentTarget.style.backgroundColor = isAllAlbumDownloaded ? 'rgba(30, 144, 255, 0.18)' : 'rgba(255,255,255,0.06)';
+              }}
             >
               {isAlbumDownloading ? (
                 <Loader2 size={18} className="animate-spin" color="var(--accent-primary)" />
               ) : isAllAlbumDownloaded ? (
-                <HardDrive size={18} color="var(--accent-primary)" />
+                <HardDrive size={18} color="#60a5fa" />
               ) : (
                 <Download size={18} />
               )}
             </button>
 
-            {/* Add All to Queue Button */}
-            <button 
-              onClick={handleAddAllToQueue}
-              title="Add release to queue"
-              style={{ 
-                width: '44px',
-                height: '44px',
-                borderRadius: '50%',
-                backgroundColor: 'rgba(255,255,255,0.06)',
-                border: '1px solid var(--border-color)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                color: addedAllToast ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                transition: 'transform 0.15s, color 0.15s'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.08)'}
-              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-            >
-              {addedAllToast ? <Check size={18} /> : <Plus size={18} />}
-            </button>
+            {/* YouTube Music 3-Dots Dropdown Options Menu */}
+            <div style={{ position: 'relative' }} ref={menuRef}>
+              <button 
+                onClick={() => setShowOptionsMenu(prev => !prev)}
+                title="More options"
+                style={{
+                  backgroundColor: showOptionsMenu ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.06)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '50%',
+                  width: '46px',
+                  height: '46px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--text-primary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = showOptionsMenu ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.06)'}
+              >
+                <MoreVertical size={18} />
+              </button>
+
+              {/* Options Dropdown Menu */}
+              {showOptionsMenu && (
+                <div 
+                  style={{
+                    position: 'absolute',
+                    top: '52px',
+                    left: 0,
+                    backgroundColor: 'var(--bg-card, #1e1e24)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '12px',
+                    padding: '8px 0',
+                    minWidth: '220px',
+                    boxShadow: '0 12px 36px rgba(0,0,0,0.6)',
+                    zIndex: 1000,
+                    backdropFilter: 'blur(16px)'
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button 
+                    className="track-menu-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      handleShuffleRelease();
+                    }}
+                  >
+                    <Shuffle size={16} />
+                    <span>Shuffle play</span>
+                  </button>
+
+                  <button 
+                    className="track-menu-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowFilter(true);
+                    }}
+                  >
+                    <Search size={16} />
+                    <span>Find in playlist</span>
+                  </button>
+
+                  <button 
+                    className="track-menu-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      if (safeTracks.length > 0) {
+                        safeTracks.slice().reverse().forEach(t => playNext(t));
+                        showToast(`Playing "${album.name}" next`);
+                      }
+                    }}
+                  >
+                    <ListPlus size={16} />
+                    <span>Play next</span>
+                  </button>
+
+                  <button 
+                    className="track-menu-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      handleAddAllToQueue();
+                    }}
+                  >
+                    <Plus size={16} />
+                    <span>Add to queue</span>
+                  </button>
+
+                  <button 
+                    className="track-menu-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      downloadTrackBatch(safeTracks, album.name);
+                    }}
+                  >
+                    <Download size={16} />
+                    <span>Download playlist</span>
+                  </button>
+
+                  <button 
+                    className="track-menu-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      navigator.clipboard.writeText(window.location.href);
+                      showToast('Playlist link copied to clipboard');
+                    }}
+                  >
+                    <Share2 size={16} />
+                    <span>Share</span>
+                  </button>
+
+                  {isCustomUserPlaylist && (
+                    <>
+                      <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
+                      <button 
+                        className="track-menu-item"
+                        onClick={() => {
+                          setShowOptionsMenu(false);
+                          setEditName(album.name);
+                          setEditDescription(album.description || '');
+                          setEditCover(album.cover || '');
+                          setShowEditModal(true);
+                        }}
+                      >
+                        <Pencil size={16} />
+                        <span>Edit playlist</span>
+                      </button>
+                      <button 
+                        className="track-menu-item"
+                        style={{ color: '#e74c3c' }}
+                        onClick={() => {
+                          setShowOptionsMenu(false);
+                          deletePlaylist(album.id);
+                          navigate('/library?tab=playlists');
+                        }}
+                      >
+                        <Trash2 size={16} color="#e74c3c" />
+                        <span>Delete playlist</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -523,21 +871,89 @@ export function Album() {
       {/* TRACKLIST TABLE                                                          */}
       {/* ========================================================================= */}
       <div style={{ marginBottom: '56px' }}>
-        <h3 className="section-header" style={{ fontSize: '1.2rem', marginBottom: '16px' }}>
-          Tracklist
-        </h3>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+          <h3 className="section-header" style={{ fontSize: '1.2rem', margin: 0 }}>
+            Tracklist {filteredTracks.length !== trackCount && `(${filteredTracks.length} of ${trackCount})`}
+          </h3>
+
+          {/* Quick toggle search if not opened via menu */}
+          <button 
+            onClick={() => setShowFilter(prev => !prev)}
+            title="Filter tracks in playlist"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              backgroundColor: showFilter ? 'rgba(255,255,255,0.12)' : 'transparent',
+              border: '1px solid var(--border-color)',
+              color: 'var(--text-secondary)',
+              padding: '6px 14px',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              cursor: 'pointer',
+              fontWeight: 500,
+              transition: 'all 0.15s'
+            }}
+          >
+            <Search size={14} />
+            <span>{showFilter ? 'Hide Filter' : 'Find in playlist'}</span>
+          </button>
+        </div>
+
+        {/* Find in playlist Search Bar */}
+        {showFilter && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '24px',
+            padding: '8px 16px',
+            marginBottom: '16px',
+            maxWidth: '380px'
+          }}>
+            <Search size={15} color="var(--text-secondary)" />
+            <input 
+              type="text"
+              placeholder="Search in this playlist..."
+              value={filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+              autoFocus
+              style={{
+                flex: 1,
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-primary)',
+                fontSize: '0.88rem',
+                outline: 'none'
+              }}
+            />
+            {filterQuery && (
+              <button 
+                onClick={() => setFilterQuery('')}
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0, display: 'flex' }}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="top-tracks-list">
-          {album.tracks.map((track, idx) => {
+          {filteredTracks.map((track, idx) => {
             const isCurrent = isThisReleaseActive && isSameTrack(currentTrack, track);
             const isFav = favorites.some(f => f.id === track.id);
             const isAdded = addedTrackId === track.id;
 
             return (
               <div 
-                key={track.id} 
+                key={`${album.id || albumId}-${track.id}-${idx}`} 
                 className={`track-row ${isCurrent ? 'active-playing' : ''}`}
                 onClick={() => handlePlayTrack(track)}
+                onContextMenu={(e) => openTrackContextMenu(e, track, {
+                  onRemoveFromPlaylist: isCustomUserPlaylist ? () => removeTrackFromPlaylist(album.id, track.id) : undefined
+                })}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -633,9 +1049,9 @@ export function Album() {
                   {track.album || album.name}
                 </div>
 
-                {/* Action Buttons (Heart & Plus) */}
+                {/* Action Buttons (Heart & Plus & TrackOptionsMenu) */}
                 <div 
-                  style={{ display: 'flex', alignItems: 'center', gap: '12px', marginRight: '16px' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', marginRight: '16px' }}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <button 
@@ -669,6 +1085,14 @@ export function Album() {
                   >
                     {isAdded ? <Check size={16} /> : <Plus size={16} />}
                   </button>
+
+                  <TrackOptionsMenu 
+                    track={track}
+                    onRemoveFromPlaylist={isCustomUserPlaylist ? () => {
+                      removeTrackFromPlaylist(album.id, track.id);
+                      setAlbum(prev => prev ? { ...prev, tracks: prev.tracks.filter(t => t.id !== track.id) } : null);
+                    } : undefined}
+                  />
                 </div>
 
                 {/* Duration */}
@@ -742,6 +1166,87 @@ export function Album() {
                 <div className="album-artist">{rel.releaseDate ? `${rel.releaseDate} • ` : ''}Release</div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* EDIT PLAYLIST DETAILS MODAL                                              */}
+      {/* ========================================================================= */}
+      {showEditModal && (
+        <div className="playlist-detail-modal-backdrop" onClick={() => setShowEditModal(false)}>
+          <div className="playlist-detail-modal-dialog" style={{ maxWidth: '440px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h2 className="modal-title" style={{ margin: 0 }}>Edit playlist details</h2>
+              <button 
+                onClick={() => setShowEditModal(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              if (!editName.trim()) return;
+              updatePlaylist(album.id, { 
+                name: editName.trim(), 
+                description: editDescription.trim(), 
+                cover: editCover.trim() 
+              });
+              setAlbum(prev => prev ? { 
+                ...prev, 
+                name: editName.trim(), 
+                description: editDescription.trim(), 
+                cover: editCover.trim() 
+              } : null);
+              setShowEditModal(false);
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>Title</label>
+                  <input 
+                    type="text" 
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
+                    className="new-playlist-input"
+                    placeholder="Playlist title"
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>Description</label>
+                  <textarea 
+                    value={editDescription}
+                    onChange={e => setEditDescription(e.target.value)}
+                    className="new-playlist-input"
+                    placeholder="Add an optional description"
+                    rows={3}
+                    style={{ resize: 'vertical', minHeight: '70px' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>Custom Cover URL (optional)</label>
+                  <input 
+                    type="url" 
+                    value={editCover}
+                    onChange={e => setEditCover(e.target.value)}
+                    className="new-playlist-input"
+                    placeholder="https://..."
+                  />
+                </div>
+              </div>
+              <div className="modal-footer" style={{ marginTop: '24px' }}>
+                <button type="button" className="modal-close-btn" onClick={() => setShowEditModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="modal-play-all-btn">
+                  <Check size={16} color="#000" />
+                  <span>Save</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

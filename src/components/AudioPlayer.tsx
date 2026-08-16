@@ -13,6 +13,7 @@ import { getOfflineTrackBlobUrl } from '../services/downloadService';
 export const AudioPlayer = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const activeLoadedTrackIdRef = useRef<string | null>(null);
+  const activeLoadedNonceRef = useRef<number>(-1);
   const isSwitchingRef = useRef<boolean>(false);
   const trackFailedCountRef = useRef<Map<string, number>>(new Map());
 
@@ -106,9 +107,27 @@ export const AudioPlayer = () => {
     async function loadTrack() {
       if (!currentTrack || !audioRef.current) return;
 
-      // Prevent reloading identical track if already playing
-      if (currentTrack.id === activeLoadedTrackIdRef.current && audioRef.current.src && !audioRef.current.paused) {
+      const isSameTrackId = currentTrack.id === activeLoadedTrackIdRef.current;
+      const isSameNonce = playNonce === activeLoadedNonceRef.current;
+
+      // Prevent reloading identical track if already playing and same queue session
+      if (isSameTrackId && isSameNonce && audioRef.current.src && !audioRef.current.paused) {
         return;
+      }
+
+      // If exact same track was already loaded with a valid audio src, but user requested play / new mix session:
+      if (isSameTrackId && audioRef.current.src && audioRef.current.src !== window.location.href) {
+        try {
+          audioRef.current.currentTime = 0;
+          audioEngine.resume();
+          await audioRef.current.play();
+          setIsPlaying(true);
+          activeLoadedNonceRef.current = playNonce;
+          isSwitchingRef.current = false;
+          return;
+        } catch (err) {
+          console.warn('[AudioPlayer] Replay existing src failed, reloading fresh stream:', err);
+        }
       }
 
       // Silence and prepare new buffer
@@ -117,6 +136,7 @@ export const AudioPlayer = () => {
       audioRef.current.load();
 
       activeLoadedTrackIdRef.current = currentTrack.id;
+      activeLoadedNonceRef.current = playNonce;
       isSwitchingRef.current = true;
       recordPlay(currentTrack);
 
