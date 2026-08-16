@@ -6,7 +6,7 @@ export interface ParsedLyricLine {
 export interface LyricsResult {
   synced: ParsedLyricLine[] | null;
   plain: string | null;
-  source: 'LRCLIB' | 'Genius' | 'Musixmatch' | 'Community' | 'None';
+  source: 'LRCLIB' | 'Genius' | 'Musixmatch' | 'AZLyrics' | 'Community' | 'None';
   isSynced: boolean;
   geniusUrl?: string;
   geniusTitle?: string;
@@ -25,6 +25,7 @@ export function cleanPlainLyricsText(text: string): string {
       const trimmed = line.trim();
       if (!trimmed) return true;
       if (/^\[(ar|ti|al|by|length|offset|re|ve|tool|encoding):/i.test(trimmed)) return false;
+      if (/^\d+\s*Contributors$/i.test(trimmed)) return false;
       return true;
     })
     .join('\n')
@@ -108,23 +109,44 @@ async function fetchYouTubeMusicMusixmatchLyrics(
       if (!browseRes.ok) return null;
       const browseData = await browseRes.json();
 
-      // 3. Extract Timed Lyrics (Musixmatch)
+      // 3. Extract Timed Lyrics (Musixmatch) with cue verification
       const timedLyrics = browseData?.contents?.elementRenderer?.newElement?.type?.componentType?.model?.timedLyricsModel?.lyricsData?.timedLyricsData;
       if (Array.isArray(timedLyrics) && timedLyrics.length > 0) {
-        const synced: ParsedLyricLine[] = timedLyrics
-          .map((item: any) => ({
-            time: (parseInt(item?.cueRange?.startTimeMilliseconds, 10) || 0) / 1000,
-            text: item?.lyricLine || '♪'
-          }))
-          .filter((l: ParsedLyricLine) => l.text.trim());
+        const hasValidCues = timedLyrics.some(item => 
+          item?.cueRange?.startTimeMilliseconds !== undefined && 
+          parseInt(item.cueRange.startTimeMilliseconds, 10) > 0
+        );
 
-        const plain = synced.map(l => l.text).join('\n');
-        return {
-          synced,
-          plain: cleanPlainLyricsText(plain),
-          source: 'Musixmatch',
-          isSynced: true
-        };
+        if (hasValidCues) {
+          const synced: ParsedLyricLine[] = timedLyrics
+            .map((item: any) => ({
+              time: (parseInt(item?.cueRange?.startTimeMilliseconds, 10) || 0) / 1000,
+              text: item?.lyricLine || '♪'
+            }))
+            .filter((l: ParsedLyricLine) => l.text.trim());
+
+          const plain = synced.map(l => l.text).join('\n');
+          return {
+            synced,
+            plain: cleanPlainLyricsText(plain),
+            source: 'Musixmatch',
+            isSynced: true
+          };
+        } else {
+          // If no timing cues, use as static plain lyrics
+          const plain = timedLyrics
+            .map((item: any) => item?.lyricLine || '')
+            .filter((t: string) => t.trim())
+            .join('\n');
+          if (plain) {
+            return {
+              synced: null,
+              plain: cleanPlainLyricsText(plain),
+              source: 'Musixmatch',
+              isSynced: false
+            };
+          }
+        }
       }
 
       // 4. Extract Plain Lyrics fallback from Description Shelf
@@ -148,12 +170,13 @@ async function fetchYouTubeMusicMusixmatchLyrics(
   };
 
   // 1. Try directly with current videoId if provided
+  let directResult: LyricsResult | null = null;
   if (videoId && !videoId.startsWith('local-')) {
-    const directResult = await tryGetFromId(videoId);
+    directResult = await tryGetFromId(videoId);
     if (directResult && directResult.synced) return directResult;
   }
 
-  // 2. If direct videoId didn't have synced lyrics or wasn't provided, resolve official release on YouTube Music
+  // 2. If direct videoId didn't have valid synced lyrics or wasn't provided, resolve official release candidates on YouTube Music
   if (title && artist) {
     try {
       const { cleanTitle, cleanArtist } = cleanLyricsSearchQuery(title, artist);
@@ -177,7 +200,7 @@ async function fetchYouTubeMusicMusixmatchLyrics(
           const data = await res.json();
           const str = JSON.stringify(data);
           const videoIdMatches = Array.from(str.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)).map(m => m[1]);
-          const uniqueIds = Array.from(new Set(videoIdMatches)).filter(id => id !== videoId).slice(0, 3);
+          const uniqueIds = Array.from(new Set(videoIdMatches)).filter(id => id !== videoId).slice(0, 5);
 
           for (const candId of uniqueIds) {
             const resolvedResult = await tryGetFromId(candId);
@@ -190,7 +213,7 @@ async function fetchYouTubeMusicMusixmatchLyrics(
     } catch (e) {}
   }
 
-  return null;
+  return directResult;
 }
 
 /**
@@ -246,7 +269,10 @@ export function parseLrcLyrics(lrcText: string): ParsedLyricLine[] {
     }
   }
 
-  return lines.sort((a, b) => a.time - b.time);
+  // Ensure timestamps are valid and increasing
+  const sorted = lines.sort((a, b) => a.time - b.time);
+  const hasDistinctTimings = sorted.length > 1 && sorted[sorted.length - 1].time > sorted[0].time;
+  return hasDistinctTimings ? sorted : [];
 }
 
 /**
@@ -371,6 +397,52 @@ async function fetchLrcLib(
 }
 
 /**
+ * Fetch Full Plain Lyrics from AZLyrics
+ */
+async function fetchAZLyrics(
+  title: string,
+  artist: string
+): Promise<{ plain: string; source: 'AZLyrics' } | null> {
+  try {
+    const cleanA = (artist || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanT = (title || '')
+      .replace(/\s*[\(\[](feat\.?|ft\.?|with|prod\.?|official|music video|audio|visualizer|remix|slowed|reverb|lyrics|lyric video|sped up|nightcore|unreleased|full version|no ai|hq|hd|clean|explicit|deluxe|bonus|extended|live).*?[\)\]]/gi, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+
+    if (!cleanA || !cleanT) return null;
+
+    const url = `https://www.azlyrics.com/lyrics/${cleanA}/${cleanT}.html`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const ringtoneIdx = html.indexOf('ringtone');
+    if (ringtoneIdx !== -1) {
+      const after = html.slice(ringtoneIdx);
+      const divStart = after.indexOf('<div>');
+      const divEnd = after.indexOf('</div>', divStart);
+      if (divStart !== -1 && divEnd !== -1) {
+        const raw = after.slice(divStart + 5, divEnd)
+          .replace(/<br\s*[\/]?>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+          .trim();
+        if (raw && raw.length > 50) {
+          return {
+            plain: cleanPlainLyricsText(raw),
+            source: 'AZLyrics'
+          };
+        }
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+/**
  * Fetch Genius Song Metadata & Full Plain Lyrics
  */
 async function fetchGeniusMetadata(
@@ -379,7 +451,7 @@ async function fetchGeniusMetadata(
 ): Promise<{ url: string; title: string; artist: string; thumbnail?: string; plain?: string } | null> {
   const query = `${cleanArtist} ${cleanTitle}`.trim();
 
-  // 1. If running inside Electron, use native IPC extractor
+  // 1. If running inside Electron, use native IPC extractor if available
   if ((window as any).electronAPI?.getGeniusLyrics) {
     try {
       const data = await (window as any).electronAPI.getGeniusLyrics(query);
@@ -392,7 +464,7 @@ async function fetchGeniusMetadata(
     } catch (e) {}
   }
 
-  // 2. Direct web fetch fallback
+  // 2. Direct web fetch search & full page scraper
   try {
     const res = await fetch(`https://genius.com/api/search/multi?q=${encodeURIComponent(query)}`);
     if (res.ok) {
@@ -401,11 +473,42 @@ async function fetchGeniusMetadata(
       const songHit = sections.flatMap((s: any) => s.hits || []).find((h: any) => h.type === 'song' || h.result?._type === 'song');
       if (songHit?.result?.url) {
         const hit = songHit.result;
+        let plain = '';
+
+        try {
+          const pageRes = await fetch(hit.url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+          });
+          if (pageRes.ok) {
+            const html = await pageRes.text();
+            const containers = Array.from(html.matchAll(/<div[^>]*data-lyrics-container="true"[^>]*>([\s\S]*?)<\/div>/g));
+            for (const c of containers) {
+              const chunk = c[1]
+                .replace(/<br\s*[\/]?>/gi, '\n')
+                .replace(/<[^>]+>/g, '')
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/&#x27;/g, "'")
+                .replace(/&#39;/g, "'")
+                .replace(/&nbsp;/g, ' ')
+                .trim();
+              if (chunk) {
+                plain += (plain ? '\n\n' : '') + chunk;
+              }
+            }
+          }
+        } catch {}
+
         return {
           url: hit.url,
           title: hit.title,
           artist: hit.primary_artist?.name || cleanArtist,
-          thumbnail: hit.song_art_image_thumbnail_url || hit.header_image_thumbnail_url
+          thumbnail: hit.song_art_image_thumbnail_url || hit.header_image_thumbnail_url,
+          plain: plain ? cleanPlainLyricsText(plain) : undefined
         };
       }
     }
@@ -417,7 +520,8 @@ async function fetchGeniusMetadata(
  * Multi-Tier Lyric Fetcher:
  * 1. YouTube Music / Musixmatch (Official studio synchronized karaoke lyrics with dynamic resolution)
  * 2. LRCLIB (Millisecond-accurate timed karaoke lyrics with duration matching)
- * 3. Genius (Metadata, annotations, and plain text fallback)
+ * 3. AZLyrics (Full comprehensive static studio lyrics)
+ * 4. Genius (Metadata, annotations, and plain text fallback)
  */
 export async function fetchLyrics(
   title: string,
@@ -435,15 +539,18 @@ export async function fetchLyrics(
   // Parallel fetch across all providers:
   // 1. YouTube Music Official Synced Musixmatch
   // 2. LRCLIB Synced / Plain
-  // 3. Genius Metadata
-  const [ytmMusixmatchData, lrclibData, geniusData] = await Promise.allSettled([
+  // 3. AZLyrics Full Lyrics
+  // 4. Genius Metadata & Lyrics
+  const [ytmMusixmatchData, lrclibData, azData, geniusData] = await Promise.allSettled([
     fetchYouTubeMusicMusixmatchLyrics(videoId, title, artist),
     fetchLrcLib(title, artist, cleanTitle, cleanArtist, album, duration),
+    fetchAZLyrics(cleanTitle, cleanArtist),
     fetchGeniusMetadata(cleanTitle, cleanArtist)
   ]);
 
   const ytmResult = ytmMusixmatchData.status === 'fulfilled' ? ytmMusixmatchData.value : null;
   const lrc = lrclibData.status === 'fulfilled' ? lrclibData.value : null;
+  const az = azData.status === 'fulfilled' ? azData.value : null;
   const genius = geniusData.status === 'fulfilled' ? geniusData.value : null;
 
   // Priority 1: YouTube Music / Musixmatch Official Synced Lyrics
@@ -477,12 +584,12 @@ export async function fetchLyrics(
     }
   }
 
-  // Priority 3: YouTube Music / Musixmatch Plain Lyrics
-  if (ytmResult && ytmResult.plain) {
+  // Priority 3: AZLyrics Full Complete Plain Lyrics
+  if (az && az.plain && az.plain.length > (genius?.plain?.length || 0)) {
     return {
       synced: null,
-      plain: cleanPlainLyricsText(ytmResult.plain),
-      source: 'Musixmatch',
+      plain: cleanPlainLyricsText(az.plain),
+      source: 'AZLyrics',
       isSynced: false,
       geniusUrl: genius?.url,
       geniusTitle: genius?.title,
@@ -491,12 +598,12 @@ export async function fetchLyrics(
     };
   }
 
-  // Priority 4: LRCLIB Plain Lyrics
-  if (lrc && lrc.plainLyrics) {
+  // Priority 4: YouTube Music / Musixmatch Plain Lyrics
+  if (ytmResult && ytmResult.plain) {
     return {
       synced: null,
-      plain: cleanPlainLyricsText(lrc.plainLyrics),
-      source: 'LRCLIB',
+      plain: cleanPlainLyricsText(ytmResult.plain),
+      source: 'Musixmatch',
       isSynced: false,
       geniusUrl: genius?.url,
       geniusTitle: genius?.title,
@@ -516,6 +623,20 @@ export async function fetchLyrics(
       geniusTitle: genius.title,
       geniusArtist: genius.artist,
       geniusThumbnail: genius.thumbnail
+    };
+  }
+
+  // Priority 6: LRCLIB Plain Lyrics
+  if (lrc && lrc.plainLyrics) {
+    return {
+      synced: null,
+      plain: cleanPlainLyricsText(lrc.plainLyrics),
+      source: 'LRCLIB',
+      isSynced: false,
+      geniusUrl: genius?.url,
+      geniusTitle: genius?.title,
+      geniusArtist: genius?.artist,
+      geniusThumbnail: genius?.thumbnail
     };
   }
 
