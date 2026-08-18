@@ -67,7 +67,6 @@ export function Album() {
   const { 
     currentTrack, 
     isPlaying, 
-    playingFrom,
     setQueue, 
     setIsPlaying, 
     togglePlayPause,
@@ -93,6 +92,7 @@ export function Album() {
   const albumName = searchParams.get('name') || '';
   const artistName = searchParams.get('artist') || '';
   const initialCover = searchParams.get('cover') || '';
+  const trackTitleParam = searchParams.get('trackTitle') || '';
 
   const safeTracks = useMemo(() => {
     return (album && Array.isArray(album.tracks)) ? album.tracks.filter(Boolean) : [];
@@ -185,10 +185,14 @@ export function Album() {
     }
 
     // 3. Online Releases & Community Playlists
-    const resolvedAlbumName = albumName || safeDecode(albumId).replace('album-', '').replace('single-', '');
+    let rawAlbumName = albumName || safeDecode(albumId).replace('album-', '').replace('single-', '');
+    if (rawAlbumName.startsWith('@') || rawAlbumName.toLowerCase().includes('+')) {
+      rawAlbumName = trackTitleParam || '';
+    }
+    const resolvedAlbumName = rawAlbumName;
     const resolvedArtistName = artistName || '';
 
-    fetchAlbumDetails(albumId, resolvedAlbumName, resolvedArtistName, initialCover)
+    fetchAlbumDetails(albumId, resolvedAlbumName, resolvedArtistName, initialCover, trackTitleParam)
       .then(data => {
         if (!isCancelled && data) {
           const seen = new Set<string>();
@@ -298,20 +302,12 @@ export function Album() {
   const playButtonText = isPlaylist ? 'Play Playlist' : (isSingle ? 'Play Single' : (isEP ? 'Play EP' : (isAlbum ? 'Play Album' : 'Play Release')));
   const displayCover = cleanGoogleImageUrl(album.cover || initialCover, 500);
 
-  // Check if currently playing this specific release/playlist context
-  const cleanPlayingFrom = (playingFrom || '').trim().toLowerCase();
-  const cleanAlbumName = (album.name || '').trim().toLowerCase();
-  const isThisReleaseActive = Boolean(
-    currentTrack &&
-    safeTracks.some(t => isSameTrack(t, currentTrack)) &&
-    (
-      cleanPlayingFrom === cleanAlbumName ||
-      cleanPlayingFrom === `${cleanAlbumName} (shuffle)` ||
-      cleanPlayingFrom === `${cleanAlbumName} mix`
-    )
+  // Check if currently playing any track from this release/playlist context
+  const isAnyTrackActiveInRelease = Boolean(
+    currentTrack && safeTracks.some(t => isSameTrack(t, currentTrack))
   );
 
-  const isCurrentReleasePlaying = isPlaying && isThisReleaseActive;
+  const isCurrentReleasePlaying = Boolean(isPlaying && isAnyTrackActiveInRelease);
   const totalSeconds = safeTracks.reduce((acc, t) => acc + (t?.duration || 180), 0);
 
   const isSavedToLibrary = Boolean(
@@ -325,7 +321,7 @@ export function Album() {
   const isAlbumDownloading = Boolean(album && safeTracks.some(t => t && t.id && downloadingTrackIds[t.id] !== undefined));
 
   const handlePlayTrack = (track: Track) => {
-    if (isThisReleaseActive && isSameTrack(currentTrack, track)) {
+    if (isSameTrack(currentTrack, track)) {
       togglePlayPause();
     } else {
       const idx = safeTracks.findIndex(t => isSameTrack(t, track));
@@ -335,7 +331,7 @@ export function Album() {
   };
 
   const handlePlayRelease = () => {
-    if (isThisReleaseActive) {
+    if (isAnyTrackActiveInRelease) {
       togglePlayPause();
     } else if (safeTracks.length > 0) {
       setQueue(safeTracks, 0, `${album.name}`);
@@ -942,7 +938,7 @@ export function Album() {
 
         <div className="top-tracks-list">
           {filteredTracks.map((track, idx) => {
-            const isCurrent = isThisReleaseActive && isSameTrack(currentTrack, track);
+            const isCurrent = isSameTrack(currentTrack, track);
             const isFav = favorites.some(f => f.id === track.id);
             const isAdded = addedTrackId === track.id;
 

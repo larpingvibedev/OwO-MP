@@ -373,7 +373,12 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                 >
                   {currentTrack?.artist || 'OwO Music Player'}
                 </div>
-                {currentTrack?.album && (
+                {currentTrack?.album && 
+                 currentTrack.album !== 'Single' && 
+                 currentTrack.album !== 'Official Release' && 
+                 currentTrack.album !== 'YouTube Music' && 
+                 !currentTrack.album.startsWith('@') && 
+                 !currentTrack.album.includes('+') && (
                   <div style={{ fontSize: '0.86rem', color: 'var(--accent-primary)', marginTop: '3px', opacity: 0.9 }}>
                     {currentTrack.album}
                   </div>
@@ -1632,12 +1637,27 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                 <button
                   onClick={() => {
                     const rawAlb = currentTrack.album?.trim();
-                    const isGenericAlb = !rawAlb || rawAlb.toLowerCase() === 'web stream' || rawAlb.toLowerCase() === 'single' || rawAlb.toLowerCase() === 'official release';
+                    const isGenericAlb = !rawAlb || 
+                      rawAlb.toLowerCase() === 'web stream' || 
+                      rawAlb.toLowerCase() === 'single' || 
+                      rawAlb.toLowerCase() === 'official release' || 
+                      rawAlb.toLowerCase() === 'official audio' || 
+                      rawAlb.toLowerCase() === 'top track' || 
+                      rawAlb.toLowerCase() === 'top songs' || 
+                      rawAlb.toLowerCase() === 'youtube music' ||
+                      rawAlb.startsWith('@') ||
+                      rawAlb.toLowerCase().includes('+');
                     const releaseName = isGenericAlb ? currentTrack.title : rawAlb;
-                    const releaseTargetId = (currentTrack as any).albumId || `album-${encodeURIComponent(releaseName)}`;
-                    const releaseArtist = currentTrack.albumArtist || currentTrack.artist;
+                    let releaseTargetId = (currentTrack as any).albumId;
+                    if (releaseTargetId && (releaseTargetId.startsWith('PL') || releaseTargetId.startsWith('VLPL') || releaseTargetId.startsWith('RD') || releaseTargetId.startsWith('VLRD') || releaseTargetId.startsWith('community-') || releaseTargetId.startsWith('mix-'))) {
+                      releaseTargetId = undefined;
+                    }
+                    if (!releaseTargetId) {
+                      releaseTargetId = `album-${encodeURIComponent(releaseName)}`;
+                    }
+                    const releaseArtist = currentTrack.artist || currentTrack.albumArtist || '';
                     
-                    navigate(`/album/${encodeURIComponent(releaseTargetId)}?name=${encodeURIComponent(releaseName)}&artist=${encodeURIComponent(releaseArtist)}&cover=${encodeURIComponent(currentTrack.cover || '')}`);
+                    navigate(`/album/${encodeURIComponent(releaseTargetId)}?name=${encodeURIComponent(releaseName)}&artist=${encodeURIComponent(releaseArtist)}&cover=${encodeURIComponent(currentTrack.cover || '')}&trackTitle=${encodeURIComponent(currentTrack.title || '')}`);
                     closePlayerDrawer();
                   }}
                   className="hero-play-btn"

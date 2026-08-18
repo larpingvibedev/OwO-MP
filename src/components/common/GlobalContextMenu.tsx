@@ -205,12 +205,20 @@ export const GlobalContextMenu: React.FC = () => {
       rawAlb.toLowerCase() === 'official audio' || 
       rawAlb.toLowerCase() === 'top track' || 
       rawAlb.toLowerCase() === 'top songs' || 
-      rawAlb.toLowerCase() === 'youtube music';
+      rawAlb.toLowerCase() === 'youtube music' ||
+      rawAlb.startsWith('@') ||
+      rawAlb.toLowerCase().includes('+');
     const albName = isGenericAlb ? track.title : rawAlb;
-    const albId = (track as any).albumId || (track as any).playlistId || `album-${encodeURIComponent(albName)}`;
-    const albArtist = track.albumArtist || track.artist;
+    let albId = (track as any).albumId;
+    if (albId && (albId.startsWith('PL') || albId.startsWith('VLPL') || albId.startsWith('RD') || albId.startsWith('VLRD') || albId.startsWith('community-') || albId.startsWith('mix-'))) {
+      albId = undefined;
+    }
+    if (!albId) {
+      albId = `album-${encodeURIComponent(albName)}`;
+    }
+    const albArtist = track.artist || track.albumArtist || '';
     const albCover = track.cover || '';
-    navigate(`/album/${encodeURIComponent(albId)}?name=${encodeURIComponent(albName)}&artist=${encodeURIComponent(albArtist)}&cover=${encodeURIComponent(albCover)}`);
+    navigate(`/album/${encodeURIComponent(albId)}?name=${encodeURIComponent(albName)}&artist=${encodeURIComponent(albArtist)}&cover=${encodeURIComponent(albCover)}&trackTitle=${encodeURIComponent(track.title || '')}`);
   };
 
   const handleShareTrack = () => {
