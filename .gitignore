@@ -26,3 +26,6 @@ other sources/
 release/
 *-player-script.js
 scratch/
+test-*.mjs
+test-*.cjs
+test-*.js

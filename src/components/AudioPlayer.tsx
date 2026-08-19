@@ -15,6 +15,7 @@ export const AudioPlayer = () => {
   const activeLoadedTrackIdRef = useRef<string | null>(null);
   const activeLoadedNonceRef = useRef<number>(-1);
   const isSwitchingRef = useRef<boolean>(false);
+  const isOnlineYtTrackRef = useRef<boolean>(false);
   const trackFailedCountRef = useRef<Map<string, number>>(new Map());
 
   const {
@@ -36,7 +37,7 @@ export const AudioPlayer = () => {
     showToast
   } = usePlayerStore();
 
-  // 1. Initialize Web Audio Engine
+  // 1. Initialize Web Audio Engine & Listeners
   useEffect(() => {
     syncOfflineTracks();
 
@@ -44,20 +45,58 @@ export const AudioPlayer = () => {
       audioEngine.init(audioRef.current);
     }
 
+    const electronAPI = (window as any).electronAPI;
+    let unsubscribeYtState: (() => void) | undefined;
+
+    if (electronAPI?.onYouTubeStateUpdate) {
+      unsubscribeYtState = electronAPI.onYouTubeStateUpdate((data: any) => {
+        if (!isOnlineYtTrackRef.current) return;
+        if (data.duration && data.duration > 0) {
+          setDuration(data.duration);
+        }
+        if (typeof data.currentTime === 'number') {
+          setCurrentTime(data.currentTime);
+        }
+        if (data.ended) {
+          if (usePlayerStore.getState().repeatMode === 'one') {
+            electronAPI.seekYouTubeTrack?.(0);
+            electronAPI.resumeYouTubeTrack?.();
+          } else {
+            nextTrack();
+          }
+        }
+      });
+    }
+
     const handleUserInteraction = () => {
       audioEngine.resume();
-      if (audioRef.current && usePlayerStore.getState().isPlaying && audioRef.current.paused) {
+      if (audioRef.current && usePlayerStore.getState().isPlaying && audioRef.current.paused && !isOnlineYtTrackRef.current) {
         audioRef.current.play().catch(() => {});
       }
     };
 
     window.addEventListener('click', handleUserInteraction, { once: true });
     window.addEventListener('keydown', handleUserInteraction, { once: true });
+
+    return () => {
+      if (unsubscribeYtState) unsubscribeYtState();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 2. Play / Pause Control
   useEffect(() => {
+    const electronAPI = (window as any).electronAPI;
+
+    if (isOnlineYtTrackRef.current && electronAPI?.playYouTubeTrack) {
+      if (isPlaying) {
+        electronAPI.resumeYouTubeTrack?.(volume);
+      } else {
+        electronAPI.pauseYouTubeTrack?.();
+      }
+      return;
+    }
+
     if (!audioRef.current) return;
 
     if (isPlaying) {
@@ -76,6 +115,11 @@ export const AudioPlayer = () => {
 
   // 3. Volume Control
   useEffect(() => {
+    const electronAPI = (window as any).electronAPI;
+    if (isOnlineYtTrackRef.current && electronAPI?.setYouTubeVolume) {
+      electronAPI.setYouTubeVolume(volume);
+    }
+
     audioEngine.setVolume(volume);
     if (audioRef.current && !audioEngine.isConnectedToWebAudio()) {
       audioRef.current.volume = volume;
@@ -88,6 +132,13 @@ export const AudioPlayer = () => {
       const customEvent = e as CustomEvent<{ time: number }>;
       const targetTime = customEvent.detail?.time ?? 0;
 
+      const electronAPI = (window as any).electronAPI;
+      if (isOnlineYtTrackRef.current && electronAPI?.seekYouTubeTrack) {
+        electronAPI.seekYouTubeTrack(targetTime);
+        setCurrentTime(targetTime);
+        return;
+      }
+
       if (audioRef.current) {
         try {
           audioRef.current.currentTime = targetTime;
@@ -99,42 +150,32 @@ export const AudioPlayer = () => {
 
     window.addEventListener('music:seek', handleSeek);
     return () => window.removeEventListener('music:seek', handleSeek);
-  }, []);
+  }, [setCurrentTime]);
 
   // 5. Track Loading & Native Streaming
   useEffect(() => {
     let isCancelled = false;
 
     async function loadTrack() {
-      if (!currentTrack || !audioRef.current) return;
+      if (!currentTrack) return;
 
       const isSameTrackId = currentTrack.id === activeLoadedTrackIdRef.current;
       const isSameNonce = playNonce === activeLoadedNonceRef.current;
 
-      // Prevent reloading identical track if already playing and same queue session
-      if (isSameTrackId && isSameNonce && audioRef.current.src && !audioRef.current.paused) {
+      if (isSameTrackId && isSameNonce) {
         return;
       }
 
-      // If exact same track was already loaded with a valid audio src, but user requested play / new mix session:
-      if (isSameTrackId && audioRef.current.src && audioRef.current.src !== window.location.href) {
-        try {
-          audioRef.current.currentTime = 0;
-          audioEngine.resume();
-          await audioRef.current.play();
-          setIsPlaying(true);
-          activeLoadedNonceRef.current = playNonce;
-          isSwitchingRef.current = false;
-          return;
-        } catch (err) {
-          console.warn('[AudioPlayer] Replay existing src failed, reloading fresh stream:', err);
+      const electronAPI = (window as any).electronAPI;
+
+      // Silence any previous playback cleanly across both local WebAudio and native background YouTube player
+      if (audioRef.current) {
+        audioRef.current.pause();
+        if (audioRef.current.src) {
+          audioRef.current.src = '';
         }
       }
-
-      // Silence and prepare new buffer
-      audioRef.current.pause();
-      audioRef.current.removeAttribute('src');
-      audioRef.current.load();
+      electronAPI?.pauseYouTubeTrack?.();
 
       activeLoadedTrackIdRef.current = currentTrack.id;
       activeLoadedNonceRef.current = playNonce;
@@ -144,17 +185,21 @@ export const AudioPlayer = () => {
       // A0. Check Local PC Audio File (Direct High-Speed Local Proxy Streaming)
       const localFilePath = (currentTrack as any).filePath || (currentTrack.id.startsWith('local-') ? (currentTrack as any).filePath : null);
       if (localFilePath) {
-        const electronAPI = (window as any).electronAPI;
+        isOnlineYtTrackRef.current = false;
+        electronAPI?.stopYouTubeTrack?.();
+
         let proxyPort = 41721;
         if (electronAPI?.getProxyPort) {
           proxyPort = await electronAPI.getProxyPort();
         }
         const localStreamUrl = `http://127.0.0.1:${proxyPort}/api/local-file?path=${encodeURIComponent(localFilePath)}`;
-        audioRef.current.src = localStreamUrl;
-        audioEngine.setVolume(volume);
-        if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
-        audioEngine.resume();
-        audioRef.current.play().catch(console.warn);
+        if (audioRef.current) {
+          audioRef.current.src = localStreamUrl;
+          audioEngine.setVolume(volume);
+          if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
+          audioEngine.resume();
+          audioRef.current.play().catch(console.warn);
+        }
         setIsPlaying(true);
         activeLoadedNonceRef.current = playNonce;
         isSwitchingRef.current = false;
@@ -165,11 +210,16 @@ export const AudioPlayer = () => {
       const offlineBlobUrl = await getOfflineTrackBlobUrl(currentTrack.id);
       if (isCancelled) return;
       if (offlineBlobUrl) {
-        audioRef.current.src = offlineBlobUrl;
-        audioEngine.setVolume(volume);
-        if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
-        audioEngine.resume();
-        audioRef.current.play().catch(console.warn);
+        isOnlineYtTrackRef.current = false;
+        electronAPI?.stopYouTubeTrack?.();
+
+        if (audioRef.current) {
+          audioRef.current.src = offlineBlobUrl;
+          audioEngine.setVolume(volume);
+          if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
+          audioEngine.resume();
+          audioRef.current.play().catch(console.warn);
+        }
         setIsPlaying(true);
         isSwitchingRef.current = false;
         prefetchUpcoming();
@@ -178,18 +228,23 @@ export const AudioPlayer = () => {
 
       // B. Direct Blob Preview
       if (currentTrack.resolvedStreamUrl?.startsWith('blob:')) {
-        audioRef.current.src = currentTrack.resolvedStreamUrl;
-        audioEngine.setVolume(volume);
-        if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
-        audioEngine.resume();
-        audioRef.current.play().catch(console.warn);
+        isOnlineYtTrackRef.current = false;
+        electronAPI?.stopYouTubeTrack?.();
+
+        if (audioRef.current) {
+          audioRef.current.src = currentTrack.resolvedStreamUrl;
+          audioEngine.setVolume(volume);
+          if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
+          audioEngine.resume();
+          audioRef.current.play().catch(console.warn);
+        }
         setIsPlaying(true);
         isSwitchingRef.current = false;
         prefetchUpcoming();
         return;
       }
 
-      // C. Resolve Online Stream via High-Speed Native Proxy
+      // C. Resolve Online Track via Native Background YouTube Player Engine or Proxy
       let videoId = getDirectYouTubeId(currentTrack);
 
       if (!videoId) {
@@ -205,30 +260,38 @@ export const AudioPlayer = () => {
 
       if (videoId) {
         try {
-          const electronAPI = (window as any).electronAPI;
-          let directStreamUrl: string | null = null;
-
-          if (electronAPI?.extractStreamUrl) {
-            directStreamUrl = await electronAPI.extractStreamUrl(videoId);
-          }
-
-          if (!directStreamUrl) {
-            let proxyPort = 41721;
-            if (electronAPI?.getProxyPort) {
-              proxyPort = await electronAPI.getProxyPort();
+          if (electronAPI?.playYouTubeTrack) {
+            isOnlineYtTrackRef.current = true;
+            console.log(`[AudioPlayer] Playing via native background engine for ${currentTrack.title} (${videoId}) with volume ${volume}`);
+            const playRes = await electronAPI.playYouTubeTrack(videoId, 0, volume);
+            
+            if (playRes?.success) {
+              setIsPlaying(true);
+              isSwitchingRef.current = false;
+              prefetchUpcoming();
+              return;
             }
-            directStreamUrl = `http://127.0.0.1:${proxyPort}/api/stream?videoId=${videoId}`;
           }
+
+          // Web fallback
+          let proxyPort = 41721;
+          if (electronAPI?.getProxyPort) {
+            proxyPort = await electronAPI.getProxyPort();
+          }
+          const directStreamUrl = `http://127.0.0.1:${proxyPort}/api/stream?videoId=${videoId}`;
 
           if (isCancelled) return;
+          isOnlineYtTrackRef.current = false;
 
-          audioRef.current.src = directStreamUrl;
-          audioEngine.setVolume(volume);
-          if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
-          audioEngine.resume();
-          audioRef.current.play().catch((err) => {
-            console.warn('[AudioPlayer] Native play notice:', err.message);
-          });
+          if (audioRef.current) {
+            audioRef.current.src = directStreamUrl;
+            audioEngine.setVolume(volume);
+            if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
+            audioEngine.resume();
+            audioRef.current.play().catch((err) => {
+              console.warn('[AudioPlayer] Play notice:', err.message);
+            });
+          }
           setIsPlaying(true);
           isSwitchingRef.current = false;
         } catch (err) {
@@ -296,38 +359,43 @@ export const AudioPlayer = () => {
       crossOrigin="anonymous"
       preload="auto"
       onCanPlay={() => {
-        if (usePlayerStore.getState().isPlaying && audioRef.current && audioRef.current.paused) {
+        if (!isOnlineYtTrackRef.current && usePlayerStore.getState().isPlaying && audioRef.current && audioRef.current.paused) {
           audioEngine.resume();
           audioRef.current.play().catch(() => {});
         }
       }}
       onPlaying={() => {
-        audioEngine.resume();
-        if (!usePlayerStore.getState().isPlaying) {
-          setIsPlaying(true);
+        if (!isOnlineYtTrackRef.current) {
+          audioEngine.resume();
+          if (!usePlayerStore.getState().isPlaying) {
+            setIsPlaying(true);
+          }
         }
       }}
       onTimeUpdate={() => {
-        if (audioRef.current) {
+        if (!isOnlineYtTrackRef.current && audioRef.current) {
           setCurrentTime(audioRef.current.currentTime);
         }
       }}
       onLoadedMetadata={() => {
-        if (audioRef.current && audioRef.current.duration > 0) {
+        if (!isOnlineYtTrackRef.current && audioRef.current && audioRef.current.duration > 0) {
           setDuration(audioRef.current.duration);
         }
       }}
       onEnded={() => {
-        if (repeatMode === 'one') {
-          if (audioRef.current) {
-            audioRef.current.currentTime = 0;
-            audioRef.current.play().catch(console.warn);
+        if (!isOnlineYtTrackRef.current) {
+          if (repeatMode === 'one') {
+            if (audioRef.current) {
+              audioRef.current.currentTime = 0;
+              audioRef.current.play().catch(console.warn);
+            }
+          } else {
+            nextTrack();
           }
-        } else {
-          nextTrack();
         }
       }}
       onError={async (e) => {
+        if (isOnlineYtTrackRef.current) return;
         console.warn('[AudioPlayer] HTML5 Audio element error:', e);
         if (!currentTrack) return;
 
@@ -337,7 +405,6 @@ export const AudioPlayer = () => {
         trackFailedCountRef.current.set(currentTrack.id, currentFailCount);
 
         if (currentFailCount <= 2) {
-          // Attempt fallback video candidate
           try {
             const fallbackId = await resolveAlternativeVideoId(
               currentTrack.artist,
@@ -346,14 +413,8 @@ export const AudioPlayer = () => {
             );
             if (fallbackId && audioRef.current) {
               const electronAPI = (window as any).electronAPI;
-              let directUrl: string | null = null;
-              if (electronAPI?.extractStreamUrl) {
-                directUrl = await electronAPI.extractStreamUrl(fallbackId);
-              }
-              if (!directUrl) {
-                const port = await electronAPI?.getProxyPort?.() || 41721;
-                directUrl = `http://127.0.0.1:${port}/api/stream?videoId=${fallbackId}`;
-              }
+              const port = await electronAPI?.getProxyPort?.() || 41721;
+              const directUrl = `http://127.0.0.1:${port}/api/stream?videoId=${fallbackId}`;
 
               audioRef.current.src = directUrl;
               if (usePlayerStore.getState().isPlaying) {

@@ -14,7 +14,7 @@ import { useContextMenuStore } from '../../store/useContextMenuStore';
 import { AudioVisualizer } from './AudioVisualizer';
 
 function formatDuration(seconds: number): string {
-  if (!seconds || isNaN(seconds) || seconds <= 0) return '--:--';
+  if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) return '--:--';
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;

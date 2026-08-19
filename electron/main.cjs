@@ -1,9 +1,57 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, protocol, session } = require('electron');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const os = require('os');
+const vm = require('node:vm');
 const { Readable } = require('stream');
+
+// ----------------------------------------------------
+// PORTABLE BUILD SELF-CONTAINMENT LOGIC
+// ----------------------------------------------------
+const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
+if (isPortable) {
+  const portableBase = path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'owo-data');
+  const subdirs = [
+    portableBase,
+    path.join(portableBase, 'userData'),
+    path.join(portableBase, 'sessionData'),
+    path.join(portableBase, 'userCache'),
+    path.join(portableBase, 'logs'),
+    path.join(portableBase, 'crashDumps'),
+    path.join(portableBase, 'temp'),
+    path.join(portableBase, 'Music')
+  ];
+  for (const dir of subdirs) {
+    if (!fs.existsSync(dir)) {
+      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+    }
+  }
+
+  try { app.setPath('userData', path.join(portableBase, 'userData')); } catch (e) {}
+  try { app.setPath('appData', portableBase); } catch (e) {}
+  try { app.setPath('sessionData', path.join(portableBase, 'sessionData')); } catch (e) {}
+  try { app.setPath('userCache', path.join(portableBase, 'userCache')); } catch (e) {}
+  try { app.setPath('logs', path.join(portableBase, 'logs')); } catch (e) {}
+  try { app.setPath('crashDumps', path.join(portableBase, 'crashDumps')); } catch (e) {}
+  try { app.setPath('temp', path.join(portableBase, 'temp')); } catch (e) {}
+}
+
+function getDefaultMusicDirectory() {
+  if (isPortable) {
+    const portableMusicDir = path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'owo-data', 'Music');
+    if (!fs.existsSync(portableMusicDir)) {
+      try { fs.mkdirSync(portableMusicDir, { recursive: true }); } catch (e) {}
+    }
+    return portableMusicDir;
+  }
+  const defaultDir = path.join(os.homedir(), 'Music', 'OwO Music');
+  if (!fs.existsSync(defaultDir)) {
+    try { fs.mkdirSync(defaultDir, { recursive: true }); } catch (e) {}
+  }
+  return defaultDir;
+}
 
 // Universal autoplay & audio engine enablement
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -14,9 +62,54 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 let mainWindow = null;
 let proxyPort = 41721;
-const https = require('https');
 let cachedVisitorSession = null;
 const resolvedAudioCache = new Map(); // videoId -> { audioInfo: { url, mimeType }, time: number }
+
+let innertubeInstance = null;
+let innertubeInitPromise = null;
+
+async function getInnertube() {
+  if (innertubeInstance) return innertubeInstance;
+  if (innertubeInitPromise) return innertubeInitPromise;
+
+  innertubeInitPromise = (async () => {
+    try {
+      const { Innertube, UniversalCache, Platform } = await import('youtubei.js');
+
+      // Configure VM Sandbox evaluator for youtubei.js signature & nsig deciphering
+      Platform.shim.eval = (data, env = {}) => {
+        const code = data?.output || data;
+        if (typeof code === 'string') {
+          const sandbox = { ...env };
+          const context = vm.createContext(sandbox);
+          const wrappedCode = `(function() {\n${code}\n})()`;
+          const result = vm.runInContext(wrappedCode, context);
+          return result || sandbox;
+        }
+        return {};
+      };
+
+      const yt = await Innertube.create({
+        cache: new UniversalCache(false),
+        generate_session_locally: true
+      });
+
+      innertubeInstance = yt;
+      console.log('[Innertube] Initialized successfully with VM decipher engine.');
+      return yt;
+    } catch (err) {
+      console.error('[Innertube] Initialization error:', err.message);
+      return null;
+    } finally {
+      innertubeInitPromise = null;
+    }
+  })();
+
+  return innertubeInitPromise;
+}
+
+// Pre-initialize Innertube on launch
+getInnertube().catch(() => {});
 
 function generateRandomString(length) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -147,28 +240,81 @@ async function getVisitorSession(forceRefresh = false) {
 // Pre-warm visitor session immediately on launch
 getVisitorSession().catch(() => {});
 
-async function resolveBestAudioUrl(videoId, session) {
+async function resolveBestAudioUrl(videoId, forceFresh = false) {
   if (!videoId) return null;
 
-  // 1. Instant Cache hit (Valid for 3 hours)
-  const cached = resolvedAudioCache.get(videoId);
-  if (cached && (Date.now() - cached.time < 10800000)) {
-    return cached.audioInfo;
+  // 1. Check Cache with Dynamic Expiration Validation
+  if (!forceFresh) {
+    const cached = resolvedAudioCache.get(videoId);
+    if (cached) {
+      const isExpired = cached.expireTimestamp ? (Date.now() / 1000 > (cached.expireTimestamp - 300)) : false;
+      const isWithinTtl = (Date.now() - cached.time) < 7200000; // 2 hours max
+      if (!isExpired && isWithinTtl) {
+        return cached.audioInfo;
+      }
+    }
   }
 
-  let activeSession = session;
-  if (!activeSession || !activeSession.visitorData) {
-    activeSession = await getVisitorSession();
+  // 2. High-speed Innertube Multi-Client Decipher Engine (YTMUSIC, MWEB, IOS, ANDROID, WEB)
+  try {
+    const yt = await getInnertube();
+    if (yt) {
+      for (const clientName of ['YTMUSIC', 'MWEB', 'IOS', 'ANDROID', 'WEB']) {
+        try {
+          const info = await yt.getBasicInfo(videoId, { client: clientName });
+          const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+          if (format) {
+            const deciphered = await format.decipher(yt.session.player);
+            const streamUrl = typeof deciphered === 'string' ? deciphered : (deciphered?.toString?.() || '');
+            if (streamUrl && streamUrl.startsWith('http')) {
+              let expireTimestamp = null;
+              try {
+                const u = new URL(streamUrl);
+                const exp = u.searchParams.get('expire');
+                if (exp) expireTimestamp = parseInt(exp, 10);
+              } catch (e) {}
+
+              const totalSize = Number(format.content_length || format.raw_data?.contentLength || 0);
+
+              const audioInfo = {
+                url: streamUrl,
+                mimeType: format.mime_type || 'audio/mp4',
+                bitrate: format.bitrate,
+                totalSize,
+                clientName,
+                headers: clientName === 'IOS'
+                  ? { 'User-Agent': 'com.google.ios.youtube/19.43.2 (iPhone14,3; U; CPU iOS 18_1 like Mac OS X; en_US)' }
+                  : clientName === 'YTMUSIC'
+                  ? {
+                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                      'Referer': 'https://music.youtube.com/',
+                      'Origin': 'https://music.youtube.com'
+                    }
+                  : { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' }
+              };
+
+              resolvedAudioCache.set(videoId, { audioInfo, time: Date.now(), expireTimestamp });
+              return audioInfo;
+            }
+          }
+        } catch (clientErr) {
+          // Continue to next client
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[resolveBestAudioUrl] Innertube error:', err.message);
   }
 
-  // 2. High-speed Direct Native Innertube Client (Fastest: ~120ms)
-  const clients = [
+  // 3. Fallback: Direct Native Android_VR Innertube Client with visitor session
+  let activeSession = await getVisitorSession();
+  const fallbackClients = [
     { clientName: 'ANDROID_VR', clientVersion: '1.60.19', deviceModel: 'Quest 3', hl: 'en', gl: 'US' },
     { clientName: 'ANDROID', clientVersion: '19.29.35', hl: 'en', gl: 'US' }
   ];
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    for (const c of clients) {
+    for (const c of fallbackClients) {
       try {
         const playerRes = await fetch('https://www.youtube.com/youtubei/v1/player', {
           method: 'POST',
@@ -195,15 +341,16 @@ async function resolveBestAudioUrl(videoId, session) {
             f => f.mimeType?.includes('audio') && Boolean(f.url)
           );
           if (formats.length > 0) {
-            const m4aFormats = formats.filter(f => f.mimeType?.includes('audio/mp4') || f.mimeType?.includes('mp4a'));
-            let audioInfo = null;
-            if (m4aFormats.length > 0) {
-              m4aFormats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-              audioInfo = { url: m4aFormats[0].url, mimeType: 'audio/mp4' };
-            } else {
-              formats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-              audioInfo = { url: formats[0].url, mimeType: formats[0].mimeType || 'audio/mp4' };
-            }
+            formats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+            const bestF = formats[0];
+            const audioInfo = {
+              url: bestF.url,
+              mimeType: bestF.mimeType || 'audio/mp4',
+              bitrate: bestF.bitrate,
+              totalSize: Number(bestF.contentLength || 0),
+              clientName: c.clientName,
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+            };
             resolvedAudioCache.set(videoId, { audioInfo, time: Date.now() });
             return audioInfo;
           }
@@ -211,9 +358,7 @@ async function resolveBestAudioUrl(videoId, session) {
       } catch (e) {}
     }
 
-    // If first attempt failed, re-warm session and retry
     if (attempt === 0) {
-      console.warn('[resolveBestAudioUrl] First attempt failed. Refreshing warm session token...');
       activeSession = await getVisitorSession(true);
     }
   }
@@ -221,8 +366,10 @@ async function resolveBestAudioUrl(videoId, session) {
   return null;
 }
 
-// Local background streaming proxy for YouTube audio
+// Local background streaming proxy for YouTube audio with dynamic chunk streaming
 function startInternalProxyServer() {
+  const CHUNK_STREAM_SIZE = 512 * 1024; // 512 KB per upstream chunk
+
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -288,8 +435,7 @@ function startInternalProxyServer() {
           return;
         }
 
-        const session = await getVisitorSession();
-        const audioInfo = await resolveBestAudioUrl(videoId, session);
+        let audioInfo = await resolveBestAudioUrl(videoId);
 
         if (!audioInfo || !audioInfo.url) {
           res.statusCode = 404;
@@ -297,41 +443,103 @@ function startInternalProxyServer() {
           return;
         }
 
+        // Determine total stream size
+        let totalSize = audioInfo.totalSize || 0;
+        if (!totalSize) {
+          try {
+            const probe = await fetch(audioInfo.url, {
+              headers: {
+                ...(audioInfo.headers || {}),
+                'Range': 'bytes=0-1024'
+              },
+              signal: AbortSignal.timeout(3000)
+            });
+            const cr = probe.headers.get('content-range');
+            if (cr && cr.includes('/')) {
+              totalSize = parseInt(cr.split('/')[1], 10) || 0;
+              audioInfo.totalSize = totalSize;
+            }
+          } catch (e) {}
+        }
+
+        // Fallback default size if unknown (~3.5 MB)
+        if (!totalSize || isNaN(totalSize)) totalSize = 3800000;
+
         const range = req.headers.range;
-        const fetchHeaders = {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        };
-        if (range) fetchHeaders['Range'] = range;
+        let start = 0;
+        let end = totalSize - 1;
 
-        const streamRes = await fetch(audioInfo.url, { headers: fetchHeaders });
-        
-        res.statusCode = streamRes.status;
-        res.setHeader('Content-Type', streamRes.headers.get('content-type') || audioInfo.mimeType || 'audio/mp4');
-        if (streamRes.headers.get('content-length')) {
-          res.setHeader('Content-Length', streamRes.headers.get('content-length'));
+        if (range) {
+          const parts = range.replace(/bytes=/, '').split('-');
+          start = parseInt(parts[0], 10) || 0;
+          if (parts[1]) {
+            end = parseInt(parts[1], 10);
+          }
         }
-        if (streamRes.headers.get('content-range')) {
-          res.setHeader('Content-Range', streamRes.headers.get('content-range'));
-        }
+
+        const contentLength = (end - start) + 1;
+
+        res.statusCode = 206;
+        res.setHeader('Content-Type', audioInfo.mimeType || 'audio/mp4');
         res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+        res.setHeader('Content-Length', contentLength);
 
-        if (!streamRes.body) {
-          res.end();
-          return;
-        }
-
-        const nodeReadable = Readable.fromWeb(streamRes.body);
-        nodeReadable.on('error', (err) => {
-          console.warn('[Proxy Stream Pipe Warn]:', err.message);
-          if (!res.headersSent) res.statusCode = 500;
-          res.end();
-        });
+        let currentStart = start;
+        let isClientClosed = false;
 
         req.on('close', () => {
-          nodeReadable.destroy();
+          isClientClosed = true;
         });
 
-        nodeReadable.pipe(res);
+        while (currentStart <= end && !isClientClosed) {
+          const currentEnd = Math.min(currentStart + CHUNK_STREAM_SIZE - 1, end);
+          const chunkRange = `bytes=${currentStart}-${currentEnd}`;
+
+          let chunkRes;
+          try {
+            chunkRes = await fetch(audioInfo.url, {
+              headers: {
+                ...(audioInfo.headers || {}),
+                'Range': chunkRange
+              },
+              signal: AbortSignal.timeout(6000)
+            });
+
+            // If chunk fails (e.g. 403 expired), refresh URL and retry once
+            if (!chunkRes.ok && (chunkRes.status === 403 || chunkRes.status === 404)) {
+              console.warn(`[Proxy] Chunk ${chunkRange} returned ${chunkRes.status}. Refreshing URL for ${videoId}...`);
+              audioInfo = await resolveBestAudioUrl(videoId, true);
+              if (audioInfo?.url) {
+                chunkRes = await fetch(audioInfo.url, {
+                  headers: {
+                    ...(audioInfo.headers || {}),
+                    'Range': chunkRange
+                  },
+                  signal: AbortSignal.timeout(6000)
+                });
+              }
+            }
+          } catch (fetchErr) {
+            console.warn('[Proxy Chunk Fetch Error]:', fetchErr.message);
+            break;
+          }
+
+          if (!chunkRes || !chunkRes.ok || !chunkRes.body) {
+            break;
+          }
+
+          const reader = chunkRes.body.getReader();
+          while (!isClientClosed) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(Buffer.from(value));
+          }
+
+          currentStart = currentEnd + 1;
+        }
+
+        res.end();
         return;
       }
 
@@ -393,8 +601,608 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    if (bgPlayerWindow && !bgPlayerWindow.isDestroyed()) {
+      try {
+        bgPlayerWindow.destroy();
+      } catch (e) {}
+      bgPlayerWindow = null;
+    }
   });
 }
+
+// ----------------------------------------------------
+// AD-BLOCKING & TELEMETRY FILTERING FOR BG ENGINE
+// ----------------------------------------------------
+const BLOCKED_AD_HOSTS = [
+  'doubleclick.net',
+  'googleadservices.com',
+  'googlesyndication.com',
+  'adservice.google.com',
+  'pagead2.googlesyndication.com',
+  'pagead-googlehosted.l.google.com',
+  'ad.doubleclick.net',
+  'stats.g.doubleclick.net'
+];
+
+function shouldBlockRequest(urlStr, resourceType) {
+  try {
+    const parsed = new URL(urlStr);
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Explicit allow-list for essential playback and media streams
+    if (hostname.includes('googlevideo.com') || hostname.includes('music.youtube.com') || hostname.includes('youtube.com')) {
+      if (hostname.startsWith('pagead') || hostname.startsWith('ad.')) {
+        return true;
+      }
+      return false;
+    }
+
+    const isBlocked = BLOCKED_AD_HOSTS.some(blocked => hostname === blocked || hostname.endsWith('.' + blocked));
+    if (isBlocked && (process.env.NODE_ENV === 'development' || !app.isPackaged)) {
+      console.log(`[AdBlock Network] Blocked: ${hostname} (${resourceType || 'unknown'})`);
+    }
+    return isBlocked;
+  } catch (e) {
+    return false;
+  }
+}
+
+const INJECTED_AD_HANDLER_SCRIPT = `
+(() => {
+  if (window.__owoAdHandlerInstalled) return;
+  window.__owoAdHandlerInstalled = true;
+
+  let wasAdPlaying = false;
+  let preAdVolume = null;
+  let preAdMuted = false;
+
+  function safeCheckAd() {
+    try {
+      const v = document.querySelector('video');
+      const player = document.getElementById('movie_player');
+      if (!v) return;
+
+      // Active ad detection (using active indicators rather than static containers)
+      const hasAdClass = document.querySelector('.ad-showing') !== null ||
+                         document.querySelector('.ad-interrupting') !== null;
+      const apiAdState = (player && typeof player.getAdState === 'function') ? player.getAdState() : 0;
+      const isAdApi = (player && typeof player.isAd === 'function') ? player.isAd() : false;
+
+      // Confirmed ad state: player API confirms ad or player DOM has active ad-showing class
+      const isAd = (apiAdState > 0) || isAdApi || hasAdClass;
+
+      if (isAd) {
+        if (!wasAdPlaying) {
+          wasAdPlaying = true;
+          preAdMuted = v.muted;
+          preAdVolume = v.volume;
+        }
+
+        // Mute video defensively during ad
+        if (!v.muted) {
+          v.muted = true;
+        }
+
+        // 1. Attempt clicking legitimate skip buttons
+        const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, .ytp-ad-overlay-close-button');
+        if (skipBtn) {
+          skipBtn.click();
+        }
+
+        // 2. Opportunistic internal player API skip (if present and safe)
+        if (player && typeof player.skipAd === 'function') {
+          try { player.skipAd(); } catch (e) {}
+        }
+
+        // 3. Fail-safe seek: Only if duration is valid, finite, and positive
+        if (Number.isFinite(v.duration) && v.duration > 0 && v.currentTime < v.duration) {
+          v.currentTime = Math.max(0, v.duration - 0.1);
+        }
+      } else {
+        // Normal playback / Ad ended
+        if (wasAdPlaying) {
+          wasAdPlaying = false;
+          // Restore user's original volume and mute state
+          if (preAdMuted !== null) {
+            v.muted = preAdMuted;
+          }
+          if (preAdVolume !== null) {
+            v.volume = preAdVolume;
+          }
+        }
+      }
+    } catch (err) {
+      // Fail-safe: do not disrupt playback on unexpected DOM exceptions
+    }
+  }
+
+  // Defensive interval check
+  const adInterval = setInterval(safeCheckAd, 200);
+
+  // MutationObserver for immediate response to DOM changes
+  const observer = new MutationObserver(() => {
+    safeCheckAd();
+  });
+
+  observer.observe(document.body || document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'id']
+  });
+
+  // Idempotent teardown on navigation / page unload
+  window.addEventListener('beforeunload', () => {
+    clearInterval(adInterval);
+    observer.disconnect();
+    window.__owoAdHandlerInstalled = false;
+  }, { once: true });
+})();
+`;
+
+// ----------------------------------------------------
+// BACKGROUND YOUTUBE MUSIC AUDIO RUNTIME ENGINE & STATE MACHINE
+// ----------------------------------------------------
+let bgPlayerWindow = null;
+let bgPlayerUpdateInterval = null;
+
+// Authoritative State Machine Variables
+let requestedVideoId = null;
+let currentPlayingVideoId = null;
+let navigationInProgress = false;
+let navigationStartTime = 0;
+let endedSignalSentForVideoId = null;
+let loadRequestId = 0;
+const NAVIGATION_TIMEOUT_MS = 12000;
+
+function getOrCreateBgPlayerWindow() {
+  if (bgPlayerWindow && !bgPlayerWindow.isDestroyed()) {
+    return bgPlayerWindow;
+  }
+
+  const s = session.fromPartition('persist:owo-music-runtime');
+
+  // Install network filter once per session partition
+  if (!s.__owoAdFilterInstalled) {
+    s.__owoAdFilterInstalled = true;
+    s.webRequest.onBeforeRequest((details, callback) => {
+      if (shouldBlockRequest(details.url, details.resourceType)) {
+        callback({ cancel: true });
+      } else {
+        callback({ cancel: false });
+      }
+    });
+  }
+
+  bgPlayerWindow = new BrowserWindow({
+    show: false,
+    width: 800,
+    height: 600,
+    webPreferences: {
+      session: s,
+      preload: path.join(__dirname, 'bg-preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false,
+      autoplayPolicy: 'no-user-gesture-required'
+    }
+  });
+
+  // Inject idempotent defensive ad handler
+  const injectAdHandler = () => {
+    if (!bgPlayerWindow || bgPlayerWindow.isDestroyed()) return;
+    bgPlayerWindow.webContents.executeJavaScript(INJECTED_AD_HANDLER_SCRIPT).catch(() => {});
+  };
+
+  bgPlayerWindow.webContents.on('dom-ready', injectAdHandler);
+  bgPlayerWindow.webContents.on('did-finish-load', injectAdHandler);
+
+  if (bgPlayerUpdateInterval) clearInterval(bgPlayerUpdateInterval);
+  bgPlayerUpdateInterval = setInterval(async () => {
+    if (!bgPlayerWindow || bgPlayerWindow.isDestroyed() || !mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      // 1. Navigation Timeout Guard
+      if (navigationInProgress && Date.now() - navigationStartTime > NAVIGATION_TIMEOUT_MS) {
+        console.warn(`[BgPlayer StateMachine] Navigation timeout for ${requestedVideoId}. Resetting navigation lock.`);
+        navigationInProgress = false;
+      }
+
+      // 2. Query In-DOM and Player State
+      const state = await bgPlayerWindow.webContents.executeJavaScript(`
+        (() => {
+          try {
+            const v = document.querySelector('video');
+            const p = document.getElementById('movie_player');
+            if (!v) return null;
+
+            // Extract authoritative identity signals
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlVideoId = urlParams.get('v');
+            const apiVideoData = (p && typeof p.getVideoData === 'function') ? p.getVideoData() : null;
+            const apiVideoId = apiVideoData ? apiVideoData.video_id : null;
+            const playerState = (p && typeof p.getPlayerState === 'function') ? p.getPlayerState() : null;
+
+            // Ad check
+            const hasAdClass = document.querySelector('.ad-showing') !== null || document.querySelector('.ad-interrupting') !== null;
+            const apiAdState = (p && typeof p.getAdState === 'function') ? p.getAdState() : 0;
+            const isAd = (apiAdState > 0) || hasAdClass;
+
+            return {
+              currentTime: v.currentTime || 0,
+              duration: v.duration || 0,
+              paused: v.paused,
+              ended: v.ended,
+              readyState: v.readyState,
+              playerState: playerState,
+              urlVideoId: urlVideoId,
+              apiVideoId: apiVideoId,
+              isAd: isAd
+            };
+          } catch (e) {
+            return null;
+          }
+        })()
+      `);
+
+      if (!state) return;
+
+      const { currentTime, duration, paused, ended, playerState, urlVideoId, apiVideoId, isAd } = state;
+
+      // Settle actual video ID (favor matching requested if in transition)
+      let resolvedActualId = null;
+      if (urlVideoId && apiVideoId && urlVideoId === apiVideoId) {
+        resolvedActualId = urlVideoId;
+      } else {
+        resolvedActualId = urlVideoId || apiVideoId;
+      }
+
+      // Transition from LOADING -> PLAYING when requested track is confirmed
+      if (navigationInProgress && requestedVideoId) {
+        if (resolvedActualId === requestedVideoId && !isAd && currentTime > 0) {
+          currentPlayingVideoId = requestedVideoId;
+          navigationInProgress = false;
+          endedSignalSentForVideoId = null;
+          console.log(`[BgPlayer StateMachine] Confirmed PLAYING for ${currentPlayingVideoId}`);
+        }
+      }
+
+      // Check for High-Confidence Track Completion
+      // v.ended is highest confidence; playerState === 0 with duration/currentTime matching is supporting signal
+      const isNaturalEnd = ended === true || (playerState === 0 && duration > 0 && Math.abs(currentTime - duration) < 1.5);
+
+      if (isNaturalEnd && currentPlayingVideoId && !navigationInProgress && !isAd) {
+        if (endedSignalSentForVideoId !== currentPlayingVideoId) {
+          endedSignalSentForVideoId = currentPlayingVideoId;
+          console.log(`[BgPlayer StateMachine] Track ${currentPlayingVideoId} naturally ENDED.`);
+          // Immediately pause to prevent YouTube's internal radio/automix from starting audio
+          bgPlayerWindow.webContents.executeJavaScript(`
+            (() => {
+              const v = document.querySelector('video');
+              const p = document.getElementById('movie_player');
+              if (v) v.pause();
+              if (p && p.pauseVideo) p.pauseVideo();
+            })()
+          `).catch(() => {});
+
+          mainWindow.webContents.send('yt-player-state-update', {
+            currentTime: duration || currentTime,
+            duration: duration,
+            paused: true,
+            ended: true,
+            videoId: currentPlayingVideoId
+          });
+        }
+        return;
+      }
+
+      // Check for Unauthorized YouTube Autoplay / Radio Navigation
+      // Conditions:
+      // 1. Not in intentional navigation
+      // 2. Not in an ad
+      // 3. We have an established currentPlayingVideoId
+      // 4. resolvedActualId is known and definitively NOT currentPlayingVideoId
+      if (!navigationInProgress && !isAd && currentPlayingVideoId && resolvedActualId && resolvedActualId !== currentPlayingVideoId) {
+        if (endedSignalSentForVideoId !== currentPlayingVideoId) {
+          endedSignalSentForVideoId = currentPlayingVideoId;
+          console.warn(`[BgPlayer StateMachine] Unauthorized navigation detected! YouTube auto-switched to ${resolvedActualId} instead of ${currentPlayingVideoId}. Intercepting.`);
+
+          // Immediately pause unauthorized track
+          bgPlayerWindow.webContents.executeJavaScript(`
+            (() => {
+              const v = document.querySelector('video');
+              const p = document.getElementById('movie_player');
+              if (v) v.pause();
+              if (p && p.pauseVideo) p.pauseVideo();
+            })()
+          `).catch(() => {});
+
+          // Report ended: true to React queue for currentPlayingVideoId
+          mainWindow.webContents.send('yt-player-state-update', {
+            currentTime: duration,
+            duration: duration,
+            paused: true,
+            ended: true,
+            videoId: currentPlayingVideoId
+          });
+        }
+        return;
+      }
+
+      // Send normal telemetry update
+      if (currentPlayingVideoId && !isAd) {
+        mainWindow.webContents.send('yt-player-state-update', {
+          currentTime: currentTime,
+          duration: duration,
+          paused: paused,
+          ended: ended,
+          videoId: currentPlayingVideoId
+        });
+      }
+    } catch (e) {}
+  }, 250);
+
+  bgPlayerWindow.on('closed', () => {
+    bgPlayerWindow = null;
+    requestedVideoId = null;
+    currentPlayingVideoId = null;
+    navigationInProgress = false;
+    endedSignalSentForVideoId = null;
+    if (bgPlayerUpdateInterval) clearInterval(bgPlayerUpdateInterval);
+  });
+
+  return bgPlayerWindow;
+}
+
+// IPC Handlers for Background YouTube Player Engine
+ipcMain.handle('play-yt-track', async (event, { videoId, startTime, volume }) => {
+  if (!videoId) return { success: false };
+  
+  const currentReqId = ++loadRequestId;
+  requestedVideoId = videoId;
+  navigationInProgress = true;
+  navigationStartTime = Date.now();
+  endedSignalSentForVideoId = null;
+
+  const targetVol = Math.max(0, Math.min(1, typeof volume === 'number' ? volume : 1));
+
+  const player = getOrCreateBgPlayerWindow();
+
+  try {
+    console.log(`[BgPlayer] Loading YouTube Music: ${videoId} (reqId=${currentReqId}, targetVol=${targetVol})...`);
+    await player.loadURL(`https://music.youtube.com/watch?v=${videoId}`);
+
+    if (currentReqId !== loadRequestId) {
+      console.log(`[BgPlayer] Request ${currentReqId} superseded by ${loadRequestId}. Aborting auto-play setup.`);
+      return { success: true };
+    }
+
+    // Named constants for playback settling delay and startup fade
+    const STARTUP_SETTLE_DELAY_MS = 650;
+    const STARTUP_FADE_DURATION_MS = 35;
+
+    // Trigger auto-play and apply volume in DOM when ready
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      if (currentReqId !== loadRequestId) return { success: true };
+
+      const res = await player.webContents.executeJavaScript(`
+        (() => {
+          try {
+            const v = document.querySelector('video');
+            const p = document.getElementById('movie_player');
+
+            // Opportunistic attempt to disable Automix
+            try {
+              const automixToggle = document.querySelector('tp-yt-paper-switch#automix-toggle, ytmusic-player-bar tp-yt-paper-toggle-button');
+              if (automixToggle && (automixToggle.hasAttribute('checked') || automixToggle.getAttribute('aria-checked') === 'true')) {
+                automixToggle.click();
+              }
+            } catch (e) {}
+
+            // Authoritative Ad Detection
+            const hasAdClass = document.querySelector('.ad-showing') !== null || document.querySelector('.ad-interrupting') !== null;
+            const apiAdState = (p && typeof p.getAdState === 'function') ? p.getAdState() : 0;
+            const isAdApi = (p && typeof p.isAd === 'function') ? p.isAd() : false;
+            const isAd = (apiAdState > 0) || isAdApi || hasAdClass;
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const apiVideoData = (p && typeof p.getVideoData === 'function') ? p.getVideoData() : null;
+            const apiVideoId = apiVideoData ? apiVideoData.video_id : null;
+            const urlVideoId = urlParams.get('v');
+
+            const isTargetVideo = (urlVideoId === '${videoId}') || (apiVideoId === '${videoId}');
+            const hasValidDuration = !!v && Number.isFinite(v.duration) && v.duration > 0;
+            const isReady = !!v && isTargetVideo && !isAd && hasValidDuration && v.readyState >= 2;
+
+            return {
+              ready: isReady,
+              isAd: isAd
+            };
+          } catch(e) {
+            return { ready: false, isAd: false };
+          }
+        })()
+      `).catch(() => ({ ready: false, isAd: false }));
+
+      if (res && res.ready && !res.isAd) {
+        if (currentReqId === loadRequestId) {
+          currentPlayingVideoId = videoId;
+          navigationInProgress = false;
+
+          const targetStartTime = typeof startTime === 'number' && startTime > 0 ? startTime : 0;
+
+          // Transition seamlessly from STARTUP_GUARD to PLAYING directly at target volume and position
+          await player.webContents.executeJavaScript(`
+            (() => {
+              try {
+                if (typeof window.__owoReleaseStartupGuard === 'function') {
+                  window.__owoReleaseStartupGuard(${targetVol}, ${targetStartTime});
+                }
+              } catch (e) {}
+            })()
+          `).catch(() => {});
+
+          console.log(`[BgPlayer] Finite startup guard released. Cleanly playing ${videoId} at volume ${targetVol} (startTime=${targetStartTime}s)!`);
+          break;
+        }
+      }
+    }
+
+    // Explicit recovery path: If loop completes and this is still the active request,
+    // ensure volume and playback are applied cleanly
+    if (currentReqId === loadRequestId) {
+      currentPlayingVideoId = videoId;
+      navigationInProgress = false;
+      await player.webContents.executeJavaScript(`
+        (() => {
+          try {
+            if (typeof window.__owoReleaseStartupGuard === 'function') {
+              window.__owoReleaseStartupGuard(${targetVol}, ${typeof startTime === 'number' ? startTime : 0});
+            } else {
+              const v = document.querySelector('video');
+              const p = document.getElementById('movie_player');
+              if (v) {
+                v.muted = false;
+                v.volume = ${targetVol};
+                if (v.paused) v.play().catch(()=>{});
+              }
+              if (p) {
+                if (typeof p.unMute === 'function') p.unMute();
+                if (typeof p.setVolume === 'function') p.setVolume(Math.round(${targetVol} * 100));
+                if (typeof p.playVideo === 'function') p.playVideo();
+              }
+            }
+          } catch(e) {}
+        })()
+      `).catch(() => {});
+      console.log(`[BgPlayer] Auto-play setup completed (recovery path) for ${videoId}.`);
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error('[BgPlayer Error]:', err);
+    return { success: false, error: err.message };
+  } finally {
+    if (currentReqId === loadRequestId) {
+      navigationInProgress = false;
+    }
+  }
+});
+
+ipcMain.handle('pause-yt-track', async () => {
+  if (!bgPlayerWindow || bgPlayerWindow.isDestroyed()) return { success: true };
+  try {
+    await bgPlayerWindow.webContents.executeJavaScript(`
+      (() => {
+        if (window.__activeFadeTimer) {
+          clearInterval(window.__activeFadeTimer);
+          window.__activeFadeTimer = null;
+        }
+        if (window.__activeFadeRaf) {
+          cancelAnimationFrame(window.__activeFadeRaf);
+          window.__activeFadeRaf = null;
+        }
+        const v = document.querySelector('video');
+        const p = document.getElementById('movie_player');
+        if (v) v.pause();
+        if (p && typeof p.pauseVideo === 'function') p.pauseVideo();
+      })()
+    `);
+    return { success: true };
+  } catch (e) {
+    return { success: false };
+  }
+});
+
+ipcMain.handle('resume-yt-track', async (event, volume) => {
+  if (!bgPlayerWindow || bgPlayerWindow.isDestroyed()) return { success: true };
+  try {
+    const target = typeof volume === 'number' ? Math.max(0, Math.min(1, volume)) : null;
+    await bgPlayerWindow.webContents.executeJavaScript(`
+      (() => {
+        try {
+          if (window.__activeFadeTimer) {
+            clearInterval(window.__activeFadeTimer);
+            window.__activeFadeTimer = null;
+          }
+          if (window.__activeFadeRaf) {
+            cancelAnimationFrame(window.__activeFadeRaf);
+            window.__activeFadeRaf = null;
+          }
+          const v = document.querySelector('video');
+          const p = document.getElementById('movie_player');
+          if (${target !== null}) {
+            if (v) v.volume = ${target};
+            if (p && typeof p.setVolume === 'function') p.setVolume(Math.round(${target} * 100));
+          }
+          if (v) v.play().catch(()=>{});
+          if (p && typeof p.playVideo === 'function') p.playVideo();
+        } catch (e) {}
+      })()
+    `).catch(() => {});
+
+    return { success: true };
+  } catch (e) {
+    return { success: false };
+  }
+});
+
+ipcMain.handle('seek-yt-track', async (event, seconds) => {
+  if (!bgPlayerWindow || bgPlayerWindow.isDestroyed()) return { success: true };
+  try {
+    await bgPlayerWindow.webContents.executeJavaScript(`
+      (() => {
+        const v = document.querySelector('video');
+        const p = document.getElementById('movie_player');
+        if (v) v.currentTime = ${Number(seconds) || 0};
+        if (p && p.seekTo) p.seekTo(${Number(seconds) || 0}, true);
+      })()
+    `);
+    return { success: true };
+  } catch (e) {
+    return { success: false };
+  }
+});
+
+ipcMain.handle('set-yt-volume', async (event, volume) => {
+  if (!bgPlayerWindow || bgPlayerWindow.isDestroyed()) return { success: true };
+  try {
+    const vol = Math.max(0, Math.min(1, Number(volume) || 0));
+    await bgPlayerWindow.webContents.executeJavaScript(`
+      (() => {
+        if (window.__activeFadeTimer) {
+          clearInterval(window.__activeFadeTimer);
+          window.__activeFadeTimer = null;
+        }
+        if (window.__activeFadeRaf) {
+          cancelAnimationFrame(window.__activeFadeRaf);
+          window.__activeFadeRaf = null;
+        }
+        const v = document.querySelector('video');
+        const p = document.getElementById('movie_player');
+        if (v) v.volume = ${vol};
+        if (p && p.setVolume) p.setVolume(${Math.round(vol * 100)});
+      })()
+    `);
+    return { success: true };
+  } catch (e) {
+    return { success: false };
+  }
+});
+
+ipcMain.handle('stop-yt-track', async () => {
+  requestedVideoId = null;
+  currentPlayingVideoId = null;
+  navigationInProgress = false;
+  endedSignalSentForVideoId = null;
+  if (!bgPlayerWindow || bgPlayerWindow.isDestroyed()) return { success: true };
+  try {
+    await bgPlayerWindow.loadURL('about:blank');
+    return { success: true };
+  } catch (e) {
+    return { success: false };
+  }
+});
 
 // IPC Handlers for Native Windows features
 ipcMain.handle('get-proxy-port', () => proxyPort);
@@ -402,40 +1210,29 @@ ipcMain.handle('get-proxy-port', () => proxyPort);
 ipcMain.handle('extract-stream-url', async (event, videoId) => {
   if (!videoId) return null;
   try {
-    const session = await getVisitorSession();
-    console.log(`[extract-stream-url] Got visitor session for ${videoId}. visitorData: ${session.visitorData ? 'YES' : 'NO'}`);
-    const audioInfo = await resolveBestAudioUrl(videoId, session);
-    console.log(`[extract-stream-url] Resolved audio for ${videoId}: ${audioInfo ? 'SUCCESS' : 'FAIL'} - ${audioInfo?.url?.slice(0, 50)}...`);
+    const audioInfo = await resolveBestAudioUrl(videoId);
     return audioInfo?.url || null;
   } catch (err) {
-    console.error('[extract-stream-url] Fatal error:', err);
     return null;
   }
 });
 
 ipcMain.handle('prefetch-stream-urls', async (event, videoIds) => {
   if (!Array.isArray(videoIds) || videoIds.length === 0) return;
-  const session = await getVisitorSession();
   for (const id of videoIds.slice(0, 3)) {
     if (id && !resolvedAudioCache.has(id)) {
-      resolveBestAudioUrl(id, session).catch(() => {});
+      resolveBestAudioUrl(id).catch(() => {});
     }
   }
 });
 
 ipcMain.handle('get-default-music-dir', () => {
-  const musicPath = path.join(os.homedir(), 'Music', 'OwO Music');
-  if (!fs.existsSync(musicPath)) {
-    try {
-      fs.mkdirSync(musicPath, { recursive: true });
-    } catch (e) {}
-  }
-  return musicPath;
+  return getDefaultMusicDirectory();
 });
 
 ipcMain.handle('save-audio-to-disk', async (event, { filename, buffer, targetDir }) => {
   try {
-    const dir = targetDir || path.join(os.homedir(), 'Music', 'OwO Music');
+    const dir = targetDir || getDefaultMusicDirectory();
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -451,7 +1248,7 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
   if (folderPath && fs.existsSync(folderPath)) {
     shell.openPath(folderPath);
   } else {
-    const defaultDir = path.join(os.homedir(), 'Music', 'OwO Music');
+    const defaultDir = getDefaultMusicDirectory();
     if (fs.existsSync(defaultDir)) {
       shell.openPath(defaultDir);
     }
@@ -468,7 +1265,7 @@ ipcMain.handle('select-directory', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'createDirectory'],
     title: 'Choose Music Download Folder',
-    defaultPath: path.join(os.homedir(), 'Music')
+    defaultPath: getDefaultMusicDirectory()
   });
   if (!result.canceled && result.filePaths.length > 0) {
     return result.filePaths[0];
@@ -525,72 +1322,89 @@ ipcMain.handle('get-genius-lyrics', async (event, query) => {
 
 ipcMain.handle('download-track-native', async (event, { videoId, title, artist, format, targetDir }) => {
   try {
-    const session = await getVisitorSession();
-    const audioInfo = await resolveBestAudioUrl(videoId, session);
+    let audioInfo = await resolveBestAudioUrl(videoId);
     if (!audioInfo || !audioInfo.url) {
       return { success: false, error: 'Could not resolve audio stream' };
     }
 
     event.sender.send('download-progress-event', { videoId, percent: 10 });
 
-    // 1. Probe stream header for total content length
-    let totalBytes = 0;
-    try {
-      const probeRes = await fetch(audioInfo.url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(3500)
-      });
-      totalBytes = Number(probeRes.headers.get('content-length') || 0);
-    } catch (e) {}
+    // 1. Determine total stream size via Range probe
+    let totalBytes = audioInfo.totalSize || 0;
+    if (!totalBytes) {
+      try {
+        const probeRes = await fetch(audioInfo.url, {
+          headers: {
+            ...(audioInfo.headers || {}),
+            'Range': 'bytes=0-1024'
+          },
+          signal: AbortSignal.timeout(3500)
+        });
+        const cr = probeRes.headers.get('content-range');
+        if (cr && cr.includes('/')) {
+          totalBytes = parseInt(cr.split('/')[1], 10) || 0;
+          audioInfo.totalSize = totalBytes;
+        }
+      } catch (e) {}
+    }
 
-    let completeBuffer;
+    if (!totalBytes || isNaN(totalBytes)) totalBytes = 3800000;
 
-    if (totalBytes > 200000) {
-      // 2. High-speed parallel unthrottled chunk download (4 streams in parallel)
-      const CHUNK_COUNT = 4;
-      const chunkSize = Math.ceil(totalBytes / CHUNK_COUNT);
-      let downloadedChunks = 0;
+    // 2. Sequential/Parallel bounded 512KB chunk download
+    const CHUNK_SIZE = 512 * 1024;
+    const chunks = [];
+    let downloadedBytes = 0;
 
-      const chunkPromises = [];
-      for (let i = 0; i < CHUNK_COUNT; i++) {
-        const start = i * chunkSize;
-        const end = Math.min(totalBytes - 1, (i + 1) * chunkSize - 1);
+    for (let start = 0; start < totalBytes; start += CHUNK_SIZE) {
+      const end = Math.min(start + CHUNK_SIZE - 1, totalBytes - 1);
+      const chunkRange = `bytes=${start}-${end}`;
 
-        chunkPromises.push((async () => {
-          const chunkRes = await fetch(audioInfo.url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-              'Range': `bytes=${start}-${end}`
-            }
-          });
-          const buf = await chunkRes.arrayBuffer();
-          downloadedChunks++;
-          event.sender.send('download-progress-event', {
-            videoId,
-            percent: Math.min(99, Math.round((downloadedChunks / CHUNK_COUNT) * 100))
-          });
-          return { index: i, buffer: Buffer.from(buf) };
-        })());
+      let chunkRes;
+      try {
+        chunkRes = await fetch(audioInfo.url, {
+          headers: {
+            ...(audioInfo.headers || {}),
+            'Range': chunkRange
+          },
+          signal: AbortSignal.timeout(8000)
+        });
+
+        if (!chunkRes.ok && (chunkRes.status === 403 || chunkRes.status === 404)) {
+          audioInfo = await resolveBestAudioUrl(videoId, true);
+          if (audioInfo?.url) {
+            chunkRes = await fetch(audioInfo.url, {
+              headers: {
+                ...(audioInfo.headers || {}),
+                'Range': chunkRange
+              },
+              signal: AbortSignal.timeout(8000)
+            });
+          }
+        }
+      } catch (e) {}
+
+      if (!chunkRes || !chunkRes.ok) {
+        throw new Error(`Failed to download audio chunk ${chunkRange}`);
       }
 
-      const results = await Promise.all(chunkPromises);
-      results.sort((a, b) => a.index - b.index);
-      completeBuffer = Buffer.concat(results.map(r => r.buffer));
-    } else {
-      // Fallback single stream
-      const streamRes = await fetch(audioInfo.url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+      const buf = await chunkRes.arrayBuffer();
+      chunks.push(Buffer.from(buf));
+      downloadedBytes += buf.byteLength;
+
+      event.sender.send('download-progress-event', {
+        videoId,
+        percent: Math.min(99, Math.round((downloadedBytes / totalBytes) * 90) + 10)
       });
-      const buf = await streamRes.arrayBuffer();
-      completeBuffer = Buffer.from(buf);
     }
+
+    const completeBuffer = Buffer.concat(chunks);
 
     const cleanArtistStr = (artist || 'Unknown Artist').replace(/[\\/:*?"<>|]/g, '_').trim();
     const cleanTitleStr = (title || 'Unknown Track').replace(/[\\/:*?"<>|]/g, '_').trim();
     const ext = format === 'm4a' ? 'm4a' : 'mp3';
     const fileName = `${cleanArtistStr} - ${cleanTitleStr}.${ext}`;
 
-    const dir = targetDir || path.join(os.homedir(), 'Music', 'OwO Music');
+    const dir = targetDir || getDefaultMusicDirectory();
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -614,7 +1428,7 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
 
 ipcMain.handle('delete-audio-from-disk', async (event, { title, artist, targetDir }) => {
   try {
-    const dir = targetDir || path.join(os.homedir(), 'Music', 'OwO Music');
+    const dir = targetDir || getDefaultMusicDirectory();
     const cleanArtistStr = (artist || '').replace(/[\\/:*?"<>|]/g, '_').trim();
     const cleanTitleStr = (title || '').replace(/[\\/:*?"<>|]/g, '_').trim();
     const files = [
@@ -636,7 +1450,7 @@ ipcMain.handle('delete-audio-from-disk', async (event, { title, artist, targetDi
 
 ipcMain.handle('check-audio-on-disk', async (event, { title, artist, targetDir }) => {
   try {
-    const dir = targetDir || path.join(os.homedir(), 'Music', 'OwO Music');
+    const dir = targetDir || getDefaultMusicDirectory();
     if (!fs.existsSync(dir)) return false;
     const cleanArtistStr = (artist || '').replace(/[\\/:*?"<>|]/g, '_').toLowerCase().trim();
     const cleanTitleStr = (title || '').replace(/[\\/:*?"<>|]/g, '_').toLowerCase().trim();
@@ -652,7 +1466,7 @@ ipcMain.handle('check-audio-on-disk', async (event, { title, artist, targetDir }
 
 ipcMain.handle('get-disk-audio-files', async (event, targetDir) => {
   try {
-    const dir = targetDir || path.join(os.homedir(), 'Music', 'OwO Music');
+    const dir = targetDir || getDefaultMusicDirectory();
     if (!fs.existsSync(dir)) return [];
     const files = await fs.promises.readdir(dir);
     return files.map(f => f.toLowerCase());
@@ -676,10 +1490,12 @@ function getLocalMusicConfigPath() {
 
 function getSavedLocalMusicFolders() {
   const configFile = getLocalMusicConfigPath();
-  const defaultFolders = [
-    path.join(os.homedir(), 'Music'),
-    path.join(os.homedir(), 'Downloads')
-  ].filter(p => fs.existsSync(p));
+  const defaultFolders = isPortable
+    ? [getDefaultMusicDirectory()]
+    : [
+        path.join(os.homedir(), 'Music'),
+        path.join(os.homedir(), 'Downloads')
+      ].filter(p => fs.existsSync(p));
 
   if (fs.existsSync(configFile)) {
     try {
@@ -800,7 +1616,7 @@ ipcMain.handle('add-local-music-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
     title: 'Select Folder with Music Files to Scan',
-    defaultPath: path.join(os.homedir(), 'Music')
+    defaultPath: getDefaultMusicDirectory()
   });
 
   if (!result.canceled && result.filePaths.length > 0) {
@@ -830,7 +1646,7 @@ function setupMusicFolderWatcher(customDir) {
       try { musicFolderWatcher.close(); } catch (e) {}
       musicFolderWatcher = null;
     }
-    const dir = customDir || path.join(os.homedir(), 'Music', 'OwO Music');
+    const dir = customDir || getDefaultMusicDirectory();
     if (!fs.existsSync(dir)) {
       try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
     }

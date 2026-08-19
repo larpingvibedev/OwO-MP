@@ -73,5 +73,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = () => callback();
     ipcRenderer.on('disk-music-folder-changed', listener);
     return () => ipcRenderer.removeListener('disk-music-folder-changed', listener);
+  },
+  playYouTubeTrack: async (videoId, startTime = 0, volume = 1) => {
+    return await ipcRenderer.invoke('play-yt-track', { videoId, startTime, volume });
+  },
+  pauseYouTubeTrack: async () => {
+    return await ipcRenderer.invoke('pause-yt-track');
+  },
+  resumeYouTubeTrack: async (volume) => {
+    return await ipcRenderer.invoke('resume-yt-track', volume);
+  },
+  seekYouTubeTrack: async (seconds) => {
+    return await ipcRenderer.invoke('seek-yt-track', seconds);
+  },
+  setYouTubeVolume: async (volume) => {
+    return await ipcRenderer.invoke('set-yt-volume', volume);
+  },
+  stopYouTubeTrack: async () => {
+    return await ipcRenderer.invoke('stop-yt-track');
+  },
+  onYouTubeStateUpdate: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('yt-player-state-update', listener);
+    return () => ipcRenderer.removeListener('yt-player-state-update', listener);
   }
 });
