@@ -208,11 +208,11 @@ class SupabaseSyncService {
 
     // Set queue if provided
     if (payload.queue && payload.queue.length > 0) {
-      player.setQueue(payload.queue);
+      player.setQueue(payload.queue, 0, undefined, false);
     }
 
     // Set track
-    player.setCurrentTrack(payload.track);
+    player.setCurrentTrack(payload.track, false);
     player.setCurrentTime(payload.currentTime);
     player.setIsPlaying(payload.isPlaying);
 

@@ -11,6 +11,8 @@ import {
 } from '../services/downloadService';
 import { supabaseSync } from '../services/supabaseSyncService';
 
+export type PlaybackContextType = 'radio' | 'finite' | 'user_playlist';
+
 interface PlayerState {
   // Current track & playback
   currentTrack: Track | null;
@@ -44,6 +46,7 @@ interface PlayerState {
   // YouTube Music Style Up Next & Drawer State
   autoplay: boolean;
   playingFrom: string;
+  playbackContext: PlaybackContextType | null;
   recommendedUpNext: Track[];
   queueSessionId: string;
   activePlayerTab: 'up_next' | 'lyrics' | 'related';
@@ -80,14 +83,15 @@ interface PlayerState {
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setLibraryFilter: (filter: 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'downloads') => void;
-  setCurrentTrack: (track: Track) => void;
+  setCurrentTrack: (track: Track, forceRefresh?: boolean, contextType?: PlaybackContextType) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   togglePlayPause: () => void;
   setCurrentTime: (time: number) => void;
   setDuration: (duration: number) => void;
   setVolume: (volume: number) => void;
   
-  setQueue: (tracks: Track[], initialIndex?: number, playingFrom?: string) => void;
+  setQueue: (tracks: Track[], initialIndex?: number, playingFrom?: string, forceRefresh?: boolean, contextType?: PlaybackContextType) => void;
+  setPlaybackContext: (playbackContext: PlaybackContextType | null) => void;
   addToQueue: (track: Track) => void;
   removeFromQueue: (index: number) => void;
   nextTrack: () => void;
@@ -154,6 +158,93 @@ interface PlayerState {
   clearAllDownloads: () => Promise<void>;
 }
 
+let isFetchingContinuation = false;
+
+async function checkAndTriggerContinuation(
+  get: () => PlayerState,
+  set: (fn: (state: PlayerState) => Partial<PlayerState> | PlayerState) => void
+) {
+  const { 
+    queue, 
+    shuffledQueue, 
+    queueIndex, 
+    isShuffle, 
+    playbackContext, 
+    autoplay, 
+    favorites, 
+    playHistory, 
+    dislikedTracks, 
+    blockedArtists, 
+    queueSessionId 
+  } = get();
+
+  if (!autoplay) return;
+  if (isFetchingContinuation) return;
+
+  const activeQueue = isShuffle ? shuffledQueue : queue;
+  if (activeQueue.length === 0) return;
+
+  // Trigger when remaining tracks including the current one is 3 or less
+  const remainingTracks = activeQueue.length - queueIndex;
+  if (remainingTracks > 3) return;
+
+  // Seamless queue extension for user playlists and finite queues
+  if (playbackContext !== 'user_playlist' && playbackContext !== 'finite') return;
+
+  isFetchingContinuation = true;
+  const currentSessionId = queueSessionId;
+
+  try {
+    const queuedIds = new Set(queue.map(t => t.id));
+    shuffledQueue.forEach(t => queuedIds.add(t.id));
+    
+    // Use the last up to 4 tracks in queue as context seeds
+    const seedContext = activeQueue.slice(-4);
+    const targetMix = await fetchUpNextMix(
+      seedContext,
+      favorites,
+      playHistory,
+      queuedIds,
+      dislikedTracks,
+      blockedArtists,
+      false, // non-forced to utilize warm cache if available
+      50     // Target limit: ~50 tracks
+    );
+
+    // Verify queue context/session has not changed while fetching
+    if (get().queueSessionId !== currentSessionId) return;
+
+    if (targetMix && targetMix.length > 0) {
+      const existingQueueIds = new Set(get().queue.map(t => t.id));
+      const existingSignatures = new Set(
+        get().queue.map(t => `${(t.title || '').trim().toLowerCase()}:::${(t.artist || '').trim().toLowerCase()}`)
+      );
+      
+      const uniqueNewTracks: Track[] = [];
+      for (const track of targetMix) {
+        if (!track || !track.id) continue;
+        const sig = `${(track.title || '').trim().toLowerCase()}:::${(track.artist || '').trim().toLowerCase()}`;
+        if (!existingQueueIds.has(track.id) && !existingSignatures.has(sig)) {
+          existingQueueIds.add(track.id);
+          existingSignatures.add(sig);
+          uniqueNewTracks.push(track);
+        }
+      }
+
+      if (uniqueNewTracks.length > 0) {
+        set((state) => ({
+          queue: [...state.queue, ...uniqueNewTracks],
+          shuffledQueue: [...state.shuffledQueue, ...uniqueNewTracks]
+        }));
+      }
+    }
+  } catch (err) {
+    console.warn('[usePlayerStore] Continuation fetch error:', err);
+  } finally {
+    isFetchingContinuation = false;
+  }
+}
+
 export const usePlayerStore = create<PlayerState>()(
   persist(
     (set, get) => ({
@@ -213,15 +304,19 @@ export const usePlayerStore = create<PlayerState>()(
   toggleSidebar: () => set((state) => ({ isSidebarCollapsed: !state.isSidebarCollapsed })),
   setSidebarCollapsed: (isSidebarCollapsed) => set({ isSidebarCollapsed }),
   setLibraryFilter: (libraryFilter) => set({ libraryFilter }),
-  setCurrentTrack: (track) => {
+  playbackContext: null,
+  setPlaybackContext: (playbackContext) => set({ playbackContext }),
+  setCurrentTrack: (track, forceRefresh = true, contextType) => {
     const context = `${track.title} Mix`;
     const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const newContextType = contextType !== undefined ? contextType : 'radio';
     set((state) => ({ 
       currentTrack: track, 
       currentTime: 0, 
       duration: track.duration || 0,
       isPlaying: true, 
       playingFrom: context,
+      playbackContext: newContextType,
       queueSessionId: sessionId,
       queue: [track],
       shuffledQueue: [track],
@@ -231,14 +326,18 @@ export const usePlayerStore = create<PlayerState>()(
       playNonce: state.playNonce + 1
     }));
 
-    // Synthesize mix anchored to this seed track
-    fetchUpNextMix([track], get().favorites, get().playHistory, new Set([track.id]), get().dislikedTracks, get().blockedArtists)
-      .then(mix => {
-        if (mix && mix.length > 0 && get().queueSessionId === sessionId) {
-          set({ recommendedUpNext: mix });
-        }
-      })
-      .catch(() => {});
+    if (newContextType !== 'user_playlist') {
+      // Synthesize mix anchored to this seed track
+      fetchUpNextMix([track], get().favorites, get().playHistory, new Set([track.id]), get().dislikedTracks, get().blockedArtists, forceRefresh)
+        .then(mix => {
+          if (mix && mix.length > 0 && get().queueSessionId === sessionId) {
+            set({ recommendedUpNext: mix });
+          }
+        })
+        .catch(() => {});
+    } else {
+      checkAndTriggerContinuation(get, set);
+    }
   },
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   togglePlayPause: () => set((state) => ({ isPlaying: !state.isPlaying })),
@@ -279,7 +378,7 @@ export const usePlayerStore = create<PlayerState>()(
   }),
   toggleRotatingCD: () => set((state) => ({ useRotatingCD: !state.useRotatingCD })),
 
-  setQueue: (tracks, initialIndex = 0, playingFrom) => {
+  setQueue: (tracks, initialIndex = 0, playingFrom, forceRefresh = true, contextType) => {
     const isShuffle = get().isShuffle;
     let shuffled = [...tracks];
     let newIndex = initialIndex;
@@ -302,12 +401,19 @@ export const usePlayerStore = create<PlayerState>()(
     const sourceContext = playingFrom || (cur ? `${cur.title} Mix` : 'Queue');
     const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+    const resolvedContextType = contextType !== undefined ? contextType : (
+      playingFrom && (playingFrom.endsWith('Mix') || playingFrom.includes('Discover') || playingFrom.includes('Radio') || playingFrom.includes('Supermix'))
+        ? 'radio'
+        : 'finite'
+    );
+
     set((state) => ({
       queue: tracks,
       shuffledQueue: shuffled,
       queueIndex: newIndex,
       currentTrack: cur,
       playingFrom: sourceContext,
+      playbackContext: resolvedContextType,
       queueSessionId: sessionId,
       currentTime: 0,
       duration: cur?.duration || 0,
@@ -317,15 +423,19 @@ export const usePlayerStore = create<PlayerState>()(
       playNonce: state.playNonce + 1
     }));
 
-    // Synthesize multi-track radio mix for this entire queue session
-    const queuedIds = new Set(tracks.map(t => t.id));
-    fetchUpNextMix(tracks, get().favorites, get().playHistory, queuedIds, get().dislikedTracks, get().blockedArtists)
-      .then(mix => {
-        if (mix && mix.length > 0 && get().queueSessionId === sessionId) {
-          set({ recommendedUpNext: mix });
-        }
-      })
-      .catch(() => {});
+    if (resolvedContextType !== 'user_playlist') {
+      // Synthesize multi-track radio mix for this entire queue session
+      const queuedIds = new Set(tracks.map(t => t.id));
+      fetchUpNextMix(tracks, get().favorites, get().playHistory, queuedIds, get().dislikedTracks, get().blockedArtists, forceRefresh)
+        .then(mix => {
+          if (mix && mix.length > 0 && get().queueSessionId === sessionId) {
+            set({ recommendedUpNext: mix });
+          }
+        })
+        .catch(() => {});
+    } else {
+      checkAndTriggerContinuation(get, set);
+    }
   },
 
   
@@ -377,7 +487,7 @@ export const usePlayerStore = create<PlayerState>()(
       track,
       ...state.shuffledQueue.slice(insertIdx)
     ];
-    return {
+    return { 
       queue: newQueue,
       shuffledQueue: newShuffled,
       toastMessage: `Playing "${track.title}" next`
@@ -402,6 +512,7 @@ export const usePlayerStore = create<PlayerState>()(
     const nextIndex = queueIndex + 1;
     if (nextIndex < activeQueue.length) {
       set((state) => ({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, isPlaying: true, playNonce: state.playNonce + 1 }));
+      checkAndTriggerContinuation(get, set);
     } else if (repeatMode === 'all' && activeQueue.length > 0) {
       set((state) => ({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: true, playNonce: state.playNonce + 1 }));
     } else if (autoplay) {
@@ -426,7 +537,7 @@ export const usePlayerStore = create<PlayerState>()(
         if (remainingMix.length < 5) {
           const queuedIds = new Set(newQueue.map(t => t.id));
           const recentSeeds = newQueue.slice(-4);
-          fetchUpNextMix(recentSeeds, favorites, playHistory, queuedIds, get().dislikedTracks, get().blockedArtists)
+          fetchUpNextMix(recentSeeds, favorites, playHistory, queuedIds, get().dislikedTracks, get().blockedArtists, false)
             .then(fresh => {
               if (fresh && fresh.length > 0) {
                 const existingIds = new Set([...newQueue, ...remainingMix].map(t => t.id));
@@ -444,7 +555,7 @@ export const usePlayerStore = create<PlayerState>()(
         try {
           const queuedIds = new Set(activeQueue.map(t => t.id));
           const seedContext = activeQueue.length > 0 ? activeQueue.slice(-4) : currentTrack;
-          const freshMix = await fetchUpNextMix(seedContext, favorites, playHistory, queuedIds, get().dislikedTracks, get().blockedArtists);
+          const freshMix = await fetchUpNextMix(seedContext, favorites, playHistory, queuedIds, get().dislikedTracks, get().blockedArtists, false);
           if (freshMix && freshMix.length > 0) {
             const autoTrack = freshMix[0];
             const remainingMix = freshMix.slice(1);
@@ -977,7 +1088,7 @@ export const usePlayerStore = create<PlayerState>()(
     set({ isPlaying: false });
     try {
       const state = get();
-      const mix = await fetchUpNextMix(seedTrack, state.favorites, state.playHistory, new Set(), state.dislikedTracks, state.blockedArtists);
+      const mix = await fetchUpNextMix(seedTrack, state.favorites, state.playHistory, new Set(), state.dislikedTracks, state.blockedArtists, true);
       const radioQueue = [seedTrack, ...mix.filter(t => t.id !== seedTrack.id)];
       get().setQueue(radioQueue, 0, `${seedTrack.title} Mix`);
       set({ isPlaying: true });

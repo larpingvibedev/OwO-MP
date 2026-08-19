@@ -105,7 +105,7 @@ export function Discover() {
   const handlePlayTrack = (track: Track, tracksQueue: Track[] = [track], index: number = 0, contextName?: string) => {
     addRecentSearchedTrack(track);
     addRecentSearchQuery(track.artist);
-    setQueue(tracksQueue, index, contextName || `${track.title} Mix`);
+    setQueue(tracksQueue, index, contextName || `${track.title} Mix`, true, contextName ? 'radio' : 'finite');
     setIsPlaying(true);
   };
 
@@ -909,7 +909,7 @@ export function Discover() {
                     className="hero-play-btn"
                     onClick={() => {
                       if (activePlaylistDetail.tracks.length > 0) {
-                        setQueue(activePlaylistDetail.tracks, 0, activePlaylistDetail.playlist.name);
+                        setQueue(activePlaylistDetail.tracks, 0, activePlaylistDetail.playlist.name, true, 'finite');
                         setIsPlaying(true);
                       }
                     }}
@@ -967,7 +967,7 @@ export function Discover() {
                         key={`pl-track-${track.id}-${idx}`}
                         className={`track-row ${isCurrent ? 'active-playing' : ''}`}
                         onClick={() => {
-                          setQueue(activePlaylistDetail.tracks, idx, activePlaylistDetail.playlist.name);
+                          setQueue(activePlaylistDetail.tracks, idx, activePlaylistDetail.playlist.name, true, 'finite');
                           setIsPlaying(true);
                         }}
                       >

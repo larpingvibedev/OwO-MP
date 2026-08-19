@@ -125,7 +125,7 @@ export function TopBar({ onOpenDeviceModal }: TopBarProps) {
         streamUrl: entity.videoId ? `https://www.youtube.com/watch?v=${entity.videoId}` : '',
         source: 'youtube'
       };
-      setQueue([track], 0, `${track.title} Mix`);
+      setQueue([track], 0, `${track.title} Mix`, true, 'finite');
       setIsPlaying(true);
       addRecentSearchedTrack(track);
     } else {

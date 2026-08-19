@@ -2462,16 +2462,18 @@ export async function fetchUpNextMix(
   playHistory: Record<string, { track: Track; playCount: number }> = {},
   excludeIds: Set<string> = new Set(),
   dislikedTracks: Track[] = [],
-  blockedArtists: string[] = []
+  blockedArtists: string[] = [],
+  forceRefresh: boolean = false,
+  limit: number = 32
 ): Promise<Track[]> {
   const seedList: Track[] = Array.isArray(seed) ? seed.filter(Boolean) : (seed ? [seed] : []);
   if (seedList.length === 0) return [];
 
   // Instant In-Memory Cache (Valid for 10 minutes)
   const cacheKey = seedList.map(s => s.id || `${s.artist}-${s.title}`).sort().join('::') + 
-    `_blk_${(blockedArtists || []).sort().join(',')}_dis_${(dislikedTracks || []).map(d => d.id).sort().join(',')}`;
+    `_blk_${(blockedArtists || []).sort().join(',')}_dis_${(dislikedTracks || []).map(d => d.id).sort().join(',')}_lim_${limit}`;
   const cached = upNextMixCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
+  if (!forceRefresh && cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
     const queueIds = new Set(seedList.map(s => s.id));
     return cached.tracks.filter(t => !queueIds.has(t.id));
   }
@@ -2510,6 +2512,9 @@ export async function fetchUpNextMix(
   const collabPools: Map<string, Track[]> = new Map();
   const similarArtistPools: Map<string, Track[]> = new Map();
 
+  const itunesSongLimit = Math.max(35, Math.min(60, limit + 10));
+  const itunesFeatLimit = Math.max(15, Math.min(30, Math.floor(limit / 2)));
+
   const artistFetches = activeSeedArtists.map(async (artistName) => {
     const artistLower = artistName.toLowerCase().trim();
     const artistTracks: Track[] = [];
@@ -2518,9 +2523,9 @@ export async function fetchUpNextMix(
     // Parallel fetch: iTunes Exact Artist Catalog + YouTube Topic Catalog + Real YouTube Music Similar Artists
     try {
       const [artistTermRes, generalSongRes, ytTopicItems, similarArtists] = await Promise.allSettled([
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&attribute=artistTerm&entity=song&limit=35`)
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&attribute=artistTerm&entity=song&limit=${itunesSongLimit}`)
           .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' feat')}&entity=song&limit=15`)
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' feat')}&entity=song&limit=${itunesFeatLimit}`)
           .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
         fetchFastFromInvidious(`${artistName} Topic`),
         fetchSimilarArtists(artistName, seedList[0]?.id)
@@ -2688,7 +2693,7 @@ export async function fetchUpNextMix(
 
   // Round-robin blend across all seed artists in the queue
   let addedInRound = true;
-  while (finalMix.length < 32 && addedInRound) {
+  while (finalMix.length < limit && addedInRound) {
     addedInRound = false;
 
     // A. One track per seed artist in the queue

@@ -425,7 +425,7 @@ export function Library() {
       showToast('No liked songs yet! Like songs with the heart button to populate.');
       return;
     }
-    setQueue(favorites, 0, 'Liked Music');
+    setQueue(favorites, 0, 'Liked Music', true, 'user_playlist');
     setIsPlaying(true);
   };
 
@@ -434,7 +434,7 @@ export function Library() {
       showToast(`"${pl.name}" has no songs yet.`);
       return;
     }
-    setQueue(pl.tracks, 0, `${pl.name} Playlist`);
+    setQueue(pl.tracks, 0, `${pl.name} Playlist`, true, 'user_playlist');
     setIsPlaying(true);
   };
 
@@ -443,7 +443,7 @@ export function Library() {
       showToast('No local audio tracks available to play.');
       return;
     }
-    setQueue(combinedLocalTracks, 0, 'Local Files & Offline');
+    setQueue(combinedLocalTracks, 0, 'Local Files & Offline', true, 'user_playlist');
     setIsPlaying(true);
   };
 
@@ -453,7 +453,7 @@ export function Library() {
       return;
     }
     const tracks = [...combinedLocalTracks].sort(() => Math.random() - 0.5);
-    setQueue(tracks, 0, 'Local Files (Shuffle)');
+    setQueue(tracks, 0, 'Local Files (Shuffle)', true, 'user_playlist');
     setIsPlaying(true);
   };
 
@@ -841,7 +841,7 @@ export function Library() {
                   onClick={() => {
                     if (favorites.length > 0) {
                       const shuffled = [...favorites].sort(() => Math.random() - 0.5);
-                      setQueue(shuffled, 0, 'Liked Songs (Shuffle)');
+                      setQueue(shuffled, 0, 'Liked Songs (Shuffle)', true, 'user_playlist');
                       setIsPlaying(true);
                     }
                   }}
@@ -866,7 +866,7 @@ export function Library() {
                   key={`${track.id}-${idx}`}
                   className="liked-track-row"
                   onClick={() => {
-                    setQueue(favorites, idx, 'Liked Music');
+                    setQueue(favorites, idx, 'Liked Music', true, 'user_playlist');
                     setIsPlaying(true);
                   }}
                   onContextMenu={(e) => openTrackContextMenu(e, track)}
@@ -1361,7 +1361,7 @@ export function Library() {
                       if (!isCurrent) e.currentTarget.style.backgroundColor = 'transparent';
                     }}
                     onClick={() => {
-                      setQueue(combinedLocalTracks, index, 'Local Files & Offline');
+                      setQueue(combinedLocalTracks, index, 'Local Files & Offline', true, 'user_playlist');
                       setIsPlaying(true);
                     }}
                     onContextMenu={(e) => openTrackContextMenu(e, trk)}

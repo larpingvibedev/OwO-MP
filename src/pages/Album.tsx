@@ -320,12 +320,15 @@ export function Album() {
   const isAllAlbumDownloaded = Boolean(album && trackCount > 0 && safeTracks.every(t => t && t.id && Boolean(downloadedTrackIds[t.id])));
   const isAlbumDownloading = Boolean(album && safeTracks.some(t => t && t.id && downloadingTrackIds[t.id] !== undefined));
 
+  const isCustomUserPlaylist = Boolean(album && (playlists || []).some(p => p && p.id === album.id) && album.id !== 'liked');
+  const albumContextType = isCustomUserPlaylist ? 'user_playlist' : 'finite';
+
   const handlePlayTrack = (track: Track) => {
     if (isSameTrack(currentTrack, track)) {
       togglePlayPause();
     } else {
       const idx = safeTracks.findIndex(t => isSameTrack(t, track));
-      setQueue(safeTracks, Math.max(0, idx), `${album.name}`);
+      setQueue(safeTracks, Math.max(0, idx), `${album.name}`, true, albumContextType);
       setIsPlaying(true);
     }
   };
@@ -334,17 +337,15 @@ export function Album() {
     if (isAnyTrackActiveInRelease) {
       togglePlayPause();
     } else if (safeTracks.length > 0) {
-      setQueue(safeTracks, 0, `${album.name}`);
+      setQueue(safeTracks, 0, `${album.name}`, true, albumContextType);
       setIsPlaying(true);
     }
   };
 
-  const isCustomUserPlaylist = Boolean(album && (playlists || []).some(p => p && p.id === album.id) && album.id !== 'liked');
-
   const handleShuffleRelease = () => {
     if (!album || safeTracks.length === 0) return;
     const shuffled = [...safeTracks].sort(() => Math.random() - 0.5);
-    setQueue(shuffled, 0, `${album.name} (Shuffle)`);
+    setQueue(shuffled, 0, `${album.name} (Shuffle)`, true, albumContextType);
     setIsPlaying(true);
   };
 

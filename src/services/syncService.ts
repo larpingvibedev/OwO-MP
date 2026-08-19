@@ -95,7 +95,7 @@ class DeviceSyncManager {
       case 'SYNC_STATE':
       case 'PLAY_TRACK':
         if (payload.track && payload.track.id !== store.currentTrack?.id) {
-          store.setCurrentTrack(payload.track);
+          store.setCurrentTrack(payload.track, false);
         }
         if (payload.isPlaying !== undefined) store.setIsPlaying(payload.isPlaying);
         if (payload.currentTime !== undefined) store.setCurrentTime(payload.currentTime);
