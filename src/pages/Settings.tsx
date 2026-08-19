@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Wifi, 
-  CheckCircle2, 
   Disc,
   Sliders,
   HardDrive,
@@ -24,7 +23,8 @@ import {
   getCustomDirectoryName, 
   clearCustomDirectory,
   getPreferredDownloadFormat,
-  setPreferredDownloadFormat
+  setPreferredDownloadFormat,
+  clearAllOfflineStorage
 } from '../services/downloadService';
 
 export function Settings() {
@@ -101,9 +101,11 @@ export function Settings() {
     setTimeout(() => setSearchesCleared(false), 2500);
   };
 
-  const handleFactoryReset = () => {
+  const handleFactoryReset = async () => {
     try {
+      await clearAllOfflineStorage().catch(console.warn);
       localStorage.clear();
+      sessionStorage.clear();
       window.location.href = '/';
     } catch (e) {
       window.location.reload();
@@ -231,22 +233,6 @@ export function Settings() {
           >
             <div className="settings-switch-thumb" />
           </div>
-        </div>
-
-        {/* Audio Engine Resolver Status */}
-        <div className="settings-row">
-          <div className="settings-row-info">
-            <div className="settings-row-label">
-              <span>Studio Audio Stream Engine</span>
-            </div>
-            <div className="settings-row-desc">
-              Streams high-bitrate studio master tracks with automatic video ad and silence filtering.
-            </div>
-          </div>
-          <span className="settings-badge" style={{ backgroundColor: 'rgba(46, 204, 113, 0.15)', color: '#2ecc71' }}>
-            <CheckCircle2 size={12} />
-            <span>High Quality (160 kbps Opus)</span>
-          </span>
         </div>
       </div>
 
