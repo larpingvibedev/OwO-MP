@@ -94,6 +94,7 @@ interface PlayerState {
   setPlaybackContext: (playbackContext: PlaybackContextType | null) => void;
   addToQueue: (track: Track) => void;
   removeFromQueue: (index: number) => void;
+  reorderQueue: (startIndex: number, endIndex: number) => void;
   nextTrack: () => void;
   prevTrack: () => void;
   
@@ -502,6 +503,41 @@ export const usePlayerStore = create<PlayerState>()(
       newIndex = Math.max(0, state.queueIndex - 1);
     }
     return { queue: newQueue, shuffledQueue: newShuffled, queueIndex: newIndex };
+  }),
+
+  reorderQueue: (startIndex: number, endIndex: number) => set((state) => {
+    const isShuffle = state.isShuffle;
+    const targetQueue = isShuffle ? [...state.shuffledQueue] : [...state.queue];
+
+    if (
+      startIndex < 0 ||
+      startIndex >= targetQueue.length ||
+      endIndex < 0 ||
+      endIndex >= targetQueue.length ||
+      startIndex === endIndex
+    ) {
+      return {};
+    }
+
+    const [movedTrack] = targetQueue.splice(startIndex, 1);
+    targetQueue.splice(endIndex, 0, movedTrack);
+
+    let newQueueIndex = state.queueIndex;
+    if (startIndex === state.queueIndex) {
+      // The currently playing track was moved
+      newQueueIndex = endIndex;
+    } else if (startIndex < state.queueIndex && endIndex >= state.queueIndex) {
+      // Track moved from before currently playing to after
+      newQueueIndex = state.queueIndex - 1;
+    } else if (startIndex > state.queueIndex && endIndex <= state.queueIndex) {
+      // Track moved from after currently playing to before
+      newQueueIndex = state.queueIndex + 1;
+    }
+
+    if (isShuffle) {
+      return { shuffledQueue: targetQueue, queueIndex: newQueueIndex };
+    }
+    return { queue: targetQueue, queueIndex: newQueueIndex };
   }),
   
   nextTrack: async () => {
