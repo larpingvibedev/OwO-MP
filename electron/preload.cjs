@@ -96,5 +96,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('yt-player-state-update', listener);
     return () => ipcRenderer.removeListener('yt-player-state-update', listener);
+  },
+  onBgAudioFFT: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('bg-audio-fft-event', listener);
+    return () => ipcRenderer.removeListener('bg-audio-fft-event', listener);
   }
 });
+

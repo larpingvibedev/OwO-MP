@@ -186,6 +186,7 @@ export const AudioPlayer = () => {
       const localFilePath = (currentTrack as any).filePath || (currentTrack.id.startsWith('local-') ? (currentTrack as any).filePath : null);
       if (localFilePath) {
         isOnlineYtTrackRef.current = false;
+        audioEngine.setPlaybackSource('local');
         electronAPI?.stopYouTubeTrack?.();
 
         let proxyPort = 41721;
@@ -211,6 +212,7 @@ export const AudioPlayer = () => {
       if (isCancelled) return;
       if (offlineBlobUrl) {
         isOnlineYtTrackRef.current = false;
+        audioEngine.setPlaybackSource('local');
         electronAPI?.stopYouTubeTrack?.();
 
         if (audioRef.current) {
@@ -229,6 +231,7 @@ export const AudioPlayer = () => {
       // B. Direct Blob Preview
       if (currentTrack.resolvedStreamUrl?.startsWith('blob:')) {
         isOnlineYtTrackRef.current = false;
+        audioEngine.setPlaybackSource('local');
         electronAPI?.stopYouTubeTrack?.();
 
         if (audioRef.current) {
@@ -262,6 +265,7 @@ export const AudioPlayer = () => {
         try {
           if (electronAPI?.playYouTubeTrack) {
             isOnlineYtTrackRef.current = true;
+            audioEngine.setPlaybackSource('youtube');
             console.log(`[AudioPlayer] Playing via native background engine for ${currentTrack.title} (${videoId}) with volume ${volume}`);
             const playRes = await electronAPI.playYouTubeTrack(videoId, 0, volume);
             
@@ -282,6 +286,7 @@ export const AudioPlayer = () => {
 
           if (isCancelled) return;
           isOnlineYtTrackRef.current = false;
+          audioEngine.setPlaybackSource('local');
 
           if (audioRef.current) {
             audioRef.current.src = directStreamUrl;
@@ -302,6 +307,7 @@ export const AudioPlayer = () => {
         showToast(`Could not find stream for "${currentTrack.title}"`);
         nextTrack();
       }
+
 
       prefetchUpcoming();
     }

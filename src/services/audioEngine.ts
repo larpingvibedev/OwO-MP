@@ -1,8 +1,10 @@
 /**
  * Global Web Audio API Engine & Real-Time Spectrum Analyzer
- * Connects directly to the HTML5 Audio Element to extract 100% accurate FFT frequency spectrum data.
- * Features Volume-Independent Analysis: audio flows into AnalyserNode at full resolution before GainNode controls speaker volume.
+ * Connects directly to HTML5 Audio Element & Background YouTube Engine to extract 100% accurate FFT frequency spectrum data.
+ * Features Volume-Independent Analysis: audio is analyzed at full resolution before volume attenuation controls speaker output.
  */
+
+export type PlaybackSource = 'youtube' | 'local' | 'none';
 
 class AudioEngineManager {
   private audioCtx: AudioContext | null = null;
@@ -13,6 +15,38 @@ class AudioEngineManager {
   private freqData: Uint8Array | null = null;
   private isConnected = false;
   private currentVolume = 1.0;
+
+  // Source selection & Background YouTube Stream State
+  private playbackSource: PlaybackSource = 'none';
+  private bgFreqData: Uint8Array | null = null;
+  private bgLastUpdateTime = 0;
+
+  constructor() {
+    this.setupBgListener();
+  }
+
+  private setupBgListener(): void {
+    const electronAPI = (window as any).electronAPI;
+    if (electronAPI?.onBgAudioFFT) {
+      electronAPI.onBgAudioFFT((data: Uint8Array | number[]) => {
+        if (data) {
+          if (!this.bgFreqData || this.bgFreqData.length !== (data.length || (data as any).byteLength)) {
+            this.bgFreqData = new Uint8Array(data);
+          } else {
+            this.bgFreqData.set(data as any);
+          }
+          this.bgLastUpdateTime = performance.now();
+        }
+      });
+    }
+  }
+
+  /**
+   * Explicitly configure the active playback source for FFT analysis.
+   */
+  public setPlaybackSource(source: PlaybackSource): void {
+    this.playbackSource = source;
+  }
 
   /**
    * Initializes the Web Audio API context and connects the audio element to the analyser.
@@ -100,6 +134,9 @@ class AudioEngineManager {
    * Returns whether Web Audio API is actively connected and playing.
    */
   public isAudioActive(): boolean {
+    if (this.playbackSource === 'youtube') {
+      return (performance.now() - this.bgLastUpdateTime) < 400;
+    }
     return this.isConnected && Boolean(this.audioElement && !this.audioElement.paused && this.audioElement.currentTime > 0);
   }
 
@@ -115,28 +152,15 @@ class AudioEngineManager {
   }
 
   /**
-   * Returns normalized real-time frequency data (0.0 to 1.0) resampled to `barCount` bars.
-   * Operates on source audio dynamics, completely independent of the volume slider setting.
+   * Resamples raw FFT byte frequency array to `barCount` bars using dynamic acoustic curve.
    */
-  public getLiveFrequencies(barCount: number = 42, layout: 'bell' | 'linear' = 'bell'): number[] | null {
-    if (!this.analyser || !this.freqData || !this.audioCtx) return null;
+  private processFrequencyBins(freqArray: Uint8Array, barCount: number, layout: 'bell' | 'linear'): number[] | null {
+    const len = freqArray.length;
+    if (!len) return null;
 
-    // If audio element is paused or not actively streaming direct audio, return null
-    if (!this.audioElement || this.audioElement.paused || this.audioElement.currentTime <= 0) {
-      return null;
-    }
-
-    if (this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume().catch(() => {});
-    }
-
-    this.analyser.getByteFrequencyData(this.freqData as any);
-
-    // Verify real audio signal energy is flowing through the buffer
     let sum = 0;
-    const len = this.freqData.length;
     for (let i = 0; i < len; i++) {
-      sum += this.freqData[i];
+      sum += freqArray[i];
     }
     if (sum < 0.5) {
       return null;
@@ -156,7 +180,7 @@ class AudioEngineManager {
       const highIdx = Math.min(maxMusicalBin, Math.ceil(binIdx));
       const frac = binIdx - lowIdx;
 
-      const rawVal = (this.freqData![lowIdx] || 0) * (1 - frac) + (this.freqData![highIdx] || 0) * frac;
+      const rawVal = (freqArray[lowIdx] || 0) * (1 - frac) + (freqArray[highIdx] || 0) * frac;
       
       // rawVal is 0..255 from getByteFrequencyData
       const baseRatio = rawVal / 255.0;
@@ -182,6 +206,52 @@ class AudioEngineManager {
 
     return result;
   }
+
+  /**
+   * Returns normalized real-time frequency data (0.0 to 1.0) resampled to `barCount` bars.
+   * Operates on source audio dynamics, completely independent of the volume slider setting.
+   */
+  public getLiveFrequencies(barCount: number = 42, layout: 'bell' | 'linear' = 'bell'): number[] | null {
+    // 1. YouTube Background Stream Source
+    if (this.playbackSource === 'youtube') {
+      if (!this.bgFreqData || (performance.now() - this.bgLastUpdateTime) > 350) {
+        return null;
+      }
+      return this.processFrequencyBins(this.bgFreqData, barCount, layout);
+    }
+
+    // 2. Local HTML5 Audio Source
+    if (this.playbackSource === 'local') {
+      if (!this.analyser || !this.freqData || !this.audioCtx) return null;
+
+      if (!this.audioElement || this.audioElement.paused || this.audioElement.currentTime <= 0) {
+        return null;
+      }
+
+      if (this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume().catch(() => {});
+      }
+
+      this.analyser.getByteFrequencyData(this.freqData as any);
+      return this.processFrequencyBins(this.freqData, barCount, layout);
+    }
+
+    // 3. Fallback: Opportunistic Auto-detect if source wasn't explicitly set
+    if (this.bgFreqData && (performance.now() - this.bgLastUpdateTime) <= 350) {
+      return this.processFrequencyBins(this.bgFreqData, barCount, layout);
+    }
+
+    if (this.analyser && this.freqData && this.audioElement && !this.audioElement.paused && this.audioElement.currentTime > 0) {
+      if (this.audioCtx?.state === 'suspended') {
+        this.audioCtx.resume().catch(() => {});
+      }
+      this.analyser.getByteFrequencyData(this.freqData as any);
+      return this.processFrequencyBins(this.freqData, barCount, layout);
+    }
+
+    return null;
+  }
 }
 
 export const audioEngine = new AudioEngineManager();
+

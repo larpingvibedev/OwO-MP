@@ -1565,7 +1565,14 @@ export async function fetchAlbumDetailsFromYTM(
     const rawVideoId = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.watchEndpoint?.videoId ||
                     r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
                     r.navigationEndpoint?.watchEndpoint?.videoId;
-    const videoId = extractOfficialAudioTrackId(r, rawVideoId);
+    let videoId = extractOfficialAudioTrackId(r, rawVideoId);
+    
+    // For community & user playlists: prefer official audio, but fallback to raw video ID so UGC/OMV tracks are not dropped
+    if (!videoId && isPlaylist && rawVideoId) {
+      console.log(`[Playlist] Falling back to raw video ID for community playlist item: "${trackTitle}" (${rawVideoId})`);
+      videoId = rawVideoId;
+    }
+
     const durationStr = r.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text;
     const artistRuns = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
     let trackArtist = '';
@@ -1710,7 +1717,7 @@ export async function fetchAlbumDetails(
       const targetBrowseId = isPlaylistBrowse && !cleanId.startsWith('VL') ? `VL${cleanId}` : cleanId;
       const ytmDetail = await fetchAlbumDetailsFromYTM(targetBrowseId, resolvedReleaseName, artistName, fallbackCover);
       if (ytmDetail && ytmDetail.tracks.length > 0) {
-        if (isOfficialAlbumBrowse || !artistName || isMatchingArtist(ytmDetail.artist, artistName) || isMatchingArtist(ytmDetail.name, artistName)) {
+        if (isPlaylistBrowse || isOfficialAlbumBrowse || !artistName || isMatchingArtist(ytmDetail.artist, artistName) || isMatchingArtist(ytmDetail.name, artistName)) {
           return ytmDetail;
         }
       }
@@ -2840,6 +2847,22 @@ export async function fetchPublicPlaylistTracks(playlist: PublicPlaylist): Promi
   }
 
   if (playlist.playlistId) {
+    // 1. First priority: Direct YouTube Music InnerTube resolution (fastest & 100% accurate)
+    try {
+      const ytmDetail = await fetchAlbumDetailsFromYTM(
+        playlist.playlistId,
+        playlist.name,
+        playlist.author,
+        playlist.cover
+      );
+      if (ytmDetail && ytmDetail.tracks && ytmDetail.tracks.length > 0) {
+        return ytmDetail.tracks;
+      }
+    } catch (e) {
+      console.warn('[Playlist] YTM direct fetch failed, falling back to Invidious:', e);
+    }
+
+    // 2. Secondary fallback: Invidious instances
     for (const inst of INVIDIOUS_INSTANCES.slice(0, 3)) {
       try {
         const controller = new AbortController();

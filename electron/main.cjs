@@ -1114,6 +1114,13 @@ ipcMain.handle('pause-yt-track', async () => {
   }
 });
 
+// Forward background Web Audio FFT stream directly to foreground window
+ipcMain.on('bg-audio-fft', (event, buffer) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('bg-audio-fft-event', buffer);
+  }
+});
+
 ipcMain.handle('resume-yt-track', async (event, volume) => {
   if (!bgPlayerWindow || bgPlayerWindow.isDestroyed()) return { success: true };
   try {
@@ -1132,8 +1139,12 @@ ipcMain.handle('resume-yt-track', async (event, volume) => {
           const v = document.querySelector('video');
           const p = document.getElementById('movie_player');
           if (${target !== null}) {
-            if (v) v.volume = ${target};
-            if (p && typeof p.setVolume === 'function') p.setVolume(Math.round(${target} * 100));
+            if (typeof window.__owoSetGainVolume === 'function') {
+              window.__owoSetGainVolume(${target});
+            } else {
+              if (v) v.volume = ${target};
+              if (p && typeof p.setVolume === 'function') p.setVolume(Math.round(${target} * 100));
+            }
           }
           if (v) v.play().catch(()=>{});
           if (p && typeof p.playVideo === 'function') p.playVideo();
@@ -1178,10 +1189,14 @@ ipcMain.handle('set-yt-volume', async (event, volume) => {
           cancelAnimationFrame(window.__activeFadeRaf);
           window.__activeFadeRaf = null;
         }
-        const v = document.querySelector('video');
-        const p = document.getElementById('movie_player');
-        if (v) v.volume = ${vol};
-        if (p && p.setVolume) p.setVolume(${Math.round(vol * 100)});
+        if (typeof window.__owoSetGainVolume === 'function') {
+          window.__owoSetGainVolume(${vol});
+        } else {
+          const v = document.querySelector('video');
+          if (v) v.volume = ${vol};
+          const p = document.getElementById('movie_player');
+          if (p && p.setVolume) p.setVolume(${Math.round(vol * 100)});
+        }
       })()
     `);
     return { success: true };
