@@ -2455,6 +2455,7 @@ function getCanonicalSignature(title: string, artist: string): string {
 }
 
 const upNextMixCache = new Map<string, { timestamp: number; tracks: Track[] }>();
+const inFlightMixRequests = new Map<string, Promise<Track[]>>();
 
 export async function fetchUpNextMix(
   seed: Track | Track[],
@@ -2469,276 +2470,348 @@ export async function fetchUpNextMix(
   const seedList: Track[] = Array.isArray(seed) ? seed.filter(Boolean) : (seed ? [seed] : []);
   if (seedList.length === 0) return [];
 
-  // Instant In-Memory Cache (Valid for 10 minutes)
+  // In-Memory Cache Key
   const cacheKey = seedList.map(s => s.id || `${s.artist}-${s.title}`).sort().join('::') + 
     `_blk_${(blockedArtists || []).sort().join(',')}_dis_${(dislikedTracks || []).map(d => d.id).sort().join(',')}_lim_${limit}`;
-  const cached = upNextMixCache.get(cacheKey);
-  if (!forceRefresh && cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
-    const queueIds = new Set(seedList.map(s => s.id));
-    return cached.tracks.filter(t => !queueIds.has(t.id));
+
+  // If not forcing refresh, return valid in-memory cache if available (within 10 mins)
+  if (!forceRefresh) {
+    const cached = upNextMixCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
+      const queueIds = new Set(seedList.map(s => s.id));
+      return cached.tracks.filter(t => !queueIds.has(t.id));
+    }
+    const inFlight = inFlightMixRequests.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
   }
 
-  const seenKeys = new Set<string>();
-  const blockedLowerSet = new Set((blockedArtists || []).map(a => a.toLowerCase().trim()));
+  const fetchPromise = (async () => {
+    const seenKeys = new Set<string>();
+    const blockedLowerSet = new Set((blockedArtists || []).map(a => a.toLowerCase().trim()));
 
-  // Exclude all tracks currently in the queue/seed list
-  seedList.forEach(s => {
-    seenKeys.add(getCanonicalSignature(s.title, s.artist));
-    excludeIds.add(s.id);
-  });
+    // Exclude all tracks currently in the queue/seed list
+    seedList.forEach(s => {
+      seenKeys.add(getCanonicalSignature(s.title, s.artist));
+      excludeIds.add(s.id);
+    });
 
-  // Exclude all explicitly disliked tracks
-  (dislikedTracks || []).forEach(d => {
-    seenKeys.add(getCanonicalSignature(d.title, d.artist));
-    if (d.id) excludeIds.add(d.id);
-  });
+    // Exclude all explicitly disliked tracks
+    (dislikedTracks || []).forEach(d => {
+      seenKeys.add(getCanonicalSignature(d.title, d.artist));
+      if (d.id) excludeIds.add(d.id);
+    });
 
-  // Extract all unique primary artists from the queue (preserving queue appearance order, excluding blocked artists)
-  const uniqueArtists: string[] = [];
-  seedList.forEach(s => {
-    const raw = (s.artist || '').split(/[,&/]| feat\.? | ft\.? | with /i)[0].trim();
-    const rawLower = raw.toLowerCase();
-    const isBlocked = blockedLowerSet.has(rawLower) || Array.from(blockedLowerSet).some(b => b && (rawLower === b || rawLower.includes(b)));
-    if (raw && !isBlocked && !uniqueArtists.some(a => a.toLowerCase() === rawLower)) {
-      uniqueArtists.push(raw);
-    }
-  });
+    // Extract unique primary artists from the queue (preserving queue appearance order, excluding blocked artists)
+    const uniqueArtists: string[] = [];
+    seedList.forEach(s => {
+      const raw = (s.artist || '').split(/[,&/]| feat\.? | ft\.? | with /i)[0].trim();
+      const rawLower = raw.toLowerCase();
+      const isBlocked = blockedLowerSet.has(rawLower) || Array.from(blockedLowerSet).some(b => b && (rawLower === b || rawLower.includes(b)));
+      if (raw && !isBlocked && !uniqueArtists.some(a => a.toLowerCase() === rawLower)) {
+        uniqueArtists.push(raw);
+      }
+    });
 
-  // Limit seed artists to top 4 to maintain fast parallel search times
-  const activeSeedArtists = uniqueArtists.slice(0, 4);
+    // Limit seed artists to top 4 to maintain fast parallel search times
+    const activeSeedArtists = uniqueArtists.slice(0, 4);
 
-  // For each seed artist, fetch their deep catalog, collabs, and related tracks
-  const artistPools: Map<string, Track[]> = new Map();
-  const collabPools: Map<string, Track[]> = new Map();
-  const similarArtistPools: Map<string, Track[]> = new Map();
+    // Deep candidate pools
+    const artistPools: Map<string, Track[]> = new Map();
+    const collabPools: Map<string, Track[]> = new Map();
+    const similarArtistPools: Map<string, Track[]> = new Map();
 
-  const itunesSongLimit = Math.max(35, Math.min(60, limit + 10));
-  const itunesFeatLimit = Math.max(15, Math.min(30, Math.floor(limit / 2)));
+    // Deep pooling: query up to 80-100 candidates per seed artist for maximum variation
+    const itunesSongLimit = Math.max(60, Math.min(100, limit * 2));
+    const itunesFeatLimit = Math.max(25, Math.min(50, limit));
 
-  const artistFetches = activeSeedArtists.map(async (artistName) => {
-    const artistLower = artistName.toLowerCase().trim();
-    const artistTracks: Track[] = [];
-    const collabTracks: Track[] = [];
+    const artistFetches = activeSeedArtists.map(async (artistName) => {
+      const artistLower = artistName.toLowerCase().trim();
+      const artistTracks: Track[] = [];
+      const collabTracks: Track[] = [];
 
-    // Parallel fetch: iTunes Exact Artist Catalog + YouTube Topic Catalog + Real YouTube Music Similar Artists
-    try {
-      const [artistTermRes, generalSongRes, ytTopicItems, similarArtists] = await Promise.allSettled([
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&attribute=artistTerm&entity=song&limit=${itunesSongLimit}`)
-          .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' feat')}&entity=song&limit=${itunesFeatLimit}`)
-          .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
-        fetchFastFromInvidious(`${artistName} Topic`),
-        fetchSimilarArtists(artistName, seedList[0]?.id)
-      ]);
+      // Parallel fetch: iTunes Artist Catalog + YouTube Topic Catalog + Real YouTube Music Similar Artists
+      try {
+        const [artistTermRes, generalSongRes, ytTopicItems, similarArtists] = await Promise.allSettled([
+          fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&attribute=artistTerm&entity=song&limit=${itunesSongLimit}`)
+            .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
+          fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName + ' feat')}&entity=song&limit=${itunesFeatLimit}`)
+            .then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] })),
+          fetchFastFromInvidious(`${artistName} Topic`),
+          fetchSimilarArtists(artistName, seedList[0]?.id)
+        ]);
 
-      const itunesTracks = [
-        ...(artistTermRes.status === 'fulfilled' && artistTermRes.value.results ? artistTermRes.value.results : []),
-        ...(generalSongRes.status === 'fulfilled' && generalSongRes.value.results ? generalSongRes.value.results : [])
-      ];
+        const itunesTracks = [
+          ...(artistTermRes.status === 'fulfilled' && artistTermRes.value.results ? artistTermRes.value.results : []),
+          ...(generalSongRes.status === 'fulfilled' && generalSongRes.value.results ? generalSongRes.value.results : [])
+        ];
 
-      itunesTracks.forEach((item: any) => {
-        if (!item.trackName || !item.artistName) return;
-        const key = getCanonicalSignature(item.trackName, item.artistName);
-        const id = `track-${item.trackId}`;
-
-        if (seenKeys.has(key) || excludeIds.has(id)) return;
-
-        const aLower = item.artistName.toLowerCase().trim();
-        const tLower = item.trackName.toLowerCase().trim();
-
-        // Check if artist is blocked
-        if (blockedLowerSet.has(aLower) || Array.from(blockedLowerSet).some(b => b && (aLower === b || aLower.includes(b)))) {
-          return;
-        }
-
-        const trackObj: Track = {
-          id,
-          title: item.trackName,
-          artist: item.artistName,
-          albumArtist: item.collectionArtistName || item.artistName,
-          album: item.collectionName || 'Single',
-          duration: Math.round((item.trackTimeMillis || 210000) / 1000),
-          cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : seedList[0].cover,
-          streamUrl: `${item.artistName} - ${item.trackName}`,
-          source: 'youtube',
-          category: 'song'
-        };
-
-        // 1. Exact artist match ONLY (rejects false positives like "Angel Slayr")
-        if (aLower === artistLower) {
-          seenKeys.add(key);
-          artistTracks.push(trackObj);
-        }
-        // 2. Strict Collaboration match (must contain explicit conjunction with artist)
-        else {
-          const hasExplicitFeatInTitle = tLower.includes(`feat. ${artistLower}`) || 
-                                       tLower.includes(`ft. ${artistLower}`) || 
-                                       tLower.includes(`feat ${artistLower}`) ||
-                                       tLower.includes(`with ${artistLower}`);
-          
-          const hasConjunctionInArtist = (aLower.startsWith(`${artistLower} &`) ||
-                                          aLower.startsWith(`${artistLower} x`) ||
-                                          aLower.startsWith(`${artistLower} +`) ||
-                                          aLower.startsWith(`${artistLower},`) ||
-                                          aLower.endsWith(`& ${artistLower}`) ||
-                                          aLower.endsWith(`x ${artistLower}`) ||
-                                          aLower.endsWith(`+ ${artistLower}`) ||
-                                          aLower.endsWith(`, ${artistLower}`) ||
-                                          aLower.includes(`feat. ${artistLower}`) ||
-                                          aLower.includes(`ft. ${artistLower}`));
-
-          if (hasExplicitFeatInTitle || hasConjunctionInArtist) {
-            seenKeys.add(key);
-            collabTracks.push(trackObj);
-          }
-        }
-      });
-
-      // YouTube Topic Tracks
-      if (ytTopicItems.status === 'fulfilled' && Array.isArray(ytTopicItems.value)) {
-        ytTopicItems.value.forEach((item: any) => {
-          if (!item.title || !item.videoId) return;
-          const author = item.author ? item.author.replace(' - Topic', '').trim() : artistName;
-          const key = getCanonicalSignature(item.title, author);
-          const id = `piped-${item.videoId}`;
+        itunesTracks.forEach((item: any) => {
+          if (!item.trackName || !item.artistName) return;
+          const key = getCanonicalSignature(item.trackName, item.artistName);
+          const id = `track-${item.trackId}`;
 
           if (seenKeys.has(key) || excludeIds.has(id)) return;
 
-          if (author.toLowerCase().trim() === artistLower) {
+          const aLower = item.artistName.toLowerCase().trim();
+          const tLower = item.trackName.toLowerCase().trim();
+
+          // Check if artist is blocked
+          if (blockedLowerSet.has(aLower) || Array.from(blockedLowerSet).some(b => b && (aLower === b || aLower.includes(b)))) {
+            return;
+          }
+
+          const trackObj: Track = {
+            id,
+            title: item.trackName,
+            artist: item.artistName,
+            albumArtist: item.collectionArtistName || item.artistName,
+            album: item.collectionName || 'Single',
+            duration: Math.round((item.trackTimeMillis || 210000) / 1000),
+            cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : seedList[0].cover,
+            streamUrl: `${item.artistName} - ${item.trackName}`,
+            source: 'youtube',
+            category: 'song'
+          };
+
+          // 1. Exact artist match ONLY
+          if (aLower === artistLower) {
             seenKeys.add(key);
-            artistTracks.push({
-              id,
-              title: item.title,
-              artist: author,
-              albumArtist: author,
-              album: item.title,
-              duration: item.lengthSeconds || 180,
-              cover: item.videoThumbnails?.find((t: any) => t.quality === 'medium')?.url || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
-              streamUrl: `${author} - ${item.title}`,
-              source: 'youtube',
-              category: 'song'
-            });
+            artistTracks.push(trackObj);
+          }
+          // 2. Strict Collaboration match
+          else {
+            const hasExplicitFeatInTitle = tLower.includes(`feat. ${artistLower}`) || 
+                                         tLower.includes(`ft. ${artistLower}`) || 
+                                         tLower.includes(`feat ${artistLower}`) ||
+                                         tLower.includes(`with ${artistLower}`);
+            
+            const hasConjunctionInArtist = (aLower.startsWith(`${artistLower} &`) ||
+                                            aLower.startsWith(`${artistLower} x`) ||
+                                            aLower.startsWith(`${artistLower} +`) ||
+                                            aLower.startsWith(`${artistLower},`) ||
+                                            aLower.endsWith(`& ${artistLower}`) ||
+                                            aLower.endsWith(`x ${artistLower}`) ||
+                                            aLower.endsWith(`+ ${artistLower}`) ||
+                                            aLower.endsWith(`, ${artistLower}`) ||
+                                            aLower.includes(`feat. ${artistLower}`) ||
+                                            aLower.includes(`ft. ${artistLower}`));
+
+            if (hasExplicitFeatInTitle || hasConjunctionInArtist) {
+              seenKeys.add(key);
+              collabTracks.push(trackObj);
+            }
           }
         });
-      }
 
-      // Fetch top tracks for real similar/peer artists from YouTube Music
-      const similarTracks: Track[] = [];
-      if (similarArtists.status === 'fulfilled' && Array.isArray(similarArtists.value) && similarArtists.value.length > 0) {
-        const topPeers = similarArtists.value.slice(0, 4);
-        const peerFetches = topPeers.map(peer =>
-          fetchArtistDeepTracks(peer.name).catch(() => [])
-        );
-        const peerResults = await Promise.allSettled(peerFetches);
-        peerResults.forEach(pr => {
-          if (pr.status === 'fulfilled' && Array.isArray(pr.value)) {
-            pr.value.forEach(pTrack => {
-              const key = getCanonicalSignature(pTrack.title, pTrack.artist);
-              if (!seenKeys.has(key) && !excludeIds.has(pTrack.id)) {
-                seenKeys.add(key);
-                similarTracks.push(pTrack);
-              }
-            });
+        // YouTube Topic Tracks
+        if (ytTopicItems.status === 'fulfilled' && Array.isArray(ytTopicItems.value)) {
+          ytTopicItems.value.forEach((item: any) => {
+            if (!item.title || !item.videoId) return;
+            const author = item.author ? item.author.replace(' - Topic', '').trim() : artistName;
+            const key = getCanonicalSignature(item.title, author);
+            const id = `piped-${item.videoId}`;
+
+            if (seenKeys.has(key) || excludeIds.has(id)) return;
+
+            if (author.toLowerCase().trim() === artistLower) {
+              seenKeys.add(key);
+              artistTracks.push({
+                id,
+                title: item.title,
+                artist: author,
+                albumArtist: author,
+                album: item.title,
+                duration: item.lengthSeconds || 180,
+                cover: item.videoThumbnails?.find((t: any) => t.quality === 'medium')?.url || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
+                streamUrl: `${author} - ${item.title}`,
+                source: 'youtube',
+                category: 'song'
+              });
+            }
+          });
+        }
+
+        // Fetch top tracks for real similar/peer artists from YouTube Music
+        const similarTracks: Track[] = [];
+        if (similarArtists.status === 'fulfilled' && Array.isArray(similarArtists.value) && similarArtists.value.length > 0) {
+          const topPeers = similarArtists.value.slice(0, 5);
+          const peerFetches = topPeers.map(peer =>
+            fetchArtistDeepTracks(peer.name).catch(() => [])
+          );
+          const peerResults = await Promise.allSettled(peerFetches);
+          peerResults.forEach(pr => {
+            if (pr.status === 'fulfilled' && Array.isArray(pr.value)) {
+              pr.value.forEach(pTrack => {
+                const key = getCanonicalSignature(pTrack.title, pTrack.artist);
+                if (!seenKeys.has(key) && !excludeIds.has(pTrack.id)) {
+                  seenKeys.add(key);
+                  similarTracks.push(pTrack);
+                }
+              });
+            }
+          });
+        }
+        similarArtistPools.set(artistName, similarTracks);
+
+      } catch {}
+
+      artistPools.set(artistName, artistTracks);
+      collabPools.set(artistName, collabTracks);
+    });
+
+    await Promise.allSettled(artistFetches);
+
+    // User Taste Pool (matching mood/vibe)
+    const userTastePool: Track[] = [];
+    userFavorites.forEach(fav => {
+      const key = getCanonicalSignature(fav.title, fav.artist);
+      if (!seenKeys.has(key) && !excludeIds.has(fav.id)) {
+        seenKeys.add(key);
+        userTastePool.push(fav);
+      }
+    });
+
+    const topHistoryArtists = Object.values(playHistory)
+      .sort((a, b) => b.playCount - a.playCount)
+      .map(h => h.track)
+      .filter(t => t && !excludeIds.has(t.id));
+
+    topHistoryArtists.forEach(histTrack => {
+      const key = getCanonicalSignature(histTrack.title, histTrack.artist);
+      if (!seenKeys.has(key) && !excludeIds.has(histTrack.id)) {
+        seenKeys.add(key);
+        userTastePool.push(histTrack);
+      }
+    });
+
+    // Fisher-Yates shuffle across candidate pools for true randomization
+    const shuffle = <T>(arr: T[]) => {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+    };
+
+    artistPools.forEach(pool => shuffle(pool));
+    collabPools.forEach(pool => shuffle(pool));
+    similarArtistPools.forEach(pool => shuffle(pool));
+    shuffle(userTastePool);
+
+    // Interleave recommendations with artist diversity rules
+    const finalMix: Track[] = [];
+    const artistAppearanceCount = new Map<string, number>();
+    const MAX_TRACKS_PER_ARTIST = 3;
+
+    const canAddTrack = (track: Track, enforceDiversity = true): boolean => {
+      if (!enforceDiversity) return true;
+      const primaryArtist = (track.artist || '').split(/[,&/]| feat\.? | ft\.? /i)[0].trim().toLowerCase();
+      const currentCount = artistAppearanceCount.get(primaryArtist) || 0;
+      return currentCount < MAX_TRACKS_PER_ARTIST;
+    };
+
+    const recordTrackAdded = (track: Track) => {
+      finalMix.push(track);
+      const primaryArtist = (track.artist || '').split(/[,&/]| feat\.? | ft\.? /i)[0].trim().toLowerCase();
+      artistAppearanceCount.set(primaryArtist, (artistAppearanceCount.get(primaryArtist) || 0) + 1);
+    };
+
+    // Pass 1: Round-robin blend with strict artist diversity caps
+    let addedInRound = true;
+    while (finalMix.length < limit && addedInRound) {
+      addedInRound = false;
+
+      // A. One track per seed artist
+      for (const artistName of activeSeedArtists) {
+        if (finalMix.length >= limit) break;
+        const pool = artistPools.get(artistName);
+        if (pool && pool.length > 0) {
+          const idx = pool.findIndex(t => canAddTrack(t, true));
+          if (idx !== -1) {
+            const [selected] = pool.splice(idx, 1);
+            recordTrackAdded(selected);
+            addedInRound = true;
           }
-        });
+        }
       }
-      similarArtistPools.set(artistName, similarTracks);
 
-    } catch {}
+      // B. One collaboration / feature per seed artist
+      for (const artistName of activeSeedArtists) {
+        if (finalMix.length >= limit) break;
+        const collabs = collabPools.get(artistName);
+        if (collabs && collabs.length > 0) {
+          const idx = collabs.findIndex(t => canAddTrack(t, true));
+          if (idx !== -1) {
+            const [selected] = collabs.splice(idx, 1);
+            recordTrackAdded(selected);
+            addedInRound = true;
+          }
+        }
+      }
 
-    artistPools.set(artistName, artistTracks);
-    collabPools.set(artistName, collabTracks);
-  });
+      // C. One real scene peer / similar artist track from YouTube Music
+      for (const artistName of activeSeedArtists) {
+        if (finalMix.length >= limit) break;
+        const peers = similarArtistPools.get(artistName);
+        if (peers && peers.length > 0) {
+          const idx = peers.findIndex(t => canAddTrack(t, true));
+          if (idx !== -1) {
+            const [selected] = peers.splice(idx, 1);
+            recordTrackAdded(selected);
+            addedInRound = true;
+          }
+        }
+      }
 
-  await Promise.allSettled(artistFetches);
-
-  // User Taste Pool (matching mood/vibe)
-  const userTastePool: Track[] = [];
-  userFavorites.forEach(fav => {
-    const key = getCanonicalSignature(fav.title, fav.artist);
-    if (!seenKeys.has(key) && !excludeIds.has(fav.id)) {
-      seenKeys.add(key);
-      userTastePool.push(fav);
-    }
-  });
-
-  const topHistoryArtists = Object.values(playHistory)
-    .sort((a, b) => b.playCount - a.playCount)
-    .map(h => h.track)
-    .filter(t => t && !excludeIds.has(t.id));
-
-  topHistoryArtists.forEach(histTrack => {
-    const key = getCanonicalSignature(histTrack.title, histTrack.artist);
-    if (!seenKeys.has(key) && !excludeIds.has(histTrack.id)) {
-      seenKeys.add(key);
-      userTastePool.push(histTrack);
-    }
-  });
-
-  // Shuffle individual pools
-  const shuffle = <T>(arr: T[]) => {
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-  };
-
-  artistPools.forEach(pool => shuffle(pool));
-  collabPools.forEach(pool => shuffle(pool));
-  similarArtistPools.forEach(pool => shuffle(pool));
-  shuffle(userTastePool);
-
-  // Interleave recommendations across ALL seed artists and their scene
-  const finalMix: Track[] = [];
-
-  // Round-robin blend across all seed artists in the queue
-  let addedInRound = true;
-  while (finalMix.length < limit && addedInRound) {
-    addedInRound = false;
-
-    // A. One track per seed artist in the queue
-    for (const artistName of activeSeedArtists) {
-      const pool = artistPools.get(artistName);
-      if (pool && pool.length > 0) {
-        finalMix.push(pool.shift()!);
-        addedInRound = true;
+      // D. One user taste track
+      if (userTastePool.length > 0 && finalMix.length < limit) {
+        const idx = userTastePool.findIndex(t => canAddTrack(t, true));
+        if (idx !== -1) {
+          const [selected] = userTastePool.splice(idx, 1);
+          recordTrackAdded(selected);
+          addedInRound = true;
+        }
       }
     }
 
-    // B. One collaboration / feature per seed artist
-    for (const artistName of activeSeedArtists) {
-      const collabs = collabPools.get(artistName);
-      if (collabs && collabs.length > 0) {
-        finalMix.push(collabs.shift()!);
-        addedInRound = true;
+    // Pass 2: If we haven't reached the target limit due to diversity caps, fill remaining in round-robin fashion
+    if (finalMix.length < limit) {
+      const remainingPools = [
+        ...Array.from(similarArtistPools.values()),
+        ...Array.from(collabPools.values()),
+        ...Array.from(artistPools.values()),
+        userTastePool
+      ];
+      let addedInFallback = true;
+      while (finalMix.length < limit && addedInFallback) {
+        addedInFallback = false;
+        for (const pool of remainingPools) {
+          if (pool.length > 0 && finalMix.length < limit) {
+            recordTrackAdded(pool.shift()!);
+            addedInFallback = true;
+          }
+        }
       }
     }
 
-    // C. One real scene peer / similar artist track from YouTube Music
-    for (const artistName of activeSeedArtists) {
-      const peers = similarArtistPools.get(artistName);
-      if (peers && peers.length > 0) {
-        finalMix.push(peers.shift()!);
-        addedInRound = true;
+    if (finalMix.length > 0) {
+      upNextMixCache.set(cacheKey, { timestamp: Date.now(), tracks: [...finalMix] });
+      if (upNextMixCache.size > 100) {
+        const oldestKey = upNextMixCache.keys().next().value;
+        if (oldestKey) upNextMixCache.delete(oldestKey);
       }
     }
 
-    // D. One user taste track
-    if (userTastePool.length > 0) {
-      finalMix.push(userTastePool.shift()!);
-      addedInRound = true;
-    }
+    return finalMix;
+  })();
+
+  if (!forceRefresh) {
+    inFlightMixRequests.set(cacheKey, fetchPromise);
+    fetchPromise.finally(() => inFlightMixRequests.delete(cacheKey));
   }
 
-  if (finalMix.length > 0) {
-    upNextMixCache.set(cacheKey, { timestamp: Date.now(), tracks: [...finalMix] });
-    if (upNextMixCache.size > 100) {
-      const oldestKey = upNextMixCache.keys().next().value;
-      if (oldestKey) upNextMixCache.delete(oldestKey);
-    }
-  }
-
-  return finalMix;
+  return fetchPromise;
 }
 
 /**

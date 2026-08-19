@@ -586,15 +586,10 @@ export function Dashboard() {
     if (track.artist) {
       recordArtistEngagement(track.artist);
     }
-    const stationTracks = buildStationQueue(
-      [track],
-      [...getArtistTracks(track.artist), ...dailyDiscover, ...recommendedTracks, ...displayQuickPicks]
-    );
-    const finalQueue = stationTracks.length > 0 ? stationTracks : [track];
-    setQueue(finalQueue, 0, `${track.title} Mix`);
+    setQueue([track], 0, `${track.title} Mix`, true, 'radio');
     setIsPlaying(true);
     showToast(`Playing ${track.title} Mix`);
-  }, [buildStationQueue, getArtistTracks, dailyDiscover, recommendedTracks, displayQuickPicks, setQueue, setIsPlaying, showToast]);
+  }, [setQueue, setIsPlaying, showToast]);
 
   // Authentic YouTube Music "Mixed for You" Stations with Real Thumbnails & Multi-Track Queues
   const dynamicMixes = useMemo(() => {
@@ -1132,7 +1127,8 @@ export function Dashboard() {
               onClick={() => {
                 if (track.artist) recordArtistEngagement(track.artist);
                 const unblocked = dailyDiscover.filter(t => !isTrackBlocked(t));
-                setQueue([track, ...unblocked.filter(t => t.id !== track.id)], 0, 'Daily Discover');
+                const trackIdx = unblocked.findIndex(t => t.id === track.id);
+                setQueue(unblocked, Math.max(0, trackIdx), 'Daily Discover', true, 'finite');
                 setIsPlaying(true);
               }}
               onContextMenu={(e) => openTrackContextMenu(e, track)}
