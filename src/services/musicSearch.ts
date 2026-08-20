@@ -2467,7 +2467,9 @@ export async function fetchUpNextMix(
   forceRefresh: boolean = false,
   limit: number = 32
 ): Promise<Track[]> {
-  const seedList: Track[] = Array.isArray(seed) ? seed.filter(Boolean) : (seed ? [seed] : []);
+  const rawSeedList: Track[] = Array.isArray(seed) ? seed.filter(Boolean) : (seed ? [seed] : []);
+  // Reject local files categorically: local files must never be used as seeds for YouTube recommendations
+  const seedList: Track[] = rawSeedList.filter(s => !s.isLocal && !s.id?.startsWith('local-'));
   if (seedList.length === 0) return [];
 
   // In-Memory Cache Key

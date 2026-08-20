@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, protocol, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, protocol, session, net } = require('electron');
 const path = require('path');
 const http = require('http');
 const https = require('https');
@@ -6,6 +6,9 @@ const fs = require('fs');
 const os = require('os');
 const vm = require('node:vm');
 const { Readable } = require('stream');
+const { execFile } = require('child_process');
+let mm = null;
+try { mm = require('music-metadata'); } catch (e) {}
 
 // ----------------------------------------------------
 // PORTABLE BUILD SELF-CONTAINMENT LOGIC
@@ -64,6 +67,7 @@ let mainWindow = null;
 let proxyPort = 41721;
 let cachedVisitorSession = null;
 const resolvedAudioCache = new Map(); // videoId -> { audioInfo: { url, mimeType }, time: number }
+const activeDownloads = new Map(); // videoId -> AbortController
 
 let innertubeInstance = null;
 let innertubeInitPromise = null;
@@ -244,7 +248,9 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
   if (!videoId) return null;
 
   // 1. Check Cache with Dynamic Expiration Validation
-  if (!forceFresh) {
+  if (forceFresh) {
+    resolvedAudioCache.delete(videoId);
+  } else {
     const cached = resolvedAudioCache.get(videoId);
     if (cached) {
       const isExpired = cached.expireTimestamp ? (Date.now() / 1000 > (cached.expireTimestamp - 300)) : false;
@@ -276,21 +282,35 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
 
               const totalSize = Number(format.content_length || format.raw_data?.contentLength || 0);
 
+              let clientHeaders = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+              };
+
+              if (clientName === 'IOS') {
+                clientHeaders = {
+                  'User-Agent': 'com.google.ios.youtube/19.43.2 (iPhone14,3; U; CPU iOS 18_1 like Mac OS X; en_US)'
+                };
+              } else if (clientName === 'YTMUSIC') {
+                clientHeaders = {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                  'Referer': 'https://music.youtube.com/',
+                  'Origin': 'https://music.youtube.com'
+                };
+              } else if (clientName === 'WEB' || clientName === 'MWEB') {
+                clientHeaders = {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                  'Referer': 'https://www.youtube.com/',
+                  'Origin': 'https://www.youtube.com'
+                };
+              }
+
               const audioInfo = {
                 url: streamUrl,
                 mimeType: format.mime_type || 'audio/mp4',
                 bitrate: format.bitrate,
                 totalSize,
                 clientName,
-                headers: clientName === 'IOS'
-                  ? { 'User-Agent': 'com.google.ios.youtube/19.43.2 (iPhone14,3; U; CPU iOS 18_1 like Mac OS X; en_US)' }
-                  : clientName === 'YTMUSIC'
-                  ? {
-                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-                      'Referer': 'https://music.youtube.com/',
-                      'Origin': 'https://music.youtube.com'
-                    }
-                  : { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' }
+                headers: clientHeaders
               };
 
               resolvedAudioCache.set(videoId, { audioInfo, time: Date.now(), expireTimestamp });
@@ -349,7 +369,10 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
               bitrate: bestF.bitrate,
               totalSize: Number(bestF.contentLength || 0),
               clientName: c.clientName,
-              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+              headers: { 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                ...(activeSession?.cookie ? { 'Cookie': activeSession.cookie } : {})
+              }
             };
             resolvedAudioCache.set(videoId, { audioInfo, time: Date.now() });
             return audioInfo;
@@ -364,6 +387,401 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
   }
 
   return null;
+}
+
+function getFfmpegPath() {
+  try {
+    let p = require('ffmpeg-static');
+    if (app.isPackaged && typeof p === 'string') {
+      p = p.replace('app.asar', 'app.asar.unpacked');
+    }
+    if (p && fs.existsSync(p)) return p;
+  } catch (e) {}
+  return null;
+}
+
+// Transcode raw stream and embed ID3 tags / album art via FFmpeg
+async function transcodeAndTagAudio({ inputPath, outputPath, format, title, artist, album, coverUrl, abortSignal }) {
+  const ffmpeg = getFfmpegPath();
+  if (!ffmpeg) {
+    console.warn('[FFmpeg] ffmpeg binary not found, copying raw stream directly to destination');
+    await fs.promises.copyFile(inputPath, outputPath);
+    return;
+  }
+
+  let tempCoverPath = null;
+  const isMp3 = format === 'mp3';
+  const isM4a = format === 'm4a';
+
+  try {
+    if (coverUrl && typeof coverUrl === 'string' && coverUrl.startsWith('http')) {
+      try {
+        const coverRes = await net.fetch(coverUrl, { signal: abortSignal });
+        if (coverRes.ok) {
+          const coverBuf = Buffer.from(await coverRes.arrayBuffer());
+          if (coverBuf && coverBuf.length > 0) {
+            tempCoverPath = path.join(path.dirname(outputPath), `.cover_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`);
+            await fs.promises.writeFile(tempCoverPath, coverBuf);
+          }
+        }
+      } catch (e) {
+        console.warn('[Cover Art Download Warning]:', e.message);
+      }
+    }
+
+    const args = ['-y', '-threads', '0', '-i', inputPath];
+
+    if (tempCoverPath && fs.existsSync(tempCoverPath)) {
+      args.push('-i', tempCoverPath);
+      args.push('-map', '0:a', '-map', '1:0');
+    } else {
+      args.push('-map', '0:a');
+    }
+
+    if (isMp3) {
+      args.push('-c:a', 'libmp3lame', '-b:a', '256k', '-f', 'mp3');
+      if (tempCoverPath && fs.existsSync(tempCoverPath)) {
+        args.push('-c:v', 'copy', '-id3v2_version', '3');
+        args.push('-metadata:s:v', 'title="Album cover"');
+        args.push('-metadata:s:v', 'comment="Cover (front)"');
+      }
+    } else if (isM4a) {
+      args.push('-c:a', 'aac', '-b:a', '256k', '-f', 'mp4');
+      if (tempCoverPath && fs.existsSync(tempCoverPath)) {
+        args.push('-c:v', 'copy', '-disposition:v:0', 'attached_pic');
+      }
+    } else {
+      args.push('-c:a', 'copy');
+    }
+
+    if (title) args.push('-metadata', `title=${title}`);
+    if (artist) args.push('-metadata', `artist=${artist}`);
+    if (album) args.push('-metadata', `album=${album}`);
+
+    args.push(outputPath);
+
+    await new Promise((resolve, reject) => {
+      const proc = execFile(ffmpeg, args, (err, stdout, stderr) => {
+        if (err) {
+          if (abortSignal && abortSignal.aborted) {
+            return reject(new Error('Download cancelled'));
+          }
+          console.warn('[FFmpeg Process Error]:', err.message, stderr);
+          return reject(err);
+        }
+        resolve();
+      });
+
+      if (abortSignal) {
+        abortSignal.addEventListener('abort', () => {
+          try { proc.kill('SIGKILL'); } catch (e) {}
+        });
+      }
+    });
+  } finally {
+    if (tempCoverPath && fs.existsSync(tempCoverPath)) {
+      await fs.promises.unlink(tempCoverPath).catch(() => {});
+    }
+  }
+}
+
+// Verifies continuous byte-range coverage from byte 0 up to targetClen
+function checkByteCoverage(bucket, targetClen) {
+  if (!targetClen || !bucket || bucket.size === 0) return { complete: false, coveredUntil: 0, totalBytes: 0 };
+  const sortedStarts = Array.from(bucket.keys()).sort((a, b) => a - b);
+  let coveredUntil = 0;
+  let totalBytes = 0;
+
+  for (const start of sortedStarts) {
+    const item = bucket.get(start);
+    totalBytes += item.buffer.length;
+    if (start <= coveredUntil + 1) {
+      if (item.end > coveredUntil) {
+        coveredUntil = item.end;
+      }
+    }
+  }
+
+  // Complete if we have continuous coverage from 0 up to targetClen
+  const complete = bucket.has(0) && (coveredUntil >= targetClen - 100);
+  return { complete, coveredUntil, totalBytes };
+}
+
+// Browser-Assisted YouTube Authenticated Stream Downloader (persist:owo-music-runtime)
+async function downloadTrackViaBrowserBuffer(videoId, tempPath, onProgress, abortSignal = null) {
+  if (!videoId) return { success: false, error: 'Missing videoId' };
+  const s = session.fromPartition('persist:owo-music-runtime');
+
+  const streamBuckets = new Map(); // clen -> Map<start, { end, buffer }>
+  let mimeType = 'audio/webm';
+  let observedAudioRequests = 0;
+  let targetSongClen = 0;
+  let maxEmittedPercent = 5;
+  const pendingFetches = new Set();
+  let win = null;
+  const startTime = Date.now();
+
+  const emitProgress = (computedPercent, downloadedBytes, totalBytes) => {
+    maxEmittedPercent = Math.max(maxEmittedPercent, Math.min(99, Math.round(computedPercent)));
+    if (typeof onProgress === 'function') {
+      onProgress({
+        videoId,
+        percent: maxEmittedPercent,
+        downloadedBytes,
+        totalBytes
+      });
+    }
+  };
+
+  try {
+    win = new BrowserWindow({
+      show: false,
+      width: 600,
+      height: 400,
+      webPreferences: {
+        session: s,
+        nodeIntegration: false,
+        contextIsolation: true,
+        autoplayPolicy: 'no-user-gesture-required'
+      }
+    });
+
+    // Enforce Chromium-level hardware mute for the entire lifespan of this extractor window
+    win.webContents.setAudioMuted(true);
+
+    const userAgent = win.webContents.userAgent;
+
+    const listener = (details) => {
+      if (details.url.includes('videoplayback') && details.url.includes('mime=audio') && details.statusCode === 200) {
+        observedAudioRequests++;
+        const u = new URL(details.url);
+        const clen = parseInt(u.searchParams.get('clen') || '0', 10);
+        const range = u.searchParams.get('range');
+        if (u.searchParams.get('mime')) mimeType = u.searchParams.get('mime');
+
+        // Strip UMP wrapping so YouTube delivers pristine WebM/MP4 media chunks starting with valid headers
+        u.searchParams.delete('ump');
+        u.searchParams.delete('srfvp');
+        const cleanFetchUrl = u.toString();
+
+        if (clen > 0 && range) {
+          if (!streamBuckets.has(clen)) streamBuckets.set(clen, new Map());
+          const bucket = streamBuckets.get(clen);
+          const [start, end] = range.split('-').map(Number);
+
+          if (!targetSongClen && clen > 1000000) {
+            targetSongClen = clen;
+          }
+
+          if (!bucket.has(start)) {
+            const fetchP = (async () => {
+              if (abortSignal && abortSignal.aborted) return;
+              try {
+                const res = await net.fetch(cleanFetchUrl, {
+                  headers: {
+                    'User-Agent': userAgent,
+                    'Referer': 'https://music.youtube.com/'
+                  },
+                  signal: abortSignal
+                });
+                if (res.ok) {
+                  const ab = await res.arrayBuffer();
+                  bucket.set(start, { end, buffer: Buffer.from(ab) });
+
+                  // Strictly calculate and emit progress ONLY for the target song stream (prevents progress bar jumps)
+                  if (targetSongClen && clen === targetSongClen) {
+                    const cov = checkByteCoverage(bucket, targetSongClen);
+                    const pct = Math.min(90, 5 + Math.round((cov.totalBytes / targetSongClen) * 85));
+                    emitProgress(pct, cov.totalBytes, targetSongClen);
+                  }
+                }
+              } catch (e) {}
+            })();
+            pendingFetches.add(fetchP);
+            fetchP.finally(() => pendingFetches.delete(fetchP));
+          }
+        }
+      }
+    };
+
+    s.webRequest.onResponseStarted({ urls: ['*://*.googlevideo.com/videoplayback*'] }, listener);
+
+    win.loadURL(`https://music.youtube.com/watch?v=${videoId}`).catch(() => {});
+
+    let trackDuration = 0;
+    let lastDomState = { hasVideo: false, isAd: false, readyState: 0, duration: 0, currentTime: 0, videoId: null };
+
+    // Stage-based readiness polling loop (up to 30 seconds)
+    const MAX_WAIT_MS = 30000;
+    const POLL_INTERVAL_MS = 150;
+    const maxIterations = Math.ceil(MAX_WAIT_MS / POLL_INTERVAL_MS);
+
+    for (let i = 0; i < maxIterations; i++) {
+      if (abortSignal && abortSignal.aborted) throw new Error('Download cancelled');
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+      if (win && !win.isDestroyed()) {
+        const state = await win.webContents.executeJavaScript(`
+          (() => {
+            const v = document.querySelector('video');
+            const p = document.getElementById('movie_player');
+            if (v) {
+              v.muted = true;
+              v.volume = 0;
+            }
+            let isAd = false;
+            if (p) {
+              isAd = p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting');
+              if (typeof p.getAdState === 'function' && p.getAdState() > 0) isAd = true;
+              if (isAd && v && Number.isFinite(v.duration) && v.duration > 0) {
+                v.currentTime = v.duration;
+              }
+              const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button');
+              if (skipBtn) skipBtn.click();
+              if (typeof p.playVideo === 'function') {
+                try { p.playVideo(); } catch(e) {}
+              } else if (v) {
+                v.play().catch(() => {});
+              }
+            } else if (v) {
+              v.play().catch(() => {});
+            }
+            const videoData = (p && typeof p.getVideoData === 'function') ? p.getVideoData() : null;
+            return {
+              hasVideo: !!v,
+              isAd,
+              readyState: v ? v.readyState : 0,
+              duration: v && Number.isFinite(v.duration) ? v.duration : 0,
+              currentTime: v ? v.currentTime : 0,
+              videoId: videoData ? videoData.video_id : null
+            };
+          })()
+        `).catch((err) => ({
+          hasVideo: false,
+          isAd: false,
+          readyState: 0,
+          duration: 0,
+          currentTime: 0,
+          videoId: null,
+          evalError: err.message
+        }));
+
+        lastDomState = state;
+
+        if (!state.isAd && state.hasVideo && state.duration > 0 && state.readyState >= 2) {
+          if (!state.videoId || state.videoId === videoId) {
+            trackDuration = state.duration;
+            console.log(`[Extractor Ready] videoId=${videoId}, duration=${trackDuration}s, readyState=${state.readyState}, elapsedMs=${Date.now() - startTime}ms`);
+            break;
+          }
+        }
+      }
+    }
+
+    // Hard invariant: never begin scrubbing without validated media readiness
+    if (!trackDuration || trackDuration <= 0) {
+      let stageCode = 'PLAYER_INITIALIZATION_TIMEOUT';
+      if (!lastDomState.hasVideo) {
+        stageCode = 'VIDEO_ELEMENT_TIMEOUT';
+      } else if (lastDomState.isAd) {
+        stageCode = 'AD_PLAYING_TIMEOUT';
+      } else if (lastDomState.duration <= 0) {
+        stageCode = 'MEDIA_DURATION_TIMEOUT';
+      } else if (lastDomState.readyState < 2) {
+        stageCode = 'MEDIA_READYSTATE_TIMEOUT';
+      }
+      throw new Error(`[${stageCode}] YouTube Music player failed readiness checks within 30s (duration=${lastDomState.duration}, isAd=${lastDomState.isAd}, readyState=${lastDomState.readyState}, observedAudioRequests=${observedAudioRequests}, elapsedMs=${Date.now() - startTime}ms)`);
+    }
+
+    // Accelerated Dynamic Seeking (15s jumps with continuous byte coverage detection)
+    const jumpSeconds = 15;
+    const stepCount = Math.ceil(trackDuration / jumpSeconds);
+
+    for (let step = 0; step <= stepCount; step++) {
+      if (abortSignal && abortSignal.aborted) throw new Error('Download cancelled');
+
+      // Check if continuous byte coverage of target stream is already 100% complete
+      if (targetSongClen) {
+        const bucket = streamBuckets.get(targetSongClen);
+        if (bucket) {
+          const cov = checkByteCoverage(bucket, targetSongClen);
+          if (cov.complete) {
+            console.log(`[Download] 100% byte coverage achieved in ${Date.now() - startTime}ms (step ${step}/${stepCount})`);
+            break;
+          }
+        }
+      }
+
+      const targetTime = Math.min(trackDuration - 0.1, step * jumpSeconds);
+
+      if (win && !win.isDestroyed()) {
+        await win.webContents.executeJavaScript(`
+          (() => {
+            const v = document.querySelector('video');
+            if (v && v.duration > 0) {
+              v.currentTime = ${targetTime};
+            }
+          })()
+        `).catch(() => {});
+      }
+
+      await new Promise((r) => setTimeout(r, 60));
+    }
+
+    // Wait for any trailing chunk fetches
+    await Promise.all(Array.from(pendingFetches));
+
+    // Select the best stream bucket (largest collected byte size)
+    let bestClen = targetSongClen || 0;
+    let bestBucket = bestClen ? streamBuckets.get(bestClen) : null;
+    let maxBytes = 0;
+
+    if (!bestBucket) {
+      for (const [clen, bucket] of streamBuckets.entries()) {
+        let totalB = 0;
+        for (const item of bucket.values()) totalB += item.buffer.length;
+        if (totalB > maxBytes) {
+          maxBytes = totalB;
+          bestClen = clen;
+          bestBucket = bucket;
+        }
+      }
+    } else {
+      for (const item of bestBucket.values()) maxBytes += item.buffer.length;
+    }
+
+    if (!bestBucket || bestBucket.size === 0) {
+      throw new Error(`[NO_AUDIO_CHUNKS_CAPTURED] 0 chunks collected (trackDuration=${trackDuration}s, observedAudioRequests=${observedAudioRequests})`);
+    }
+
+    emitProgress(92, maxBytes, bestClen || maxBytes);
+
+    // Assemble chunks in ascending byte offset order
+    const sortedStarts = Array.from(bestBucket.keys()).sort((a, b) => a - b);
+    const outStream = fs.createWriteStream(tempPath);
+
+    for (const start of sortedStarts) {
+      const item = bestBucket.get(start);
+      outStream.write(item.buffer);
+    }
+
+    await new Promise((resolve, reject) => {
+      outStream.end((err) => (err ? reject(err) : resolve()));
+    });
+
+    emitProgress(95, maxBytes, bestClen || maxBytes);
+
+    return { success: true, totalLength: maxBytes, mimeType };
+  } catch (err) {
+    return { success: false, error: err.message };
+  } finally {
+    try {
+      s.webRequest.onResponseStarted({ urls: ['*://*.googlevideo.com/videoplayback*'] }, null);
+    } catch (e) {}
+    if (win && !win.isDestroyed()) {
+      try { win.destroy(); } catch (e) {}
+    }
+  }
 }
 
 // Local background streaming proxy for YouTube audio with dynamic chunk streaming
@@ -1335,84 +1753,39 @@ ipcMain.handle('get-genius-lyrics', async (event, query) => {
   }
 });
 
-ipcMain.handle('download-track-native', async (event, { videoId, title, artist, format, targetDir }) => {
+ipcMain.handle('cancel-download-native', async (event, videoId) => {
+  if (videoId && activeDownloads.has(videoId)) {
+    const controller = activeDownloads.get(videoId);
+    try {
+      controller.abort();
+    } catch {}
+    activeDownloads.delete(videoId);
+    return { success: true };
+  }
+  return { success: false };
+});
+
+ipcMain.handle('download-track-native', async (event, { videoId, title, artist, album, cover, format, targetDir }) => {
+  if (!videoId) {
+    return { success: false, error: 'Missing videoId' };
+  }
+
+  // Cancel any existing in-flight download for this specific track
+  if (activeDownloads.has(videoId)) {
+    try {
+      activeDownloads.get(videoId).abort();
+    } catch {}
+    activeDownloads.delete(videoId);
+  }
+
+  const controller = new AbortController();
+  activeDownloads.set(videoId, controller);
+
+  let tempRawPath = null;
+  let tempProcessedPath = null;
+
   try {
-    let audioInfo = await resolveBestAudioUrl(videoId);
-    if (!audioInfo || !audioInfo.url) {
-      return { success: false, error: 'Could not resolve audio stream' };
-    }
-
-    event.sender.send('download-progress-event', { videoId, percent: 10 });
-
-    // 1. Determine total stream size via Range probe
-    let totalBytes = audioInfo.totalSize || 0;
-    if (!totalBytes) {
-      try {
-        const probeRes = await fetch(audioInfo.url, {
-          headers: {
-            ...(audioInfo.headers || {}),
-            'Range': 'bytes=0-1024'
-          },
-          signal: AbortSignal.timeout(3500)
-        });
-        const cr = probeRes.headers.get('content-range');
-        if (cr && cr.includes('/')) {
-          totalBytes = parseInt(cr.split('/')[1], 10) || 0;
-          audioInfo.totalSize = totalBytes;
-        }
-      } catch (e) {}
-    }
-
-    if (!totalBytes || isNaN(totalBytes)) totalBytes = 3800000;
-
-    // 2. Sequential/Parallel bounded 512KB chunk download
-    const CHUNK_SIZE = 512 * 1024;
-    const chunks = [];
-    let downloadedBytes = 0;
-
-    for (let start = 0; start < totalBytes; start += CHUNK_SIZE) {
-      const end = Math.min(start + CHUNK_SIZE - 1, totalBytes - 1);
-      const chunkRange = `bytes=${start}-${end}`;
-
-      let chunkRes;
-      try {
-        chunkRes = await fetch(audioInfo.url, {
-          headers: {
-            ...(audioInfo.headers || {}),
-            'Range': chunkRange
-          },
-          signal: AbortSignal.timeout(8000)
-        });
-
-        if (!chunkRes.ok && (chunkRes.status === 403 || chunkRes.status === 404)) {
-          audioInfo = await resolveBestAudioUrl(videoId, true);
-          if (audioInfo?.url) {
-            chunkRes = await fetch(audioInfo.url, {
-              headers: {
-                ...(audioInfo.headers || {}),
-                'Range': chunkRange
-              },
-              signal: AbortSignal.timeout(8000)
-            });
-          }
-        }
-      } catch (e) {}
-
-      if (!chunkRes || !chunkRes.ok) {
-        throw new Error(`Failed to download audio chunk ${chunkRange}`);
-      }
-
-      const buf = await chunkRes.arrayBuffer();
-      chunks.push(Buffer.from(buf));
-      downloadedBytes += buf.byteLength;
-
-      event.sender.send('download-progress-event', {
-        videoId,
-        percent: Math.min(99, Math.round((downloadedBytes / totalBytes) * 90) + 10)
-      });
-    }
-
-    const completeBuffer = Buffer.concat(chunks);
+    event.sender.send('download-progress-event', { videoId, percent: 5 });
 
     const cleanArtistStr = (artist || 'Unknown Artist').replace(/[\\/:*?"<>|]/g, '_').trim();
     const cleanTitleStr = (title || 'Unknown Track').replace(/[\\/:*?"<>|]/g, '_').trim();
@@ -1424,20 +1797,185 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
       fs.mkdirSync(dir, { recursive: true });
     }
     const fullPath = path.join(dir, fileName);
-    await fs.promises.writeFile(fullPath, completeBuffer);
+    tempRawPath = path.join(dir, `.${fileName}.raw.${Date.now()}.${Math.random().toString(36).slice(2, 7)}.tmp`);
+    tempProcessedPath = path.join(dir, `.${fileName}.proc.${Date.now()}.${Math.random().toString(36).slice(2, 7)}.${ext}`);
 
-    event.sender.send('download-progress-event', { videoId, percent: 100 });
+    const onProgress = (data) => {
+      event.sender.send('download-progress-event', data);
+    };
+
+    // 1. Primary: Authenticated Browser Buffer Pipeline
+    console.log(`[Download] Starting browser-assisted buffer download for ${videoId}...`);
+    const browserResult = await downloadTrackViaBrowserBuffer(videoId, tempRawPath, onProgress, controller.signal);
+
+    let downloadSuccess = browserResult.success;
+
+    // 2. Secondary Fallback: Multi-Client Innertube Resolver
+    if (!downloadSuccess) {
+      console.log(`[Download] Falling back to multi-client resolver for ${videoId}...`);
+      const writeStream = fs.createWriteStream(tempRawPath);
+      let audioInfo = await resolveBestAudioUrl(videoId);
+      if (!audioInfo || !audioInfo.url) {
+        throw new Error('Could not resolve audio stream');
+      }
+
+      let fetchRes = null;
+      const retryDelays = [1000, 2000];
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          fetchRes = await fetch(audioInfo.url, {
+            headers: audioInfo.headers || {},
+            signal: controller.signal
+          });
+
+          if (fetchRes.ok && fetchRes.body) break;
+
+          if (attempt < retryDelays.length) {
+            await new Promise((r) => setTimeout(r, retryDelays[attempt]));
+            audioInfo = await resolveBestAudioUrl(videoId, true);
+          }
+        } catch (fetchErr) {
+          if (controller.signal.aborted) throw new Error('Download cancelled');
+          if (attempt === 2) throw new Error(`fetch failed: ${fetchErr.message}`);
+          await new Promise((r) => setTimeout(r, retryDelays[attempt]));
+          audioInfo = await resolveBestAudioUrl(videoId, true);
+        }
+      }
+
+      if (!fetchRes || !fetchRes.ok || !fetchRes.body) {
+        const finalStatus = fetchRes ? `HTTP ${fetchRes.status} ${fetchRes.statusText}` : 'No response';
+        throw new Error(`Failed to fetch audio stream (${finalStatus})`);
+      }
+
+      const contentLengthHeader = fetchRes.headers.get('content-length');
+      const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : (audioInfo.totalSize || 0);
+      const reader = fetchRes.body.getReader();
+      let downloadedBytes = 0;
+      let lastProgressTime = Date.now();
+
+      while (true) {
+        if (controller.signal.aborted) {
+          try { await reader.cancel(); } catch {}
+          throw new Error('Download cancelled');
+        }
+
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (value && value.length > 0) {
+          downloadedBytes += value.length;
+          const canWrite = writeStream.write(Buffer.from(value));
+          if (!canWrite) {
+            await new Promise((resolve) => writeStream.once('drain', resolve));
+          }
+        }
+
+        const now = Date.now();
+        if (now - lastProgressTime >= 120) {
+          lastProgressTime = now;
+          const percent = totalBytes > 0
+            ? Math.min(99, Math.max(5, Math.round((downloadedBytes / totalBytes) * 90) + 10))
+            : Math.min(95, Math.round(10 + Math.log10(1 + downloadedBytes / 60000) * 35));
+          event.sender.send('download-progress-event', {
+            videoId,
+            percent,
+            downloadedBytes,
+            totalBytes: totalBytes || undefined
+          });
+        }
+      }
+
+      await new Promise((resolve, reject) => {
+        writeStream.end((err) => (err ? reject(err) : resolve()));
+      });
+    }
+
+    // 3. Verification of raw stream
+    if (!fs.existsSync(tempRawPath)) {
+      throw new Error('Downloaded temporary file was not created');
+    }
+    const rawStat = await fs.promises.stat(tempRawPath);
+    if (rawStat.size === 0) {
+      await fs.promises.unlink(tempRawPath).catch(() => {});
+      throw new Error('Downloaded audio file is empty (0 bytes)');
+    }
+
+    // 4. Transcode & Embed ID3 Metadata / Cover Art via FFmpeg
+    console.log(`[FFmpeg Processing] Transcoding and tagging "${fileName}"...`);
+    event.sender.send('download-progress-event', {
+      videoId,
+      percent: 96,
+      downloadedBytes: rawStat.size,
+      totalBytes: rawStat.size
+    });
+
+    await transcodeAndTagAudio({
+      inputPath: tempRawPath,
+      outputPath: tempProcessedPath,
+      format: ext,
+      title: title || 'Unknown Track',
+      artist: artist || 'Unknown Artist',
+      album: album || 'OwO Music',
+      coverUrl: cover,
+      abortSignal: controller.signal
+    });
+
+    event.sender.send('download-progress-event', {
+      videoId,
+      percent: 98,
+      downloadedBytes: rawStat.size,
+      totalBytes: rawStat.size
+    });
+
+    const targetFileToUse = fs.existsSync(tempProcessedPath) ? tempProcessedPath : tempRawPath;
+    const finalStat = await fs.promises.stat(targetFileToUse);
+
+    // Atomic move from temp to destination
+    if (fs.existsSync(fullPath)) {
+      try { await fs.promises.unlink(fullPath); } catch {}
+    }
+    await fs.promises.rename(targetFileToUse, fullPath);
+
+    // Clean up any remaining temp files
+    if (fs.existsSync(tempRawPath)) {
+      await fs.promises.unlink(tempRawPath).catch(() => {});
+    }
+    if (fs.existsSync(tempProcessedPath)) {
+      await fs.promises.unlink(tempProcessedPath).catch(() => {});
+    }
+    tempRawPath = null;
+    tempProcessedPath = null;
+
+    event.sender.send('download-progress-event', {
+      videoId,
+      percent: 100,
+      downloadedBytes: finalStat.size,
+      totalBytes: finalStat.size
+    });
+
+    console.log(`[Download] Track "${fileName}" successfully saved to ${fullPath} (${(finalStat.size / (1024 * 1024)).toFixed(2)} MB).`);
+
+    // Read buffer for frontend IndexedDB caching to ensure UI marks download as complete
+    const fileBuffer = await fs.promises.readFile(fullPath);
 
     return {
       success: true,
-      buffer: completeBuffer.buffer.slice(completeBuffer.byteOffset, completeBuffer.byteOffset + completeBuffer.byteLength),
-      mimeType: ext === 'mp3' ? 'audio/mpeg' : 'audio/mp4',
       filePath: fullPath,
-      fileName
+      buffer: fileBuffer,
+      mimeType: ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg',
+      size: finalStat.size
     };
   } catch (err) {
-    console.error('[Native Download Error]:', err);
+    if (tempRawPath && fs.existsSync(tempRawPath)) {
+      try { await fs.promises.unlink(tempRawPath); } catch {}
+    }
+    if (tempProcessedPath && fs.existsSync(tempProcessedPath)) {
+      try { await fs.promises.unlink(tempProcessedPath); } catch {}
+    }
+    console.error(`[Download Error for ${videoId}]:`, err.message);
     return { success: false, error: err.message };
+  } finally {
+    activeDownloads.delete(videoId);
   }
 });
 
@@ -1538,7 +2076,6 @@ function saveLocalMusicFolders(folders) {
 async function scanDirectoryForAudio(dirPath, currentDepth = 0, maxDepth = 3) {
   const results = [];
   if (!dirPath || !fs.existsSync(dirPath) || currentDepth > maxDepth) return results;
-  if (dirPath.toLowerCase().endsWith('owo music') || dirPath.toLowerCase().includes('owo music')) return results;
 
   try {
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
@@ -1549,8 +2086,7 @@ async function scanDirectoryForAudio(dirPath, currentDepth = 0, maxDepth = 3) {
         lowerName.startsWith('$') || 
         lowerName === 'node_modules' || 
         lowerName === 'appdata' || 
-        lowerName === 'windows' ||
-        lowerName === 'owo music'
+        lowerName === 'windows'
       ) {
         continue;
       }
@@ -1567,6 +2103,9 @@ async function scanDirectoryForAudio(dirPath, currentDepth = 0, maxDepth = 3) {
             const baseName = path.basename(entry.name, ext);
             let artist = 'Local Artist';
             let title = baseName;
+            let album = path.basename(dirPath) || 'Local Audio';
+            let duration = 0;
+            let cover = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&q=80';
 
             if (baseName.includes(' - ')) {
               const parts = baseName.split(' - ');
@@ -1574,13 +2113,32 @@ async function scanDirectoryForAudio(dirPath, currentDepth = 0, maxDepth = 3) {
               title = parts.slice(1).join(' - ').trim() || baseName;
             }
 
+            if (mm) {
+              try {
+                const meta = await mm.parseFile(fullPath, { duration: true, skipCovers: false });
+                if (meta.common) {
+                  if (meta.common.title && meta.common.title.trim()) title = meta.common.title.trim();
+                  if (meta.common.artist && meta.common.artist.trim()) artist = meta.common.artist.trim();
+                  if (meta.common.album && meta.common.album.trim()) album = meta.common.album.trim();
+                  if (meta.common.picture && meta.common.picture.length > 0) {
+                    const pic = meta.common.picture[0];
+                    const mime = pic.format || 'image/jpeg';
+                    cover = `data:${mime};base64,${pic.data.toString('base64')}`;
+                  }
+                }
+                if (meta.format && Number.isFinite(meta.format.duration) && meta.format.duration > 0) {
+                  duration = Math.round(meta.format.duration);
+                }
+              } catch (parseErr) {}
+            }
+
             results.push({
               id: 'local-' + Buffer.from(fullPath).toString('base64'),
               title,
               artist,
-              album: path.basename(dirPath) || 'Local Audio',
-              duration: 0,
-              cover: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&q=80',
+              album,
+              duration,
+              cover,
               filePath: fullPath,
               fileName: entry.name,
               sizeBytes: stat.size,
@@ -1618,8 +2176,8 @@ ipcMain.handle('scan-local-music-files', async (event, customDirs) => {
     }
   }
 
-  // Sort by newest modified first
-  allTracks.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  // Sort by oldest added first (so newly downloaded/added files append to bottom)
+  allTracks.sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
   return allTracks;
 });
 

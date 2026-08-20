@@ -165,6 +165,7 @@ async function checkAndTriggerContinuation(
   set: (fn: (state: PlayerState) => Partial<PlayerState> | PlayerState) => void
 ) {
   const { 
+    currentTrack,
     queue, 
     shuffledQueue, 
     queueIndex, 
@@ -183,6 +184,11 @@ async function checkAndTriggerContinuation(
 
   const activeQueue = isShuffle ? shuffledQueue : queue;
   if (activeQueue.length === 0) return;
+
+  // Local tracks must NEVER trigger online mix continuation
+  if (currentTrack?.isLocal || currentTrack?.id?.startsWith('local-') || activeQueue.some(t => t.isLocal || t.id?.startsWith('local-'))) {
+    return;
+  }
 
   // Trigger when remaining tracks including the current one is 3 or less
   const remainingTracks = activeQueue.length - queueIndex;
@@ -307,9 +313,10 @@ export const usePlayerStore = create<PlayerState>()(
   playbackContext: null,
   setPlaybackContext: (playbackContext) => set({ playbackContext }),
   setCurrentTrack: (track, forceRefresh = true, contextType) => {
-    const context = `${track.title} Mix`;
+    const isLocalTrack = track.isLocal || track.id?.startsWith('local-');
+    const context = isLocalTrack ? (track.album || 'Local Files') : `${track.title} Mix`;
     const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const newContextType = contextType !== undefined ? contextType : 'radio';
+    const newContextType = isLocalTrack ? 'user_playlist' : (contextType !== undefined ? contextType : 'radio');
     set((state) => ({ 
       currentTrack: track, 
       currentTime: 0, 
@@ -326,7 +333,7 @@ export const usePlayerStore = create<PlayerState>()(
       playNonce: state.playNonce + 1
     }));
 
-    if (newContextType !== 'user_playlist') {
+    if (!isLocalTrack && newContextType !== 'user_playlist') {
       // Synthesize mix anchored to this seed track
       fetchUpNextMix([track], get().favorites, get().playHistory, new Set([track.id]), get().dislikedTracks, get().blockedArtists, forceRefresh)
         .then(mix => {
@@ -335,7 +342,7 @@ export const usePlayerStore = create<PlayerState>()(
           }
         })
         .catch(() => {});
-    } else {
+    } else if (!isLocalTrack) {
       checkAndTriggerContinuation(get, set);
     }
   },
@@ -398,14 +405,15 @@ export const usePlayerStore = create<PlayerState>()(
     }
 
     const cur = isShuffle ? shuffled[newIndex] : tracks[newIndex];
-    const sourceContext = playingFrom || (cur ? `${cur.title} Mix` : 'Queue');
+    const isLocalQueue = tracks.every(t => t.isLocal || t.id?.startsWith('local-')) || (cur?.isLocal || cur?.id?.startsWith('local-'));
+    const sourceContext = playingFrom || (isLocalQueue ? 'Local Files' : (cur ? `${cur.title} Mix` : 'Queue'));
     const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-    const resolvedContextType = contextType !== undefined ? contextType : (
+    const resolvedContextType = isLocalQueue ? 'user_playlist' : (contextType !== undefined ? contextType : (
       playingFrom && (playingFrom.endsWith('Mix') || playingFrom.includes('Discover') || playingFrom.includes('Radio') || playingFrom.includes('Supermix'))
         ? 'radio'
         : 'finite'
-    );
+    ));
 
     set((state) => ({
       queue: tracks,
@@ -423,7 +431,7 @@ export const usePlayerStore = create<PlayerState>()(
       playNonce: state.playNonce + 1
     }));
 
-    if (resolvedContextType !== 'user_playlist') {
+    if (!isLocalQueue && resolvedContextType !== 'user_playlist') {
       // Synthesize multi-track radio mix for this entire queue session
       const queuedIds = new Set(tracks.map(t => t.id));
       fetchUpNextMix(tracks, get().favorites, get().playHistory, queuedIds, get().dislikedTracks, get().blockedArtists, forceRefresh)
@@ -433,7 +441,7 @@ export const usePlayerStore = create<PlayerState>()(
           }
         })
         .catch(() => {});
-    } else {
+    } else if (!isLocalQueue) {
       checkAndTriggerContinuation(get, set);
     }
   },
@@ -515,7 +523,7 @@ export const usePlayerStore = create<PlayerState>()(
       checkAndTriggerContinuation(get, set);
     } else if (repeatMode === 'all' && activeQueue.length > 0) {
       set((state) => ({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: true, playNonce: state.playNonce + 1 }));
-    } else if (autoplay) {
+    } else if (autoplay && !currentTrack?.isLocal && !currentTrack?.id?.startsWith('local-') && !activeQueue.some(t => t.isLocal || t.id?.startsWith('local-'))) {
       // 1. If pre-fetched auto-mix exists, play immediately
       if (recommendedUpNext && recommendedUpNext.length > 0) {
         const autoTrack = recommendedUpNext[0];
@@ -581,7 +589,7 @@ export const usePlayerStore = create<PlayerState>()(
       // If no tracks could be resolved, stop
       set({ isPlaying: false });
     } else {
-      // End of queue with autoplay off
+      // End of queue with autoplay off OR finished local files (clean stop, no recommendations)
       set({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: false });
     }
   },

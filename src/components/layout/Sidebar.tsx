@@ -10,7 +10,9 @@ import {
   Heart, 
   Sparkles, 
   Check,
-  Download
+  Download,
+  Folder,
+  HardDrive
 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 
@@ -202,6 +204,24 @@ export function Sidebar() {
                 <span className="playlist-name">Liked Music</span>
                 <span className="playlist-sub auto-tag">
                   <Sparkles size={10} color="var(--accent-primary)" /> Auto playlist • {favorites.length}
+                </span>
+              </div>
+            </NavLink>
+
+            {/* Auto-Playlist: Local Files */}
+            <NavLink 
+              to="/playlist/local-files"
+              className={({ isActive }) => `sidebar-playlist-item ${isActive ? 'active' : ''}`}
+              title="Local Files"
+              onClick={() => closePlayerDrawer()}
+            >
+              <div className="playlist-item-icon-box" style={{ background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', borderRadius: '6px' }}>
+                <Folder size={13} color="#ffffff" />
+              </div>
+              <div className="playlist-item-meta">
+                <span className="playlist-name">Local Files</span>
+                <span className="playlist-sub auto-tag">
+                  <HardDrive size={10} color="var(--accent-primary)" /> PC & Offline
                 </span>
               </div>
             </NavLink>
