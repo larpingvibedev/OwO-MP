@@ -104,6 +104,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('bg-audio-fft-event', listener);
     return () => ipcRenderer.removeListener('bg-audio-fft-event', listener);
+  },
+  openYoutubeSignIn: async () => {
+    return await ipcRenderer.invoke('open-youtube-signin');
+  },
+  signOutYoutube: async () => {
+    return await ipcRenderer.invoke('sign-out-youtube');
+  },
+  getYoutubeAuthState: async () => {
+    return await ipcRenderer.invoke('get-youtube-auth-state');
   }
 });
 

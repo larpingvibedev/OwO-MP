@@ -49,8 +49,24 @@ export const AudioPlayer = () => {
     let unsubscribeYtState: (() => void) | undefined;
 
     if (electronAPI?.onYouTubeStateUpdate) {
-      unsubscribeYtState = electronAPI.onYouTubeStateUpdate((data: any) => {
+      unsubscribeYtState = electronAPI.onYouTubeStateUpdate(async (data: any) => {
         if (!isOnlineYtTrackRef.current) return;
+        
+        if (data.error) {
+          if (data.error === 'LOGIN_REQUIRED') {
+            const authState = electronAPI.getYoutubeAuthState ? await electronAPI.getYoutubeAuthState() : 'signed_out';
+            if (authState === 'signed_in') {
+              showToast("This track isn't available for this account.");
+            } else {
+              showToast("Sign in to YouTube (Settings) to play this track.");
+            }
+          } else if (data.error === 'UNPLAYABLE' || data.error === 'ERROR') {
+            showToast("This track is unavailable or age-restricted.");
+          }
+          nextTrack();
+          return;
+        }
+
         if (data.duration && data.duration > 0) {
           setDuration(data.duration);
         }

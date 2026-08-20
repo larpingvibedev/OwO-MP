@@ -16,7 +16,8 @@ import {
   X,
   ExternalLink,
   FolderPlus,
-  RefreshCw
+  RefreshCw,
+  User
 } from 'lucide-react';
 import { SyncModal } from '../components/SyncModal';
 import { usePlayerStore } from '../store/usePlayerStore';
@@ -40,6 +41,14 @@ export function Settings() {
   const [localFolders, setLocalFolders] = useState<string[]>([]);
   const [localTrackCount, setLocalTrackCount] = useState<number>(0);
   const [isScanningLocal, setIsScanningLocal] = useState<boolean>(false);
+  const [youtubeAuthState, setYoutubeAuthState] = useState<'signed_in' | 'signed_out'>('signed_out');
+
+  const checkYoutubeAuth = async () => {
+    if (window.electronAPI?.isElectron && window.electronAPI.getYoutubeAuthState) {
+      const state = await window.electronAPI.getYoutubeAuthState();
+      setYoutubeAuthState(state);
+    }
+  };
 
   const scanLocalFolders = async () => {
     const electronAPI = (window as any).electronAPI;
@@ -61,6 +70,7 @@ export function Settings() {
     getCustomDirectoryName().then(setCustomDirName);
     getPreferredDownloadFormat().then(setDownloadFormat);
     scanLocalFolders();
+    checkYoutubeAuth();
   }, []);
 
   const handleAddLocalFolder = async () => {
@@ -161,6 +171,21 @@ export function Settings() {
       window.location.href = '/';
     } catch (e) {
       window.location.reload();
+    }
+  };
+
+  const handleYoutubeSignIn = async () => {
+    if (window.electronAPI?.isElectron && window.electronAPI.openYoutubeSignIn) {
+      await window.electronAPI.openYoutubeSignIn();
+      checkYoutubeAuth();
+    }
+  };
+
+  const handleYoutubeSignOut = async () => {
+    if (window.electronAPI?.isElectron && window.electronAPI.signOutYoutube) {
+      await window.electronAPI.signOutYoutube();
+      checkYoutubeAuth();
+      showToast('Signed out of YouTube');
     }
   };
 
@@ -644,7 +669,43 @@ export function Settings() {
       </div>
 
       {/* ========================================================================= */}
-      {/* 5. DATA & FACTORY RESET                                                   */}
+      {/* 5. YOUTUBE AUTHENTICATION                                                 */}
+      {/* ========================================================================= */}
+      <div className="settings-group">
+        <div className="settings-group-header">
+          <div className="settings-group-title">
+            <User size={18} color="var(--accent-primary)" />
+            <span>YouTube Account</span>
+          </div>
+        </div>
+
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Sign In to YouTube</div>
+            <div className="settings-row-desc">
+              Sign in to play age-restricted and member-only content natively. 
+              <br />
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                Status: {youtubeAuthState === 'signed_in' ? <strong style={{color: '#2ecc71'}}>Signed In</strong> : <strong>Signed Out</strong>}
+              </span>
+            </div>
+          </div>
+          {youtubeAuthState === 'signed_in' ? (
+            <button className="settings-btn-secondary" onClick={handleYoutubeSignOut}>
+              <X size={14} />
+              <span>Sign Out</span>
+            </button>
+          ) : (
+            <button className="settings-btn-primary" onClick={handleYoutubeSignIn}>
+              <User size={14} />
+              <span>Sign In</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 6. DATA & FACTORY RESET                                                   */}
       {/* ========================================================================= */}
       <div className="settings-group" style={{ borderColor: 'rgba(255, 71, 87, 0.25)' }}>
         <div className="settings-group-header" style={{ backgroundColor: 'rgba(255, 71, 87, 0.04)' }}>

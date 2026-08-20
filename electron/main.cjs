@@ -507,10 +507,10 @@ function checkByteCoverage(bucket, targetClen) {
   return { complete, coveredUntil, totalBytes };
 }
 
-// Browser-Assisted YouTube Authenticated Stream Downloader (persist:owo-music-runtime)
+// Browser-Assisted YouTube Authenticated Stream Downloader (persist:youtube)
 async function downloadTrackViaBrowserBuffer(videoId, tempPath, onProgress, abortSignal = null) {
   if (!videoId) return { success: false, error: 'Missing videoId' };
-  const s = session.fromPartition('persist:owo-music-runtime');
+  const s = session.fromPartition('persist:youtube');
 
   const streamBuckets = new Map(); // clen -> Map<start, { end, buffer }>
   let mimeType = 'audio/webm';
@@ -1178,7 +1178,7 @@ function getOrCreateBgPlayerWindow() {
     return bgPlayerWindow;
   }
 
-  const s = session.fromPartition('persist:owo-music-runtime');
+  const s = session.fromPartition('persist:youtube');
 
   // Install network filter once per session partition
   if (!s.__owoAdFilterInstalled) {
@@ -1245,6 +1245,9 @@ function getOrCreateBgPlayerWindow() {
             const apiAdState = (p && typeof p.getAdState === 'function') ? p.getAdState() : 0;
             const isAd = (apiAdState > 0) || hasAdClass;
 
+            const response = (p && typeof p.getPlayerResponse === 'function') ? p.getPlayerResponse() : null;
+            const playabilityStatus = response?.playabilityStatus?.status || null;
+
             return {
               currentTime: v.currentTime || 0,
               duration: v.duration || 0,
@@ -1254,7 +1257,8 @@ function getOrCreateBgPlayerWindow() {
               playerState: playerState,
               urlVideoId: urlVideoId,
               apiVideoId: apiVideoId,
-              isAd: isAd
+              isAd: isAd,
+              playabilityStatus: playabilityStatus
             };
           } catch (e) {
             return null;
@@ -1264,7 +1268,20 @@ function getOrCreateBgPlayerWindow() {
 
       if (!state) return;
 
-      const { currentTime, duration, paused, ended, playerState, urlVideoId, apiVideoId, isAd } = state;
+      const { currentTime, duration, paused, ended, playerState, urlVideoId, apiVideoId, isAd, playabilityStatus } = state;
+
+      // Check for playback errors like age-restriction or unplayable tracks
+      if (playabilityStatus === 'LOGIN_REQUIRED' || playabilityStatus === 'UNPLAYABLE' || playabilityStatus === 'ERROR') {
+        if (requestedVideoId && navigationInProgress) {
+          console.warn(`[BgPlayer StateMachine] Playback failed for ${requestedVideoId} due to ${playabilityStatus}`);
+          mainWindow.webContents.send('yt-player-state-update', {
+            error: playabilityStatus,
+            videoId: requestedVideoId
+          });
+          navigationInProgress = false;
+          requestedVideoId = null;
+        }
+      }
 
       // Settle actual video ID (favor matching requested if in transition)
       let resolvedActualId = null;
@@ -1704,6 +1721,58 @@ ipcMain.handle('select-directory', async () => {
     return result.filePaths[0];
   }
   return null;
+});
+
+// --- YouTube Authentication IPC ---
+let youtubeAuthWindow = null;
+
+ipcMain.handle('open-youtube-signin', async () => {
+  if (youtubeAuthWindow && !youtubeAuthWindow.isDestroyed()) {
+    youtubeAuthWindow.focus();
+    return false;
+  }
+  
+  return new Promise((resolve) => {
+    youtubeAuthWindow = new BrowserWindow({
+      width: 800,
+      height: 700,
+      title: 'Sign In to YouTube',
+      webPreferences: {
+        partition: 'persist:youtube',
+        nodeIntegration: false,
+        contextIsolation: true
+      },
+      autoHideMenuBar: true
+    });
+
+    youtubeAuthWindow.loadURL('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/');
+
+    youtubeAuthWindow.on('closed', () => {
+      youtubeAuthWindow = null;
+      resolve(true); // Always resolve so UI can refresh auth state
+    });
+  });
+});
+
+ipcMain.handle('sign-out-youtube', async () => {
+  try {
+    const s = session.fromPartition('persist:youtube');
+    await s.clearStorageData();
+    return true;
+  } catch (e) {
+    return false;
+  }
+});
+
+ipcMain.handle('get-youtube-auth-state', async () => {
+  try {
+    const s = session.fromPartition('persist:youtube');
+    const cookies = await s.cookies.get({ url: 'https://youtube.com' });
+    const hasLoginCookie = cookies.some(c => c.name === 'LOGIN_INFO' || c.name === 'SAPISID' || c.name === '__Secure-3PSID');
+    return hasLoginCookie ? 'signed_in' : 'signed_out';
+  } catch (e) {
+    return 'signed_out';
+  }
 });
 
 ipcMain.handle('get-genius-lyrics', async (event, query) => {

@@ -56,6 +56,9 @@ declare global {
       openFolder: (folderPath?: string) => Promise<void>;
       selectDirectory: () => Promise<string | null>;
       showItemInFolder: (fullPath: string) => Promise<void>;
+      openYoutubeSignIn: () => Promise<boolean>;
+      signOutYoutube: () => Promise<boolean>;
+      getYoutubeAuthState: () => Promise<'signed_in' | 'signed_out'>;
     };
   }
 }
