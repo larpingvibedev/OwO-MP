@@ -47,7 +47,9 @@ export function Settings() {
     if (window.electronAPI?.isElectron && window.electronAPI.getYoutubeAuthState) {
       const state = await window.electronAPI.getYoutubeAuthState();
       setYoutubeAuthState(state);
+      return state;
     }
+    return 'signed_out';
   };
 
   const scanLocalFolders = async () => {
@@ -71,18 +73,6 @@ export function Settings() {
     getPreferredDownloadFormat().then(setDownloadFormat);
     scanLocalFolders();
     checkYoutubeAuth();
-
-    const electronAPI = (window as any).electronAPI;
-    let unsubAuth: (() => void) | undefined;
-    if (electronAPI?.onYoutubeAuthStateChanged) {
-      unsubAuth = electronAPI.onYoutubeAuthStateChanged((state: 'signed_in' | 'signed_out') => {
-        setYoutubeAuthState(state);
-      });
-    }
-
-    return () => {
-      if (unsubAuth) unsubAuth();
-    };
   }, []);
 
   const handleAddLocalFolder = async () => {
@@ -189,12 +179,9 @@ export function Settings() {
   const handleYoutubeSignIn = async () => {
     if (window.electronAPI?.isElectron && window.electronAPI.openYoutubeSignIn) {
       await window.electronAPI.openYoutubeSignIn();
-      if (window.electronAPI.getYoutubeAuthState) {
-        const state = await window.electronAPI.getYoutubeAuthState();
-        setYoutubeAuthState(state);
-        if (state === 'signed_in') {
-          showToast('Successfully signed in to YouTube!');
-        }
+      const state = await checkYoutubeAuth();
+      if (state === 'signed_in') {
+        showToast('Successfully signed in to YouTube');
       }
     }
   };

@@ -59,7 +59,6 @@ declare global {
       openYoutubeSignIn: () => Promise<boolean>;
       signOutYoutube: () => Promise<boolean>;
       getYoutubeAuthState: () => Promise<'signed_in' | 'signed_out'>;
-      onYoutubeAuthStateChanged?: (callback: (state: 'signed_in' | 'signed_out') => void) => () => void;
     };
   }
 }

@@ -113,11 +113,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getYoutubeAuthState: async () => {
     return await ipcRenderer.invoke('get-youtube-auth-state');
-  },
-  onYoutubeAuthStateChanged: (callback) => {
-    const listener = (event, data) => callback(data);
-    ipcRenderer.on('youtube-auth-state-changed', listener);
-    return () => ipcRenderer.removeListener('youtube-auth-state-changed', listener);
   }
 });
 
