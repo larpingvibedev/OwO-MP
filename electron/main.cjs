@@ -1726,6 +1726,23 @@ ipcMain.handle('select-directory', async () => {
 // --- YouTube Authentication IPC ---
 let youtubeAuthWindow = null;
 
+function setupYoutubeAuthListener() {
+  try {
+    const s = session.fromPartition('persist:youtube');
+    s.cookies.on('changed', async (event, cookie) => {
+      if (cookie && cookie.domain && (cookie.domain.includes('youtube.com') || cookie.domain.includes('google.com'))) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          const cookies = await s.cookies.get({ url: 'https://youtube.com' });
+          const hasLoginCookie = cookies.some(c => c.name === 'LOGIN_INFO' || c.name === 'SAPISID' || c.name === '__Secure-3PSID' || c.name === 'SID');
+          mainWindow.webContents.send('youtube-auth-state-changed', hasLoginCookie ? 'signed_in' : 'signed_out');
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('[YouTube Auth Listener Error]:', e.message);
+  }
+}
+
 ipcMain.handle('open-youtube-signin', async () => {
   if (youtubeAuthWindow && !youtubeAuthWindow.isDestroyed()) {
     youtubeAuthWindow.focus();
@@ -1733,6 +1750,8 @@ ipcMain.handle('open-youtube-signin', async () => {
   }
   
   return new Promise((resolve) => {
+    const s = session.fromPartition('persist:youtube');
+
     youtubeAuthWindow = new BrowserWindow({
       width: 800,
       height: 700,
@@ -1745,9 +1764,71 @@ ipcMain.handle('open-youtube-signin', async () => {
       autoHideMenuBar: true
     });
 
+    let isDone = false;
+    let pollInterval = null;
+
+    const checkLoginStatus = async () => {
+      if (isDone || !youtubeAuthWindow || youtubeAuthWindow.isDestroyed()) return;
+      try {
+        const currentUrl = youtubeAuthWindow.webContents.getURL() || '';
+        
+        // Query cookies in the persist:youtube session
+        const cookies = await s.cookies.get({ url: 'https://youtube.com' });
+        const hasLoginCookie = cookies.some(c => c.name === 'LOGIN_INFO' || c.name === 'SAPISID' || c.name === '__Secure-3PSID' || c.name === 'SID');
+
+        // Check if URL is on YouTube/Google post-login
+        const isYtUrl = currentUrl.includes('youtube.com') || currentUrl.includes('myaccount.google.com');
+        const isNotLoginPage = !currentUrl.includes('/ServiceLogin') && !currentUrl.includes('/signin') && !currentUrl.includes('/v3/signin') && !currentUrl.includes('accounts.google.com/InteractiveLogin') && !currentUrl.includes('accounts.google.com/signin/v2');
+
+        // Also check if YouTube in-page auth signals exist (avatar, ytcfg)
+        let hasInPageAuth = false;
+        if (isYtUrl && isNotLoginPage) {
+          try {
+            hasInPageAuth = await youtubeAuthWindow.webContents.executeJavaScript(`
+              (() => {
+                try {
+                  if (window.ytcfg && typeof window.ytcfg.get === 'function' && window.ytcfg.get('LOGGED_IN') === true) {
+                    return true;
+                  }
+                  if (document.querySelector('ytd-topbar-menu-button-renderer, #avatar-btn, button#avatar-btn, yt-img-shadow#avatar, ytm-custom-avatar-renderer')) {
+                    return true;
+                  }
+                  return false;
+                } catch(e) {
+                  return false;
+                }
+              })()
+            `).catch(() => false);
+          } catch(e) {}
+        }
+
+        if (hasLoginCookie && (hasInPageAuth || (isYtUrl && isNotLoginPage))) {
+          isDone = true;
+          if (pollInterval) clearInterval(pollInterval);
+          console.log('[YouTube Auth] Login detected! Auto-closing sign-in window...');
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('youtube-auth-state-changed', 'signed_in');
+          }
+          setTimeout(() => {
+            if (youtubeAuthWindow && !youtubeAuthWindow.isDestroyed()) {
+              youtubeAuthWindow.close();
+            }
+          }, 600);
+        }
+      } catch (e) {}
+    };
+
+    youtubeAuthWindow.webContents.on('did-finish-load', checkLoginStatus);
+    youtubeAuthWindow.webContents.on('did-navigate', checkLoginStatus);
+    youtubeAuthWindow.webContents.on('did-navigate-in-page', checkLoginStatus);
+
+    pollInterval = setInterval(checkLoginStatus, 600);
+
     youtubeAuthWindow.loadURL('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/');
 
     youtubeAuthWindow.on('closed', () => {
+      isDone = true;
+      if (pollInterval) clearInterval(pollInterval);
       youtubeAuthWindow = null;
       resolve(true); // Always resolve so UI can refresh auth state
     });
@@ -1758,6 +1839,9 @@ ipcMain.handle('sign-out-youtube', async () => {
   try {
     const s = session.fromPartition('persist:youtube');
     await s.clearStorageData();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('youtube-auth-state-changed', 'signed_out');
+    }
     return true;
   } catch (e) {
     return false;
@@ -1768,7 +1852,7 @@ ipcMain.handle('get-youtube-auth-state', async () => {
   try {
     const s = session.fromPartition('persist:youtube');
     const cookies = await s.cookies.get({ url: 'https://youtube.com' });
-    const hasLoginCookie = cookies.some(c => c.name === 'LOGIN_INFO' || c.name === 'SAPISID' || c.name === '__Secure-3PSID');
+    const hasLoginCookie = cookies.some(c => c.name === 'LOGIN_INFO' || c.name === 'SAPISID' || c.name === '__Secure-3PSID' || c.name === 'SID');
     return hasLoginCookie ? 'signed_in' : 'signed_out';
   } catch (e) {
     return 'signed_out';
@@ -2335,6 +2419,7 @@ app.whenReady().then(() => {
 
   startInternalProxyServer();
   setupMusicFolderWatcher();
+  setupYoutubeAuthListener();
   createWindow();
 
   app.on('activate', () => {
