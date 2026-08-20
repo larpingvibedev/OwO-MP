@@ -95,6 +95,8 @@ interface PlayerState {
   addToQueue: (track: Track) => void;
   removeFromQueue: (index: number) => void;
   reorderQueue: (startIndex: number, endIndex: number) => void;
+  playQueueIndex: (index: number) => void;
+  playUpNextTrack: (track: Track, remainingUpNext: Track[], skippedFromUpNext?: Track[]) => void;
   nextTrack: () => void;
   prevTrack: () => void;
   
@@ -550,6 +552,39 @@ export const usePlayerStore = create<PlayerState>()(
     return { queue: targetQueue, queueIndex: newQueueIndex };
   }),
   
+  playQueueIndex: (index: number) => {
+    const { queue, shuffledQueue, isShuffle } = get();
+    const activeQueue = isShuffle ? shuffledQueue : queue;
+    if (index < 0 || index >= activeQueue.length) return;
+    const track = activeQueue[index];
+    set((state) => ({
+      queueIndex: index,
+      currentTrack: track,
+      currentTime: 0,
+      duration: track.duration ?? 0,
+      isPlaying: true,
+      playNonce: state.playNonce + 1
+    }));
+    checkAndTriggerContinuation(get, set);
+  },
+
+  playUpNextTrack: (track: Track, remainingUpNext: Track[], skippedFromUpNext: Track[] = []) => {
+    const { queue, shuffledQueue, isShuffle } = get();
+    const newQueue = [...queue, ...skippedFromUpNext, track];
+    const newShuffled = isShuffle ? [...shuffledQueue, ...skippedFromUpNext, track] : newQueue;
+    set((state) => ({
+      queue: newQueue,
+      shuffledQueue: newShuffled,
+      queueIndex: newQueue.length - 1,
+      currentTrack: track,
+      recommendedUpNext: remainingUpNext,
+      currentTime: 0,
+      duration: track.duration ?? 0,
+      isPlaying: true,
+      playNonce: state.playNonce + 1
+    }));
+  },
+
   nextTrack: async () => {
     const { queue, shuffledQueue, queueIndex, isShuffle, repeatMode, autoplay, recommendedUpNext, currentTrack, favorites, playHistory } = get();
     const activeQueue = isShuffle ? shuffledQueue : queue;
@@ -557,10 +592,10 @@ export const usePlayerStore = create<PlayerState>()(
 
     const nextIndex = queueIndex + 1;
     if (nextIndex < activeQueue.length) {
-      set((state) => ({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, duration: activeQueue[nextIndex].duration || 0, isPlaying: true, playNonce: state.playNonce + 1 }));
+      set((state) => ({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, duration: activeQueue[nextIndex].duration ?? 0, isPlaying: true, playNonce: state.playNonce + 1 }));
       checkAndTriggerContinuation(get, set);
     } else if (repeatMode === 'all' && activeQueue.length > 0) {
-      set((state) => ({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, duration: activeQueue[0].duration || 0, isPlaying: true, playNonce: state.playNonce + 1 }));
+      set((state) => ({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, duration: activeQueue[0].duration ?? 0, isPlaying: true, playNonce: state.playNonce + 1 }));
     } else if (autoplay && !currentTrack?.isLocal && !currentTrack?.id?.startsWith('local-') && !activeQueue.some(t => t.isLocal || t.id?.startsWith('local-'))) {
       // 1. If pre-fetched auto-mix exists, play immediately
       if (recommendedUpNext && recommendedUpNext.length > 0) {
@@ -575,7 +610,7 @@ export const usePlayerStore = create<PlayerState>()(
           currentTrack: autoTrack,
           recommendedUpNext: remainingMix,
           currentTime: 0,
-          duration: autoTrack.duration || 0,
+          duration: autoTrack.duration ?? 0,
           isPlaying: true,
           playNonce: state.playNonce + 1
         }));
@@ -615,7 +650,7 @@ export const usePlayerStore = create<PlayerState>()(
               currentTrack: autoTrack,
               recommendedUpNext: remainingMix,
               currentTime: 0,
-              duration: autoTrack.duration || 0,
+              duration: autoTrack.duration ?? 0,
               isPlaying: true,
               playNonce: state.playNonce + 1
             }));
@@ -630,7 +665,7 @@ export const usePlayerStore = create<PlayerState>()(
       set({ isPlaying: false });
     } else {
       // End of queue with autoplay off OR finished local files (clean stop, no recommendations)
-      set({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, duration: activeQueue[0].duration || 0, isPlaying: false });
+      set({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, duration: activeQueue[0].duration ?? 0, isPlaying: false });
     }
   },
   
@@ -650,7 +685,7 @@ export const usePlayerStore = create<PlayerState>()(
       queueIndex: prevIndex,
       currentTrack: activeQueue[prevIndex],
       currentTime: 0,
-      duration: activeQueue[prevIndex].duration || 0,
+      duration: activeQueue[prevIndex].duration ?? 0,
       isPlaying: true,
       playNonce: state.playNonce + 1
     }));

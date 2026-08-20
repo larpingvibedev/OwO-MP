@@ -9,7 +9,8 @@ export function QueuePanel() {
     queueIndex, 
     currentTrack, 
     isQueueVisible, 
-    toggleQueue
+    toggleQueue,
+    playQueueIndex
   } = usePlayerStore();
 
   if (!isQueueVisible) return null;
@@ -43,19 +44,21 @@ export function QueuePanel() {
 
       <div className="queue-content" style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
         {/* Now Playing */}
-        <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-          Now Playing
-        </h3>
         {currentTrack && (
-          <div className="track-row active-playing" style={{ gridTemplateColumns: '40px 1fr' }}>
-            <div 
-              className="track-row-cover" 
-              style={{ backgroundImage: `url(${currentTrack.cover})` }} 
-            />
-            <div className="track-row-details" style={{ gap: '12px' }}>
-              <div className="track-row-info">
-                <div className="track-row-title" style={{ fontSize: '0.9rem' }}>{currentTrack.title}</div>
-                <div className="track-row-artist" style={{ fontSize: '0.8rem' }}>{currentTrack.artist}</div>
+          <div>
+            <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+              Now Playing
+            </h3>
+            <div className="track-row playing" style={{ gridTemplateColumns: '40px 1fr', padding: '8px' }}>
+              <div 
+                className="track-row-cover" 
+                style={{ backgroundImage: `url(${currentTrack.cover})` }} 
+              />
+              <div className="track-row-details" style={{ gap: '12px' }}>
+                <div className="track-row-info">
+                  <div className="track-row-title" style={{ fontSize: '0.9rem' }}>{currentTrack.title}</div>
+                  <div className="track-row-artist" style={{ fontSize: '0.8rem' }}>{currentTrack.artist}</div>
+                </div>
               </div>
             </div>
           </div>
@@ -75,7 +78,7 @@ export function QueuePanel() {
                 onClick={() => {
                   const originalIndex = activeQueue.findIndex(t => t.id === track.id);
                   if (originalIndex !== -1) {
-                    usePlayerStore.setState({ queueIndex: originalIndex, currentTrack: track, currentTime: 0, isPlaying: true });
+                    playQueueIndex(originalIndex);
                   }
                 }}
               >

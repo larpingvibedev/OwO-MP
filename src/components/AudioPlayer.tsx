@@ -14,6 +14,7 @@ export const AudioPlayer = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const activeLoadedTrackIdRef = useRef<string | null>(null);
   const activeLoadedNonceRef = useRef<number>(-1);
+  const loadGenerationRef = useRef<number>(0);
   const isSwitchingRef = useRef<boolean>(false);
   const isOnlineYtTrackRef = useRef<boolean>(false);
   const trackFailedCountRef = useRef<Map<string, number>>(new Map());
@@ -52,16 +53,14 @@ export const AudioPlayer = () => {
       unsubscribeYtState = electronAPI.onYouTubeStateUpdate(async (data: any) => {
         if (!isOnlineYtTrackRef.current) return;
         
-        // Guard against mismatched telemetry from previous tracks
-        if (data.videoId) {
+        // 1. Process Errors safely (Emitted by main.cjs strictly for the requested track during setup)
+        if (data.error) {
           const cur = usePlayerStore.getState().currentTrack;
           const currentDirectId = cur ? getDirectYouTubeId(cur) : null;
-          if (currentDirectId && data.videoId !== currentDirectId && data.videoId !== cur?.id) {
+          if (data.videoId && currentDirectId && data.videoId !== currentDirectId && data.videoId !== cur?.id) {
             return;
           }
-        }
-        
-        if (data.error) {
+
           if (data.error === 'LOGIN_REQUIRED') {
             const authState = electronAPI.getYoutubeAuthState ? await electronAPI.getYoutubeAuthState() : 'signed_out';
             if (authState === 'signed_in') {
@@ -74,6 +73,18 @@ export const AudioPlayer = () => {
           }
           nextTrack();
           return;
+        }
+
+        // 2. Block stale time/duration telemetry from previous tracks during setup
+        if (isSwitchingRef.current) return;
+        
+        // Guard against mismatched telemetry from previous tracks
+        if (data.videoId) {
+          const cur = usePlayerStore.getState().currentTrack;
+          const currentDirectId = cur ? getDirectYouTubeId(cur) : null;
+          if (currentDirectId && data.videoId !== currentDirectId && data.videoId !== cur?.id) {
+            return;
+          }
         }
 
         if (data.duration && data.duration > 0) {
@@ -202,139 +213,140 @@ export const AudioPlayer = () => {
       }
       electronAPI?.pauseYouTubeTrack?.();
 
+      const myLoadGen = ++loadGenerationRef.current;
       activeLoadedTrackIdRef.current = currentTrack.id;
       activeLoadedNonceRef.current = playNonce;
       isSwitchingRef.current = true;
       recordPlay(currentTrack);
 
-      // A0. Check Local PC Audio File (Direct High-Speed Local Proxy Streaming)
-      const localFilePath = (currentTrack as any).filePath || (currentTrack.id.startsWith('local-') ? (currentTrack as any).filePath : null);
-      if (localFilePath) {
-        isOnlineYtTrackRef.current = false;
-        audioEngine.setPlaybackSource('local');
-        electronAPI?.stopYouTubeTrack?.();
+      try {
+        // A0. Check Local PC Audio File (Direct High-Speed Local Proxy Streaming)
+        const localFilePath = (currentTrack as any).filePath || (currentTrack.id.startsWith('local-') ? (currentTrack as any).filePath : null);
+        if (localFilePath) {
+          isOnlineYtTrackRef.current = false;
+          audioEngine.setPlaybackSource('local');
+          electronAPI?.stopYouTubeTrack?.();
 
-        let proxyPort = 41721;
-        if (electronAPI?.getProxyPort) {
-          proxyPort = await electronAPI.getProxyPort();
-        }
-        const localStreamUrl = `http://127.0.0.1:${proxyPort}/api/local-file?path=${encodeURIComponent(localFilePath)}`;
-        if (audioRef.current) {
-          audioRef.current.src = localStreamUrl;
-          audioEngine.setVolume(volume);
-          if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
-          audioEngine.resume();
-          audioRef.current.play().catch(console.warn);
-        }
-        setIsPlaying(true);
-        activeLoadedNonceRef.current = playNonce;
-        isSwitchingRef.current = false;
-        return;
-      }
-
-      // A. Check Offline Local Storage First (0ms Instant Audio)
-      const offlineBlobUrl = await getOfflineTrackBlobUrl(currentTrack.id);
-      if (isCancelled) return;
-      if (offlineBlobUrl) {
-        isOnlineYtTrackRef.current = false;
-        audioEngine.setPlaybackSource('local');
-        electronAPI?.stopYouTubeTrack?.();
-
-        if (audioRef.current) {
-          audioRef.current.src = offlineBlobUrl;
-          audioEngine.setVolume(volume);
-          if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
-          audioEngine.resume();
-          audioRef.current.play().catch(console.warn);
-        }
-        setIsPlaying(true);
-        isSwitchingRef.current = false;
-        prefetchUpcoming();
-        return;
-      }
-
-      // B. Direct Blob Preview
-      if (currentTrack.resolvedStreamUrl?.startsWith('blob:')) {
-        isOnlineYtTrackRef.current = false;
-        audioEngine.setPlaybackSource('local');
-        electronAPI?.stopYouTubeTrack?.();
-
-        if (audioRef.current) {
-          audioRef.current.src = currentTrack.resolvedStreamUrl;
-          audioEngine.setVolume(volume);
-          if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
-          audioEngine.resume();
-          audioRef.current.play().catch(console.warn);
-        }
-        setIsPlaying(true);
-        isSwitchingRef.current = false;
-        prefetchUpcoming();
-        return;
-      }
-
-      // C. Resolve Online Track via Native Background YouTube Player Engine or Proxy
-      let videoId = getDirectYouTubeId(currentTrack);
-
-      if (!videoId) {
-        videoId = await resolveYouTubeVideoId(
-          currentTrack.artist,
-          currentTrack.title,
-          currentTrack.albumArtist,
-          currentTrack.duration
-        );
-      }
-
-      if (isCancelled) return;
-
-      if (videoId) {
-        try {
-          if (electronAPI?.playYouTubeTrack) {
-            isOnlineYtTrackRef.current = true;
-            audioEngine.setPlaybackSource('youtube');
-            console.log(`[AudioPlayer] Playing via native background engine for ${currentTrack.title} (${videoId}) with volume ${volume}`);
-            const playRes = await electronAPI.playYouTubeTrack(videoId, 0, volume);
-            
-            if (playRes?.success) {
-              setIsPlaying(true);
-              isSwitchingRef.current = false;
-              prefetchUpcoming();
-              return;
-            }
-          }
-
-          // Web fallback
           let proxyPort = 41721;
           if (electronAPI?.getProxyPort) {
             proxyPort = await electronAPI.getProxyPort();
           }
-          const directStreamUrl = `http://127.0.0.1:${proxyPort}/api/stream?videoId=${videoId}`;
-
-          if (isCancelled) return;
-          isOnlineYtTrackRef.current = false;
-          audioEngine.setPlaybackSource('local');
-
+          const localStreamUrl = `http://127.0.0.1:${proxyPort}/api/local-file?path=${encodeURIComponent(localFilePath)}`;
           if (audioRef.current) {
-            audioRef.current.src = directStreamUrl;
+            audioRef.current.src = localStreamUrl;
             audioEngine.setVolume(volume);
             if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
             audioEngine.resume();
-            audioRef.current.play().catch((err) => {
-              console.warn('[AudioPlayer] Play notice:', err.message);
-            });
+            audioRef.current.play().catch(console.warn);
           }
           setIsPlaying(true);
-          isSwitchingRef.current = false;
-        } catch (err) {
-          console.error('[AudioPlayer] Stream setup error:', err);
+          activeLoadedNonceRef.current = playNonce;
+          return;
         }
-      } else {
-        console.warn('[AudioPlayer] Could not resolve video ID for:', currentTrack.title);
-        showToast(`Could not find stream for "${currentTrack.title}"`);
-        nextTrack();
+
+        // A. Check Offline Local Storage First (0ms Instant Audio)
+        const offlineBlobUrl = await getOfflineTrackBlobUrl(currentTrack.id);
+        if (isCancelled) return;
+        if (offlineBlobUrl) {
+          isOnlineYtTrackRef.current = false;
+          audioEngine.setPlaybackSource('local');
+          electronAPI?.stopYouTubeTrack?.();
+
+          if (audioRef.current) {
+            audioRef.current.src = offlineBlobUrl;
+            audioEngine.setVolume(volume);
+            if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
+            audioEngine.resume();
+            audioRef.current.play().catch(console.warn);
+          }
+          setIsPlaying(true);
+          prefetchUpcoming();
+          return;
+        }
+
+        // B. Direct Blob Preview
+        if (currentTrack.resolvedStreamUrl?.startsWith('blob:')) {
+          isOnlineYtTrackRef.current = false;
+          audioEngine.setPlaybackSource('local');
+          electronAPI?.stopYouTubeTrack?.();
+
+          if (audioRef.current) {
+            audioRef.current.src = currentTrack.resolvedStreamUrl;
+            audioEngine.setVolume(volume);
+            if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
+            audioEngine.resume();
+            audioRef.current.play().catch(console.warn);
+          }
+          setIsPlaying(true);
+          prefetchUpcoming();
+          return;
+        }
+
+        // C. Resolve Online Track via Native Background YouTube Player Engine or Proxy
+        let videoId = getDirectYouTubeId(currentTrack);
+
+        if (!videoId) {
+          videoId = await resolveYouTubeVideoId(
+            currentTrack.artist,
+            currentTrack.title,
+            currentTrack.albumArtist,
+            currentTrack.duration
+          );
+        }
+
+        if (isCancelled) return;
+
+        if (videoId) {
+          try {
+            if (electronAPI?.playYouTubeTrack) {
+              isOnlineYtTrackRef.current = true;
+              audioEngine.setPlaybackSource('youtube');
+              console.log(`[AudioPlayer] Playing via native background engine for ${currentTrack.title} (${videoId}) with volume ${volume}`);
+              const playRes = await electronAPI.playYouTubeTrack(videoId, 0, volume);
+              
+              if (playRes?.success) {
+                setIsPlaying(true);
+                prefetchUpcoming();
+                return;
+              }
+            }
+
+            // Web fallback
+            let proxyPort = 41721;
+            if (electronAPI?.getProxyPort) {
+              proxyPort = await electronAPI.getProxyPort();
+            }
+            const directStreamUrl = `http://127.0.0.1:${proxyPort}/api/stream?videoId=${videoId}`;
+
+            if (isCancelled) return;
+            isOnlineYtTrackRef.current = false;
+            audioEngine.setPlaybackSource('local');
+
+            if (audioRef.current) {
+              audioRef.current.src = directStreamUrl;
+              audioEngine.setVolume(volume);
+              if (!audioEngine.isConnectedToWebAudio()) audioRef.current.volume = volume;
+              audioEngine.resume();
+              audioRef.current.play().catch((err) => {
+                console.warn('[AudioPlayer] Play notice:', err.message);
+              });
+            }
+            setIsPlaying(true);
+          } catch (err) {
+            console.error('[AudioPlayer] Stream setup error:', err);
+          }
+        } else {
+          console.warn('[AudioPlayer] Could not resolve video ID for:', currentTrack.title);
+          showToast(`Could not find stream for "${currentTrack.title}"`);
+          nextTrack();
+        }
+
+        prefetchUpcoming();
+      } finally {
+        if (loadGenerationRef.current === myLoadGen) {
+          isSwitchingRef.current = false;
+        }
       }
-
-
-      prefetchUpcoming();
     }
 
     function prefetchUpcoming() {

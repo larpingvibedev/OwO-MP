@@ -229,6 +229,8 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     blockedArtists,
     addToQueue,
     removeFromQueue,
+    playQueueIndex,
+    playUpNextTrack,
     toggleAutoplay,
     setRecommendedUpNext,
     setActivePlayerTab,
@@ -427,20 +429,8 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     const skippedFromUpNext = clickedIdx >= 0 ? recommendedUpNext.slice(0, clickedIdx) : [];
     const remainingUpNext = clickedIdx >= 0 ? recommendedUpNext.slice(clickedIdx + 1) : recommendedUpNext.filter(t => t.id !== track.id);
 
-    // 2. Append skipped items and clicked track into the active queue
-    const newQueue = [...queue, ...skippedFromUpNext, track];
-    const newShuffled = isShuffle ? [...shuffledQueue, ...skippedFromUpNext, track] : newQueue;
-
-    // 3. Keep playingFrom, queueSessionId, and remaining Up Next recommendations intact
-    usePlayerStore.setState({
-      queue: newQueue,
-      shuffledQueue: newShuffled,
-      queueIndex: newQueue.length - 1,
-      currentTrack: track,
-      recommendedUpNext: remainingUpNext,
-      currentTime: 0,
-      isPlaying: true
-    });
+    // 2. Play track cleanly via centralized store action
+    playUpNextTrack(track, remainingUpNext, skippedFromUpNext);
   };
 
   const handleAddRecommendedToQueue = (track: Track) => {
@@ -758,7 +748,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                     <div 
                       key={`queue-item-${track.id}-${idx}`}
                       ref={isCurrent ? currentQueueItemRef : null}
-                      onClick={() => usePlayerStore.setState({ queueIndex: idx, currentTrack: track, currentTime: 0, isPlaying: true })}
+                      onClick={() => playQueueIndex(idx)}
                       onContextMenu={(e) => openTrackContextMenu(e, track, {
                         onRemoveFromQueue: !isCurrent ? () => removeFromQueue(idx) : undefined
                       })}
