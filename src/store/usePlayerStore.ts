@@ -457,6 +457,7 @@ export const usePlayerStore = create<PlayerState>()(
         currentTrack: track,
         playingFrom: `${track.title} Mix`,
         currentTime: 0,
+        duration: track.duration || 0,
         isPlaying: true,
         toastMessage: `Playing "${track.title}"`,
         playNonce: state.playNonce + 1
@@ -480,6 +481,7 @@ export const usePlayerStore = create<PlayerState>()(
         currentTrack: track,
         playingFrom: `${track.title} Mix`,
         currentTime: 0,
+        duration: track.duration || 0,
         isPlaying: true,
         toastMessage: `Playing "${track.title}"`,
         playNonce: state.playNonce + 1
@@ -555,10 +557,10 @@ export const usePlayerStore = create<PlayerState>()(
 
     const nextIndex = queueIndex + 1;
     if (nextIndex < activeQueue.length) {
-      set((state) => ({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, isPlaying: true, playNonce: state.playNonce + 1 }));
+      set((state) => ({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, duration: activeQueue[nextIndex].duration || 0, isPlaying: true, playNonce: state.playNonce + 1 }));
       checkAndTriggerContinuation(get, set);
     } else if (repeatMode === 'all' && activeQueue.length > 0) {
-      set((state) => ({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: true, playNonce: state.playNonce + 1 }));
+      set((state) => ({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, duration: activeQueue[0].duration || 0, isPlaying: true, playNonce: state.playNonce + 1 }));
     } else if (autoplay && !currentTrack?.isLocal && !currentTrack?.id?.startsWith('local-') && !activeQueue.some(t => t.isLocal || t.id?.startsWith('local-'))) {
       // 1. If pre-fetched auto-mix exists, play immediately
       if (recommendedUpNext && recommendedUpNext.length > 0) {
@@ -573,6 +575,7 @@ export const usePlayerStore = create<PlayerState>()(
           currentTrack: autoTrack,
           recommendedUpNext: remainingMix,
           currentTime: 0,
+          duration: autoTrack.duration || 0,
           isPlaying: true,
           playNonce: state.playNonce + 1
         }));
@@ -612,6 +615,7 @@ export const usePlayerStore = create<PlayerState>()(
               currentTrack: autoTrack,
               recommendedUpNext: remainingMix,
               currentTime: 0,
+              duration: autoTrack.duration || 0,
               isPlaying: true,
               playNonce: state.playNonce + 1
             }));
@@ -626,7 +630,7 @@ export const usePlayerStore = create<PlayerState>()(
       set({ isPlaying: false });
     } else {
       // End of queue with autoplay off OR finished local files (clean stop, no recommendations)
-      set({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, isPlaying: false });
+      set({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, duration: activeQueue[0].duration || 0, isPlaying: false });
     }
   },
   
@@ -646,6 +650,7 @@ export const usePlayerStore = create<PlayerState>()(
       queueIndex: prevIndex,
       currentTrack: activeQueue[prevIndex],
       currentTime: 0,
+      duration: activeQueue[prevIndex].duration || 0,
       isPlaying: true,
       playNonce: state.playNonce + 1
     }));
