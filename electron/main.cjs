@@ -1170,6 +1170,7 @@ let currentPlayingVideoId = null;
 let navigationInProgress = false;
 let navigationStartTime = 0;
 let endedSignalSentForVideoId = null;
+let errorSignalSentForVideoId = null;
 let loadRequestId = 0;
 const NAVIGATION_TIMEOUT_MS = 12000;
 
@@ -1270,16 +1271,31 @@ function getOrCreateBgPlayerWindow() {
 
       const { currentTime, duration, paused, ended, playerState, urlVideoId, apiVideoId, isAd, playabilityStatus } = state;
 
-      // Check for playback errors like age-restriction or unplayable tracks
+      // Check for playback errors like age-restriction or unplayable tracks with strict per-track attribution & idempotency
       if (playabilityStatus === 'LOGIN_REQUIRED' || playabilityStatus === 'UNPLAYABLE' || playabilityStatus === 'ERROR') {
-        if (requestedVideoId && navigationInProgress) {
-          console.warn(`[BgPlayer StateMachine] Playback failed for ${requestedVideoId} due to ${playabilityStatus}`);
-          mainWindow.webContents.send('yt-player-state-update', {
-            error: playabilityStatus,
-            videoId: requestedVideoId
-          });
-          navigationInProgress = false;
-          requestedVideoId = null;
+        if (requestedVideoId && navigationInProgress && errorSignalSentForVideoId !== requestedVideoId) {
+          const hasUrl = !!urlVideoId;
+          const hasApi = !!apiVideoId;
+          let isAttributedToRequested = false;
+
+          if (hasUrl && hasApi) {
+            isAttributedToRequested = (urlVideoId === requestedVideoId && apiVideoId === requestedVideoId);
+          } else if (hasUrl) {
+            isAttributedToRequested = (urlVideoId === requestedVideoId);
+          } else if (hasApi) {
+            isAttributedToRequested = (apiVideoId === requestedVideoId);
+          }
+
+          if (isAttributedToRequested) {
+            errorSignalSentForVideoId = requestedVideoId;
+            console.warn(`[BgPlayer StateMachine] Playback failed for ${requestedVideoId} due to ${playabilityStatus}`);
+            mainWindow.webContents.send('yt-player-state-update', {
+              error: playabilityStatus,
+              videoId: requestedVideoId
+            });
+            navigationInProgress = false;
+            requestedVideoId = null;
+          }
         }
       }
 
@@ -1363,8 +1379,8 @@ function getOrCreateBgPlayerWindow() {
         return;
       }
 
-      // Send normal telemetry update
-      if (currentPlayingVideoId && !isAd) {
+      // Send normal telemetry update only when navigation has settled AND the active video ID matches
+      if (currentPlayingVideoId && !isAd && !navigationInProgress && resolvedActualId === currentPlayingVideoId) {
         mainWindow.webContents.send('yt-player-state-update', {
           currentTime: currentTime,
           duration: duration,
@@ -1382,6 +1398,7 @@ function getOrCreateBgPlayerWindow() {
     currentPlayingVideoId = null;
     navigationInProgress = false;
     endedSignalSentForVideoId = null;
+    errorSignalSentForVideoId = null;
     if (bgPlayerUpdateInterval) clearInterval(bgPlayerUpdateInterval);
   });
 
@@ -1397,6 +1414,7 @@ ipcMain.handle('play-yt-track', async (event, { videoId, startTime, volume }) =>
   navigationInProgress = true;
   navigationStartTime = Date.now();
   endedSignalSentForVideoId = null;
+  errorSignalSentForVideoId = null;
 
   const targetVol = Math.max(0, Math.min(1, typeof volume === 'number' ? volume : 1));
 

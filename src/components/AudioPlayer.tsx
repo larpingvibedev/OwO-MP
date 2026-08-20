@@ -52,6 +52,15 @@ export const AudioPlayer = () => {
       unsubscribeYtState = electronAPI.onYouTubeStateUpdate(async (data: any) => {
         if (!isOnlineYtTrackRef.current) return;
         
+        // Guard against mismatched telemetry from previous tracks
+        if (data.videoId) {
+          const cur = usePlayerStore.getState().currentTrack;
+          const currentDirectId = cur ? getDirectYouTubeId(cur) : null;
+          if (currentDirectId && data.videoId !== currentDirectId && data.videoId !== cur?.id) {
+            return;
+          }
+        }
+        
         if (data.error) {
           if (data.error === 'LOGIN_REQUIRED') {
             const authState = electronAPI.getYoutubeAuthState ? await electronAPI.getYoutubeAuthState() : 'signed_out';
