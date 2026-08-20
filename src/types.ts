@@ -15,6 +15,14 @@ export interface Track {
   channelId?: string;
   recommendReason?: string;
   playCountText?: string;
+  isLocal?: boolean;
+  isDownloaded?: boolean;
+  filePath?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  ext?: string;
+  bitrate?: number;
+  sampleRate?: number;
 }
 
 export interface Playlist {

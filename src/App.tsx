@@ -6,6 +6,7 @@ import { Discover } from './pages/Discover';
 import { Artist } from './pages/Artist';
 import { Album } from './pages/Album';
 import { Library } from './pages/Library';
+import { LocalFiles } from './pages/LocalFiles';
 import { Settings } from './pages/Settings';
 import { AuthModal } from './components/auth/AuthModal';
 import { EditProfileModal } from './components/auth/EditProfileModal';
@@ -61,10 +62,13 @@ function App() {
           <Route path="albums" element={<Library />} />
           <Route path="playlists" element={<Library />} />
           <Route path="favorites" element={<Library />} />
-          <Route path="downloads" element={<Library />} />
+          <Route path="local-files" element={<LocalFiles />} />
+          <Route path="downloads" element={<LocalFiles />} />
           <Route path="settings" element={<Settings />} />
           <Route path="artist/:artistName" element={<Artist />} />
           <Route path="album/:albumId" element={<Album />} />
+          <Route path="playlist/local-files" element={<LocalFiles />} />
+          <Route path="playlist/local" element={<LocalFiles />} />
           <Route path="playlist/:albumId" element={<Album />} />
         </Route>
       </Routes>

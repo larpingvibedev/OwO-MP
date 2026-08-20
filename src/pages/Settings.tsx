@@ -14,7 +14,9 @@ import {
   Ban,
   UserX,
   X,
-  ExternalLink
+  ExternalLink,
+  FolderPlus,
+  RefreshCw
 } from 'lucide-react';
 import { SyncModal } from '../components/SyncModal';
 import { usePlayerStore } from '../store/usePlayerStore';
@@ -35,11 +37,61 @@ export function Settings() {
   const [searchesCleared, setSearchesCleared] = useState(false);
   const [customDirName, setCustomDirName] = useState<string | null>(null);
   const [downloadFormat, setDownloadFormat] = useState<'mp3' | 'm4a'>('mp3');
+  const [localFolders, setLocalFolders] = useState<string[]>([]);
+  const [localTrackCount, setLocalTrackCount] = useState<number>(0);
+  const [isScanningLocal, setIsScanningLocal] = useState<boolean>(false);
+
+  const scanLocalFolders = async () => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI?.scanLocalMusicFiles) return;
+    setIsScanningLocal(true);
+    try {
+      const folders = await electronAPI.getLocalMusicFolders?.() || [];
+      setLocalFolders(folders);
+      const scanned = await electronAPI.scanLocalMusicFiles();
+      setLocalTrackCount(Array.isArray(scanned) ? scanned.length : 0);
+    } catch (err) {
+      console.warn('Scan local files error:', err);
+    } finally {
+      setIsScanningLocal(false);
+    }
+  };
 
   useEffect(() => {
     getCustomDirectoryName().then(setCustomDirName);
     getPreferredDownloadFormat().then(setDownloadFormat);
+    scanLocalFolders();
   }, []);
+
+  const handleAddLocalFolder = async () => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI?.addLocalMusicFolder) return;
+    try {
+      const res = await electronAPI.addLocalMusicFolder();
+      if (res && res.success) {
+        setLocalFolders(res.folders || []);
+        await scanLocalFolders();
+        showToast('Music folder added to scan list');
+      }
+    } catch (err) {
+      console.warn('Add folder error:', err);
+    }
+  };
+
+  const handleRemoveLocalFolder = async (folderPath: string) => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI?.removeLocalMusicFolder) return;
+    try {
+      const res = await electronAPI.removeLocalMusicFolder(folderPath);
+      if (res && res.success) {
+        setLocalFolders(res.folders || []);
+        await scanLocalFolders();
+        showToast('Folder removed from scan list');
+      }
+    } catch (err) {
+      console.warn('Remove folder error:', err);
+    }
+  };
 
   const handleChooseFolder = async () => {
     const chosen = await promptChooseCustomDirectory();
@@ -333,6 +385,99 @@ export function Settings() {
             >
               .M4A (AAC)
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 3. LOCAL FILES & PC MUSIC FOLDERS                                         */}
+      {/* ========================================================================= */}
+      <div className="settings-group">
+        <div className="settings-group-header">
+          <div className="settings-group-title">
+            <Folder size={18} color="var(--accent-primary)" />
+            <span>Local Files & PC Music Scanner</span>
+          </div>
+          <span className="settings-badge" style={{ backgroundColor: 'rgba(37, 99, 235, 0.15)', color: '#60a5fa' }}>
+            {localTrackCount} {localTrackCount === 1 ? 'Audio File' : 'Audio Files'} Indexed
+          </span>
+        </div>
+
+        {/* Scan Status & View */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">PC Music Library Index</div>
+            <div className="settings-row-desc">
+              Scans your computer's Music and Downloads folders plus custom directories for native lossless playback.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button className="settings-btn-primary" onClick={() => navigate('/playlist/local-files')}>
+              <FolderOpen size={13} />
+              <span>Open Local Files</span>
+            </button>
+            <button 
+              className="settings-btn-secondary"
+              onClick={scanLocalFolders}
+              disabled={isScanningLocal}
+              title="Rescan all PC music folders now"
+            >
+              <RefreshCw size={13} className={isScanningLocal ? 'animate-spin' : ''} />
+              <span>{isScanningLocal ? 'Scanning...' : 'Scan Now'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Monitored Locations List */}
+        <div className="settings-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+            <div className="settings-row-label">Monitored Folders ({localFolders.length})</div>
+            <button className="settings-btn-secondary" onClick={handleAddLocalFolder}>
+              <FolderPlus size={13} color="var(--accent-primary)" />
+              <span>Add Folder</span>
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', width: '100%' }}>
+            {localFolders.map(folder => (
+              <div 
+                key={folder}
+                style={{
+                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '16px',
+                  padding: '6px 12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '0.8rem',
+                  color: 'rgba(255, 255, 255, 0.85)'
+                }}
+              >
+                <Folder size={13} color="var(--accent-primary)" />
+                <span title={folder} style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {folder}
+                </span>
+                {!folder.endsWith('\\Music') && !folder.endsWith('/Music') && !folder.endsWith('\\Downloads') && !folder.endsWith('/Downloads') && (
+                  <button
+                    onClick={() => handleRemoveLocalFolder(folder)}
+                    title="Remove folder from scan"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'rgba(255, 255, 255, 0.4)',
+                      cursor: 'pointer',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.color = '#e74c3c'}
+                    onMouseLeave={e => e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)'}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       </div>

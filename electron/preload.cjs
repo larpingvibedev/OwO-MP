@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadTrackNative: async (params) => {
     return await ipcRenderer.invoke('download-track-native', params);
   },
+  cancelDownloadNative: async (videoId) => {
+    return await ipcRenderer.invoke('cancel-download-native', videoId);
+  },
   deleteAudioFromDisk: async (params) => {
     return await ipcRenderer.invoke('delete-audio-from-disk', params);
   },

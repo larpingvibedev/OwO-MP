@@ -118,10 +118,13 @@ export async function downloadTrackOffline(
     const targetDir = await db.get(STORE_CONFIG, 'custom_directory_name');
 
     let removeListener: (() => void) | null = null;
+    let maxSeenProgress = 5;
     if (onProgress && (window as any).electronAPI.onDownloadProgress) {
       removeListener = (window as any).electronAPI.onDownloadProgress((data: any) => {
         if (data && (data.videoId === videoId || data.videoId === track.id)) {
-          onProgress(data.percent || 0);
+          const rawPct = Number.isFinite(data.percent) ? data.percent : 0;
+          maxSeenProgress = Math.max(maxSeenProgress, Math.min(100, rawPct));
+          onProgress(maxSeenProgress);
         }
       });
     }
@@ -132,15 +135,18 @@ export async function downloadTrackOffline(
         videoId,
         title: track.title,
         artist: track.artist,
+        album: track.album,
+        cover: track.cover,
         format: formatSetting,
         targetDir: targetDir || undefined
       });
 
-      if (!res.success || !res.buffer) {
-        throw new Error(res.error || 'Native download failed');
+      if (!res || !res.success) {
+        throw new Error(res?.error || 'Native download failed');
       }
 
-      const blob = new Blob([res.buffer], { type: res.mimeType || (formatSetting === 'm4a' ? 'audio/mp4' : 'audio/mpeg') });
+      const bufferData = res.buffer ? (res.buffer instanceof ArrayBuffer ? res.buffer : res.buffer.buffer || res.buffer) : new ArrayBuffer(0);
+      const blob = new Blob([bufferData], { type: res.mimeType || (formatSetting === 'm4a' ? 'audio/mp4' : 'audio/mpeg') });
       const record: OfflineRecord = {
         id: track.id,
         track: {
@@ -149,7 +155,7 @@ export async function downloadTrackOffline(
         },
         audioBlob: blob,
         downloadedAt: Date.now(),
-        size: blob.size,
+        size: res.size || blob.size,
         mimeType: blob.type
       };
 

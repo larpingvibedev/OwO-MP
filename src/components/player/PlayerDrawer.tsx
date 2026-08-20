@@ -292,15 +292,16 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPlayerDrawerOpen, closePlayerDrawer]);
 
-  const effectiveContext: PlaybackContextType = playbackContext || (
+  const isLocalTrackSession = currentTrack?.isLocal || currentTrack?.id?.startsWith('local-') || activeQueue.some(t => t.isLocal || t.id?.startsWith('local-'));
+  const effectiveContext: PlaybackContextType = isLocalTrackSession ? 'user_playlist' : (playbackContext || (
     playingFrom && (playingFrom.endsWith('Mix') || playingFrom.includes('Discover') || playingFrom.includes('Radio') || playingFrom.includes('Supermix'))
       ? 'radio'
       : 'finite'
-  );
+  ));
 
   // 1. Sync Up Next loading state with the active queue session without firing duplicate parallel fetches
   useEffect(() => {
-    if (!currentTrack || activeQueue.length === 0 || effectiveContext === 'user_playlist') {
+    if (!currentTrack || activeQueue.length === 0 || effectiveContext === 'user_playlist' || isLocalTrackSession) {
       setIsLoadingMix(false);
       return;
     }

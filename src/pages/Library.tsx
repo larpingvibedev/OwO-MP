@@ -213,15 +213,17 @@ export function Library() {
   }, [localFiles]);
 
   const combinedLocalTracks = useMemo(() => {
-    const appDownloads = offlineRecords.map(r => ({
+    const sortedDownloads = [...offlineRecords].sort((a, b) => (a.downloadedAt || 0) - (b.downloadedAt || 0));
+    const appDownloads = sortedDownloads.map(r => ({
       ...r.track,
       sizeBytes: r.size || r.audioBlob?.size || 0,
       isAppDownload: true,
       downloadRecordId: r.id,
-      ext: 'MP3'
+      ext: r.mimeType?.includes('m4a') || r.mimeType?.includes('mp4') ? 'M4A' : 'MP3'
     }));
 
-    const pcFiles = filteredPCFiles.map(f => ({
+    const sortedPC = [...filteredPCFiles].sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+    const pcFiles = sortedPC.map(f => ({
       ...f,
       isPCFile: true
     }));
@@ -605,7 +607,7 @@ export function Library() {
                     background: 'linear-gradient(135deg, rgba(30, 144, 255, 0.22) 0%, rgba(15, 23, 42, 0.9) 100%)',
                     borderColor: 'rgba(30, 144, 255, 0.3)'
                   }}
-                  onClick={() => handleFilterChange('downloads')}
+                  onClick={() => navigate('/playlist/local-files')}
                 >
                   <div className="liked-music-art" style={{ background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' }}>
                     <HardDrive size={36} color="#ffffff" className="heart-icon-glow" />
@@ -778,6 +780,27 @@ export function Library() {
               </div>
             </div>
           )}
+
+          {/* Local Files System Playlist Card */}
+          <div 
+            className="library-card liked-music-hero-card"
+            style={{ background: 'linear-gradient(135deg, rgba(30, 144, 255, 0.22) 0%, rgba(15, 23, 42, 0.9) 100%)', borderColor: 'rgba(30, 144, 255, 0.3)' }}
+            onClick={() => navigate('/playlist/local-files')}
+          >
+            <div className="liked-music-art" style={{ background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' }}>
+              <Folder size={36} color="#ffffff" className="heart-icon-glow" />
+              <div className="card-play-hover-btn" onClick={(e) => { e.stopPropagation(); handlePlayAllLocal(); }} title="Play All Local">
+                <Play size={22} fill="#000" color="#000" />
+              </div>
+            </div>
+            <div className="card-meta">
+              <div className="card-title">Local Files</div>
+              <div className="card-subtitle auto-playlist-tag" style={{ color: '#93c5fd' }}>
+                <HardDrive size={12} color="#93c5fd" />
+                <span>PC & Offline • {totalUniqueLocalCount} {totalUniqueLocalCount === 1 ? 'track' : 'tracks'}</span>
+              </div>
+            </div>
+          </div>
 
           {/* Sorted User Playlists & Saved Community Playlists */}
           {sortedPlaylists.map(pl => {
