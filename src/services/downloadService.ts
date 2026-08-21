@@ -14,6 +14,7 @@ export interface OfflineRecord {
   downloadedAt: number;
   size: number;
   mimeType: string;
+  videoId?: string;
 }
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
@@ -46,13 +47,37 @@ function cleanFileName(str: string): string {
   return str.replace(/[\\/:*?"<>|]/g, '').trim();
 }
 
+function getExactTrackVideoId(track?: Track): string | undefined {
+  if (!track) return undefined;
+  const prefixed = /^(?:piped-|yt-|youtube-)([a-zA-Z0-9_-]{11})$/.exec(track.id || '');
+  if (prefixed) return prefixed[1];
+  if (/^[a-zA-Z0-9_-]{11}$/.test(track.id || '')) return track.id;
+  try {
+    const url = new URL(track.streamUrl || '');
+    const candidate = url.hostname === 'youtu.be'
+      ? url.pathname.split('/').filter(Boolean)[0]
+      : url.searchParams.get('v');
+    return candidate && /^[a-zA-Z0-9_-]{11}$/.test(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function appendDiskVideoId(fileName: string, videoId?: string): string {
+  if (!videoId || !/^[a-zA-Z0-9_-]{6,64}$/.test(videoId)) return fileName;
+  const dot = fileName.lastIndexOf('.');
+  const stem = dot >= 0 ? fileName.slice(0, dot) : fileName;
+  const extension = dot >= 0 ? fileName.slice(dot) : '';
+  return `${stem} [${videoId}]${extension}`;
+}
+
 declare global {
   interface Window {
     electronAPI?: {
       isElectron: boolean;
       getProxyPort: () => Promise<number>;
       getDefaultMusicDir: () => Promise<string>;
-      saveAudioToDisk: (filename: string, buffer: ArrayBuffer, targetDir?: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+      saveAudioToDisk: (filename: string, buffer: ArrayBuffer, targetDir?: string, videoId?: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
       openFolder: (folderPath?: string) => Promise<void>;
       selectDirectory: () => Promise<string | null>;
       showItemInFolder: (fullPath: string) => Promise<void>;
@@ -145,7 +170,14 @@ export async function downloadTrackOffline(
       });
 
       if (!res || !res.success) {
-        throw new Error(res?.error || 'Native download failed');
+        const nativeMessage = res?.error || 'Native download failed';
+        const message = res?.stage && !nativeMessage.startsWith(`[${res.stage}]`)
+          ? `[${res.stage}] ${nativeMessage}`
+          : nativeMessage;
+        const nativeError = new Error(message);
+        (nativeError as Error & { stage?: string; diagnostics?: unknown }).stage = res?.stage;
+        (nativeError as Error & { stage?: string; diagnostics?: unknown }).diagnostics = res?.diagnostics;
+        throw nativeError;
       }
 
       const bufferData = res.buffer ? (res.buffer instanceof ArrayBuffer ? res.buffer : res.buffer.buffer || res.buffer) : new ArrayBuffer(0);
@@ -159,7 +191,8 @@ export async function downloadTrackOffline(
         audioBlob: blob,
         downloadedAt: Date.now(),
         size: res.size || blob.size,
-        mimeType: blob.type
+        mimeType: blob.type,
+        videoId
       };
 
       await db.put(STORE_TRACKS, record);
@@ -193,7 +226,8 @@ export async function downloadTrackOffline(
     audioBlob: blob,
     downloadedAt: Date.now(),
     size: blob.size,
-    mimeType: blob.type || streamInfo.mimeType
+    mimeType: blob.type || streamInfo.mimeType,
+    videoId: streamInfo.videoId
   };
 
   await db.put(STORE_TRACKS, record);
@@ -262,21 +296,39 @@ export async function promptChooseCustomDirectory(): Promise<string | null> {
 /**
  * Gets the custom directory name if configured.
  */
-export async function getCustomDirectoryName(): Promise<string | null> {
-  if (customDirectoryHandle) {
-    return customDirectoryHandle.name;
+export interface ConfiguredDownloadDirectory {
+  configured: boolean;
+  value: string | null;
+}
+
+export async function resolveConfiguredDownloadDirectory(
+  configuredValue: unknown,
+  getDefaultDirectory: () => Promise<string | null>
+): Promise<ConfiguredDownloadDirectory> {
+  if (typeof configuredValue === 'string' && configuredValue.trim()) {
+    return { configured: true, value: configuredValue };
   }
-  try {
-    const db = await getDB();
-    const name = await db.get(STORE_CONFIG, 'custom_directory_name');
-    if (name) return name;
+  return { configured: false, value: await getDefaultDirectory() };
+}
+
+export async function getConfiguredDownloadDirectory(): Promise<ConfiguredDownloadDirectory> {
+  if (customDirectoryHandle) {
+    return { configured: true, value: customDirectoryHandle.name };
+  }
+  const db = await getDB();
+  // Do not catch this read: a failed IndexedDB/config read is not equivalent
+  // to an unset directory and must abort disk reconciliation.
+  const name = await db.get(STORE_CONFIG, 'custom_directory_name');
+  return resolveConfiguredDownloadDirectory(name, async () => {
     if (window.electronAPI?.isElectron && window.electronAPI.getDefaultMusicDir) {
       return await window.electronAPI.getDefaultMusicDir();
     }
     return null;
-  } catch {
-    return null;
-  }
+  });
+}
+
+export async function getCustomDirectoryName(): Promise<string | null> {
+  return (await getConfiguredDownloadDirectory()).value;
 }
 
 /**
@@ -294,14 +346,16 @@ export async function clearCustomDirectory(): Promise<void> {
  */
 export async function exportTrackToDisk(track: Track, existingBlob?: Blob): Promise<{ success: boolean; path: string }> {
   let blob = existingBlob;
+  let storedRecord: OfflineRecord | undefined;
   if (!blob) {
     const db = await getDB();
-    const record = await db.get(STORE_TRACKS, track.id) as OfflineRecord | undefined;
-    if (record?.audioBlob) {
-      blob = record.audioBlob;
+    storedRecord = await db.get(STORE_TRACKS, track.id) as OfflineRecord | undefined;
+    if (storedRecord?.audioBlob) {
+      blob = storedRecord.audioBlob;
     } else {
       const downloaded = await downloadTrackOffline(track);
       blob = downloaded.audioBlob;
+      storedRecord = downloaded;
     }
   }
 
@@ -309,7 +363,11 @@ export async function exportTrackToDisk(track: Track, existingBlob?: Blob): Prom
   const cleanArtist = cleanFileName(track.artist || 'Unknown Artist');
   const cleanTitle = cleanFileName(track.title || 'Unknown Track');
   const ext = formatSetting === 'm4a' ? 'm4a' : 'mp3';
-  const fileName = `${cleanArtist} - ${cleanTitle}.${ext}`;
+  let videoId = storedRecord?.videoId || getExactTrackVideoId(track);
+  if (!videoId) {
+    try { videoId = (await resolveDirectAudioStream(track))?.videoId; } catch {}
+  }
+  const fileName = appendDiskVideoId(`${cleanArtist} - ${cleanTitle}.${ext}`, videoId);
 
   // 0. If running inside Electron, use native disk saving directly into chosen folder
   if (window.electronAPI?.isElectron) {
@@ -317,7 +375,7 @@ export async function exportTrackToDisk(track: Track, existingBlob?: Blob): Prom
       const db = await getDB();
       const targetDir = await db.get(STORE_CONFIG, 'custom_directory_name');
       const buffer = await blob.arrayBuffer();
-      const res = await window.electronAPI.saveAudioToDisk(fileName, buffer, targetDir || undefined);
+      const res = await window.electronAPI.saveAudioToDisk(fileName, buffer, targetDir || undefined, videoId);
       if (res.success) {
         return { success: true, path: res.filePath || fileName };
       }
@@ -391,10 +449,13 @@ export async function removeOfflineTrack(trackId: string, trackInfo?: { title?: 
       const targetDir = await db.get(STORE_CONFIG, 'custom_directory_name');
       const title = trackInfo?.title || record?.track?.title;
       const artist = trackInfo?.artist || record?.track?.artist;
+      const videoId = record?.videoId || getExactTrackVideoId(record?.track);
       if (title) {
         await (window as any).electronAPI.deleteAudioFromDisk({
           title,
           artist,
+          videoId,
+          legacyFallback: !record?.videoId,
           targetDir: targetDir || undefined
         });
       }
@@ -423,10 +484,13 @@ export async function clearAllOfflineStorage(): Promise<void> {
       for (const r of records) {
         const title = r.track?.title;
         const artist = r.track?.artist;
+        const videoId = r.videoId || getExactTrackVideoId(r.track);
         if (title) {
           await (window as any).electronAPI.deleteAudioFromDisk({
             title,
             artist,
+            videoId,
+            legacyFallback: !r.videoId,
             targetDir: targetDir || undefined
           });
         }

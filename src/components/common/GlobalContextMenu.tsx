@@ -218,7 +218,11 @@ export const GlobalContextMenu: React.FC = () => {
     }
     const albArtist = track.artist || track.albumArtist || '';
     const albCover = track.cover || '';
-    navigate(`/album/${encodeURIComponent(albId)}?name=${encodeURIComponent(albName)}&artist=${encodeURIComponent(albArtist)}&cover=${encodeURIComponent(albCover)}&trackTitle=${encodeURIComponent(track.title || '')}`);
+    let navUrl = `/album/${encodeURIComponent(albId)}?name=${encodeURIComponent(albName)}&artist=${encodeURIComponent(albArtist)}&cover=${encodeURIComponent(albCover)}&trackTitle=${encodeURIComponent(track.title || '')}`;
+    if (track.id) navUrl += `&videoId=${encodeURIComponent(track.id)}`;
+    if (track.artistId) navUrl += `&artistId=${encodeURIComponent(track.artistId)}`;
+    if (track.channelId) navUrl += `&channelId=${encodeURIComponent(track.channelId)}`;
+    navigate(navUrl);
   };
 
   const handleShareTrack = () => {

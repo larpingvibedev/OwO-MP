@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { 
   Sparkles, Music, Play, Plus,
   Compass, Volume2, Check, ExternalLink, Loader2, Info, Disc, ListPlus,
-  Copy, BookOpen, Search, Heart, Radio, ChevronLeft, ChevronRight
+  Copy, BookOpen, Search, Heart, Radio, ChevronLeft, ChevronRight, GripVertical
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore, type PlaybackContextType } from '../../store/usePlayerStore';
@@ -229,6 +229,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
     blockedArtists,
     addToQueue,
     removeFromQueue,
+    reorderQueue,
     playQueueIndex,
     playUpNextTrack,
     toggleAutoplay,
@@ -255,6 +256,8 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
   const [isSimilarArtistsLoading, setIsSimilarArtistsLoading] = useState(false);
   const [moreFromArtist, setMoreFromArtist] = useState<Track[]>([]);
   const [isMoreFromArtistLoading, setIsMoreFromArtistLoading] = useState(false);
+  const [draggedQueueIndex, setDraggedQueueIndex] = useState<number | null>(null);
+  const [dragOverQueueIndex, setDragOverQueueIndex] = useState<number | null>(null);
 
   const contentColRef = useRef<HTMLDivElement>(null);
   const activeLyricRef = useRef<HTMLDivElement>(null);
@@ -752,6 +755,20 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                       onContextMenu={(e) => openTrackContextMenu(e, track, {
                         onRemoveFromQueue: !isCurrent ? () => removeFromQueue(idx) : undefined
                       })}
+                      onDragOver={(event) => {
+                        if (draggedQueueIndex === null || idx <= queueIndex) return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = 'move';
+                        setDragOverQueueIndex(idx);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (draggedQueueIndex !== null && draggedQueueIndex > queueIndex && idx > queueIndex && draggedQueueIndex !== idx) {
+                          reorderQueue(draggedQueueIndex, idx);
+                        }
+                        setDraggedQueueIndex(null);
+                        setDragOverQueueIndex(null);
+                      }}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -760,10 +777,11 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                         borderRadius: '6px',
                         backgroundColor: isCurrent ? 'rgba(52, 152, 219, 0.12)' : 'var(--bg-card)',
                         border: `1px solid ${isCurrent ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                        opacity: isPast ? 0.6 : 1,
                         cursor: 'pointer',
                         transition: 'all 0.15s ease',
-                        boxShadow: isCurrent ? '0 0 12px rgba(52, 152, 219, 0.25)' : 'none'
+                        boxShadow: isCurrent ? '0 0 12px rgba(52, 152, 219, 0.25)' : 'none',
+                        borderTop: dragOverQueueIndex === idx ? '2px solid var(--accent-primary)' : undefined,
+                        opacity: draggedQueueIndex === idx ? 0.45 : (isPast ? 0.6 : 1)
                       }}
                       onMouseEnter={(e) => {
                         if (!isCurrent) e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)';
@@ -774,6 +792,26 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                         if (isPast) e.currentTarget.style.opacity = '0.6';
                       }}
                     >
+                      {idx > queueIndex && (
+                        <div
+                          className="track-drag-handle"
+                          draggable
+                          title="Drag to reorder upcoming tracks"
+                          onClick={event => event.stopPropagation()}
+                          onDragStart={(event) => {
+                            setDraggedQueueIndex(idx);
+                            event.dataTransfer.effectAllowed = 'move';
+                            event.dataTransfer.setData('text/plain', String(idx));
+                          }}
+                          onDragEnd={() => {
+                            setDraggedQueueIndex(null);
+                            setDragOverQueueIndex(null);
+                          }}
+                        >
+                          <GripVertical size={15} />
+                        </div>
+                      )}
+
                       {/* Cover Art */}
                       <div 
                         style={{

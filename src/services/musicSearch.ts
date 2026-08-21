@@ -28,19 +28,92 @@ export function parseDurationString(durationStr: string | undefined): number {
   return hours * 3600 + mins * 60 + secs;
 }
 
+
+export function normalizeIdentityText(str: string | undefined): string {
+  if (!str) return '';
+  return str
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s*-\s*topic$/i, '')
+    .replace(/\s*official\s*(artist\s*)?channel$/i, '')
+    .replace(/[\(\[\{].*?[\)\]\}]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export function isCandidateAlbumValid(
+  candidate: AlbumDetail | null | undefined,
+  requestedArtist: string | undefined,
+  requestedAlbum: string | undefined,
+  requestedTrackTitle: string | undefined,
+  trackArtistId?: string
+): boolean {
+  if (!candidate || !candidate.tracks || candidate.tracks.length === 0) return false;
+
+  // 1. Artist Identity Verification
+  let authorMatches = false;
+  if (trackArtistId) {
+    authorMatches = (candidate.artistId === trackArtistId || candidate.channelId === trackArtistId);
+  }
+  if (!authorMatches && requestedArtist) {
+    authorMatches = isMatchingArtist(candidate.artist, requestedArtist);
+  }
+  if (!authorMatches) return false;
+
+  const normTargetTrack = normalizeIdentityText(requestedTrackTitle);
+  const normTargetAlbum = normalizeIdentityText(requestedAlbum);
+
+  const isGenericAlb = !normTargetAlbum ||
+    normTargetAlbum === 'web stream' ||
+    normTargetAlbum === 'single' ||
+    normTargetAlbum === 'official release' ||
+    normTargetAlbum === 'official audio' ||
+    normTargetAlbum === 'top track' ||
+    normTargetAlbum === 'top songs' ||
+    normTargetAlbum === 'youtube music' ||
+    normTargetAlbum === 'youtube playlist' ||
+    normTargetAlbum === 'spotify playlist';
+
+  // 2. Track Title Membership Verification
+  const containsTrack = Boolean(
+    normTargetTrack && candidate.tracks.some(t => {
+      const normT = normalizeIdentityText(t.title);
+      return normT === normTargetTrack ||
+             normT.startsWith(normTargetTrack + ' ') ||
+             normTargetTrack.startsWith(normT + ' ');
+    })
+  );
+
+  // 3. Album Title Match Verification
+  const normCandidateAlbum = normalizeIdentityText(candidate.name);
+  const albumNameMatches = Boolean(
+    !isGenericAlb && normTargetAlbum && (
+      normCandidateAlbum === normTargetAlbum ||
+      normCandidateAlbum.startsWith(normTargetAlbum + ' ') ||
+      normTargetAlbum.startsWith(normCandidateAlbum + ' ')
+    )
+  );
+
+  if (!isGenericAlb && albumNameMatches) {
+    return true;
+  }
+
+  return containsTrack;
+}
+
 export function isMatchingArtist(itemArtist: string | undefined, targetArtist: string | undefined): boolean {
   if (!itemArtist || !targetArtist) return false;
-  const a = itemArtist.toLowerCase().replace(/\s*-\s*topic$/i, '').replace(/\s*official\s*(artist\s*)?channel$/i, '').trim();
-  const t = targetArtist.toLowerCase().replace(/\s*-\s*topic$/i, '').replace(/\s*official\s*(artist\s*)?channel$/i, '').trim();
-  
+  const a = normalizeIdentityText(itemArtist);
+  const t = normalizeIdentityText(targetArtist);
+  if (!a || !t) return false;
   if (a === t) return true;
 
   // Exact word boundary matching for collabs / features
-  // e.g. "bunii & other", "other & bunii", "bunii feat. other", "other ft. bunii", "other, bunii"
   const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const wordBoundaryRegex = new RegExp(`(^|[&,+/]|\\bfeat\\.?|\\bft\\.?|\\bwith\\b)\\s*${escaped}\\b`, 'i');
   const reverseBoundaryRegex = new RegExp(`\\b${escaped}\\s*([&,+/]|\\bfeat\\.?|\\bft\\.?|\\bwith\\b|$)`, 'i');
-  
   return wordBoundaryRegex.test(a) || reverseBoundaryRegex.test(a);
 }
 
@@ -1044,7 +1117,8 @@ export async function resolveArtistAvatar(artistName: string): Promise<string> {
  */
 export async function fetchArtistProfileFromYTM(
   artistQuery: string, 
-  channelId?: string
+  channelId?: string,
+  artistId?: string | number
 ): Promise<ArtistProfile | null> {
   const endpoints = [
     '/api/ytmusic/youtubei/v1',
@@ -1053,15 +1127,19 @@ export async function fetchArtistProfileFromYTM(
 
   let targetBrowseId: string | null = null;
 
-  // 1. Direct channelId priority: If channelId is provided or artistQuery is a browse ID, use it directly!
-  if (channelId && (channelId.startsWith('UC') || channelId.startsWith('FEmusic_artist_'))) {
+  // 1. Direct artistId / channelId priority
+  if (artistId && typeof artistId === 'string' && (artistId.startsWith('UC') || artistId.startsWith('FEmusic_artist_'))) {
+    targetBrowseId = artistId;
+  } else if (channelId && (channelId.startsWith('UC') || channelId.startsWith('FEmusic_artist_'))) {
     targetBrowseId = channelId;
   } else if (artistQuery.startsWith('UC') || artistQuery.startsWith('FEmusic_artist_')) {
     targetBrowseId = artistQuery;
   }
 
+
   // 2. Otherwise search YouTube Music directly for the official Artist profile of artistQuery
   if (!targetBrowseId) {
+    const cleanSearchQuery = artistQuery.replace(/\s*-\s*Topic$/i, '').trim();
     for (const base of endpoints) {
       try {
         const searchRes = await fetch(`${base}/search`, {
@@ -1071,7 +1149,7 @@ export async function fetchArtistProfileFromYTM(
           },
           body: JSON.stringify({
             context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
-            query: artistQuery
+            query: cleanSearchQuery
           })
         });
 
@@ -1625,7 +1703,7 @@ export async function fetchAlbumDetailsFromYTM(
 export async function fetchArtistProfile(
   artistQuery: string, 
   channelId?: string, 
-  _artistId?: string | number
+  artistId?: string | number
 ): Promise<ArtistProfile | null> {
   if (!artistQuery || !artistQuery.trim()) return null;
   const cleanQuery = artistQuery.trim();
@@ -1638,7 +1716,7 @@ export async function fetchArtistProfile(
 
   // 1. Direct YouTube Music InnerTube Artist Profile
   try {
-    const ytmProfile = await fetchArtistProfileFromYTM(cleanQuery, channelId);
+    const ytmProfile = await fetchArtistProfileFromYTM(cleanQuery, channelId, artistId);
     if (ytmProfile && (ytmProfile.topTracks.length > 0 || ytmProfile.albums.length > 0 || ytmProfile.singlesAndEPs.length > 0)) {
       return ytmProfile;
     }
@@ -1658,7 +1736,9 @@ export async function fetchAlbumDetails(
   albumName: string, 
   artistName: string, 
   fallbackCover?: string,
-  trackTitle?: string
+  trackTitle?: string,
+  trackArtistId?: string,
+  trackVideoId?: string
 ): Promise<AlbumDetail> {
   const cleanId = albumId.replace('album-', '').replace('album-derived-', '');
   let rawTracks: any[] = [];
@@ -1707,6 +1787,37 @@ export async function fetchAlbumDetails(
   let resolvedCollectionId = !isNaN(Number(cleanId)) ? cleanId : '';
 
   // -------------------------------------------------------------
+  // LAYER 0: Track-Specific Exact Album Resolution via /next
+  // -------------------------------------------------------------
+  if (trackVideoId && trackVideoId.length === 11) {
+    try {
+      const nextRes = await fetch('https://music.youtube.com/youtubei/v1/next', {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20230522.01.00" } },
+          videoId: trackVideoId
+        })
+      });
+      if (nextRes.ok) {
+        const nextData = await nextRes.json();
+        const str = JSON.stringify(nextData);
+        // The exact official album browseId for the song is often present in the queue or video info
+        const m = /"browseId":"(MPREb_[^"]+)"/.exec(str);
+        if (m && m[1]) {
+          const targetAlbId = m[1];
+          const ytmDetail = await fetchAlbumDetailsFromYTM(targetAlbId, resolvedReleaseName, artistName, fallbackCover);
+          if (isCandidateAlbumValid(ytmDetail, artistName, effectiveAlbumName, trackTitle || effectiveAlbumName, trackArtistId)) {
+            return ytmDetail!;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('YouTube Music /next album exact resolution failed:', e);
+    }
+  }
+
+  // -------------------------------------------------------------
   // LAYER 1: Direct YouTube Music Browse ID (MPREb_ / OLAK / MPAD / VLPL / PL / RD)
   // -------------------------------------------------------------
   const isPlaylistBrowse = cleanId.startsWith('PL') || cleanId.startsWith('VLPL') || cleanId.startsWith('RD') || cleanId.startsWith('VLRD') || albumId.startsWith('PL') || albumId.startsWith('VLPL') || albumId.startsWith('RD') || albumId.startsWith('VLRD');
@@ -1717,7 +1828,7 @@ export async function fetchAlbumDetails(
       const targetBrowseId = isPlaylistBrowse && !cleanId.startsWith('VL') ? `VL${cleanId}` : cleanId;
       const ytmDetail = await fetchAlbumDetailsFromYTM(targetBrowseId, resolvedReleaseName, artistName, fallbackCover);
       if (ytmDetail && ytmDetail.tracks.length > 0) {
-        if (isPlaylistBrowse || isOfficialAlbumBrowse || !artistName || isMatchingArtist(ytmDetail.artist, artistName) || isMatchingArtist(ytmDetail.name, artistName)) {
+        if (isPlaylistBrowse || isOfficialAlbumBrowse || isCandidateAlbumValid(ytmDetail, artistName, effectiveAlbumName, trackTitle || effectiveAlbumName, trackArtistId)) {
           return ytmDetail;
         }
       }
@@ -1776,15 +1887,8 @@ export async function fetchAlbumDetails(
 
                   if (targetAlbId && (targetAlbId.startsWith('MPREb_') || targetAlbId.startsWith('OLAK') || targetAlbId.startsWith('VLOLAK') || targetAlbId.startsWith('MPAD'))) {
                     const ytmDetail = await fetchAlbumDetailsFromYTM(targetAlbId, albInfo.albumName || parsedSub.albumName || resolvedReleaseName, artistName, fallbackCover);
-                    if (ytmDetail && ytmDetail.tracks.length > 0 && isMatchingArtist(ytmDetail.artist, artistName)) {
-                      const songTargets: string[] = [effectiveAlbumName, trackTitle].filter((s): s is string => Boolean(s)).map(s => s.trim().toLowerCase());
-                      const hasTrack = ytmDetail.tracks.some(t => {
-                        const tTitle = (t.title || '').trim().toLowerCase();
-                        return songTargets.some(st => tTitle === st || tTitle.startsWith(st + ' ') || tTitle.includes(`(${st})`));
-                      }) || songTargets.some(st => (ytmDetail.name || '').trim().toLowerCase().includes(st));
-                      if (hasTrack) {
-                        return ytmDetail;
-                      }
+                    if (isCandidateAlbumValid(ytmDetail, artistName, effectiveAlbumName, trackTitle || effectiveAlbumName, trackArtistId)) {
+                      return ytmDetail!;
                     }
                   }
                   if (albInfo.albumName && !isGenericName) {
@@ -1807,39 +1911,15 @@ export async function fetchAlbumDetails(
   // -------------------------------------------------------------
   if (artistName) {
     try {
-      const profile = await fetchArtistProfileFromYTM(artistName);
-      if (profile && isMatchingArtist(profile.name, artistName)) {
-        const candidates = [resolvedReleaseName, effectiveAlbumName, albumName].filter(Boolean);
+      const profile = await fetchArtistProfileFromYTM(artistName, trackArtistId, trackArtistId);
+      if (profile && (trackArtistId ? (profile.artistId === trackArtistId || profile.channelId === trackArtistId || isMatchingArtist(profile.name, artistName)) : isMatchingArtist(profile.name, artistName))) {
         const allReleases = [...(profile.albums || []), ...(profile.singlesAndEPs || [])];
         
-        // 1. Pass 1: Direct title match in all official studio albums and singles
-        for (const rel of allReleases) {
-          const relNameLower = (rel.name || '').trim().toLowerCase();
-          for (const cand of candidates) {
-            const candLower = cand.trim().toLowerCase();
-            if (relNameLower === candLower || relNameLower.includes(candLower) || candLower.includes(relNameLower)) {
-              const matchedBrowseId = rel.id.replace('album-', '').replace('album-derived-', '');
-              const ytmDetail = await fetchAlbumDetailsFromYTM(matchedBrowseId, rel.name || resolvedReleaseName, artistName, rel.cover || fallbackCover);
-              if (ytmDetail && ytmDetail.tracks.length > 0 && isMatchingArtist(ytmDetail.artist, artistName)) {
-                return ytmDetail;
-              }
-            }
-          }
-        }
-
-        // 2. Pass 2: Deep Tracklist Inspection across all studio albums, EPs, and multi-track singles!
         for (const rel of allReleases) {
           const matchedBrowseId = rel.id.replace('album-', '').replace('album-derived-', '');
-          const ytmDetail = await fetchAlbumDetailsFromYTM(matchedBrowseId, rel.name, artistName, rel.cover || fallbackCover);
-          if (ytmDetail && ytmDetail.tracks.length > 0) {
-            const targetTrackLower = effectiveAlbumName.trim().toLowerCase();
-            const hasTrack = ytmDetail.tracks.some(t => {
-              const tTitle = (t.title || '').trim().toLowerCase();
-              return tTitle === targetTrackLower || tTitle.startsWith(targetTrackLower + ' ') || tTitle.includes(`(${targetTrackLower})`);
-            });
-            if (hasTrack) {
-              return ytmDetail; // Found parent album or EP containing this song!
-            }
+          const ytmDetail = await fetchAlbumDetailsFromYTM(matchedBrowseId, rel.name || resolvedReleaseName, artistName, rel.cover || fallbackCover);
+          if (isCandidateAlbumValid(ytmDetail, artistName, effectiveAlbumName, trackTitle || effectiveAlbumName, trackArtistId)) {
+            return ytmDetail!;
           }
         }
       }

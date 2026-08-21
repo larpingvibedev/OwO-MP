@@ -7,6 +7,23 @@ const os = require('os');
 const vm = require('node:vm');
 const { Readable } = require('stream');
 const { execFile } = require('child_process');
+const { FinalPathMutationQueue } = require('./final-path-mutation-queue.cjs');
+const { YouTubeRequestDispatcher } = require('./youtube-request-dispatcher.cjs');
+const {
+  sanitizeStableVideoId,
+  appendVideoIdSuffix,
+  getAudioFileNames,
+  hasAudioFile,
+  shouldDeleteLegacyAudio
+} = require('./audio-file-ownership.cjs');
+const { deriveDirectStreamIdentity, decideDirectStreamRefresh } = require('./direct-stream-identity.cjs');
+const {
+  createResolverContext,
+  throwIfResolverExpired,
+  getResolverFetchSignal,
+  awaitResolverStep,
+  normalizeResolverError
+} = require('./resolver-deadline.cjs');
 let mm = null;
 try { mm = require('music-metadata'); } catch (e) {}
 
@@ -67,7 +84,60 @@ let mainWindow = null;
 let proxyPort = 41721;
 let cachedVisitorSession = null;
 const resolvedAudioCache = new Map(); // videoId -> { audioInfo: { url, mimeType }, time: number }
-const activeDownloads = new Map(); // videoId -> AbortController
+// A video can legitimately have more than one request in flight (for example a
+// retry beginning before the first request has unwound). Keep request ownership
+// separate so one completion can never delete or abort another request.
+const activeDownloads = new Map(); // videoId -> Map<requestId, AbortController>
+let nextDownloadRequestId = 1;
+const finalPathMutationQueue = new FinalPathMutationQueue();
+// The authenticated extractor uses one shared Electron session and one webRequest
+// listener. Electron replaces a session listener when another is registered, so
+// extractor work must be serialized to keep each track's bytes isolated.
+let browserDownloadTail = Promise.resolve();
+
+function runBrowserDownloadExclusive(task) {
+  const run = browserDownloadTail.then(task, task);
+  browserDownloadTail = run.catch(() => {});
+  return run;
+}
+
+function registerActiveDownload(videoId) {
+  const requestId = nextDownloadRequestId++;
+  const controller = new AbortController();
+  let requests = activeDownloads.get(videoId);
+  if (!requests) {
+    requests = new Map();
+    activeDownloads.set(videoId, requests);
+  }
+  requests.set(requestId, controller);
+  return { requestId, controller };
+}
+
+function unregisterActiveDownload(videoId, requestId) {
+  const requests = activeDownloads.get(videoId);
+  if (!requests) return;
+  requests.delete(requestId);
+  if (requests.size === 0 && activeDownloads.get(videoId) === requests) {
+    activeDownloads.delete(videoId);
+  }
+}
+
+function cancelActiveDownloads(videoId) {
+  const requests = activeDownloads.get(videoId);
+  if (!requests || requests.size === 0) return 0;
+
+  // Snapshot ownership at cancellation time. Requests registered later are not
+  // accidentally cancelled, and each cancelled request removes only itself.
+  const controllers = Array.from(requests.values());
+  for (const controller of controllers) {
+    try { controller.abort(); } catch {}
+  }
+  return controllers.length;
+}
+
+function runFinalPathExclusive(finalPath, task) {
+  return finalPathMutationQueue.run(finalPath, task);
+}
 
 let innertubeInstance = null;
 let innertubeInitPromise = null;
@@ -244,8 +314,10 @@ async function getVisitorSession(forceRefresh = false) {
 // Pre-warm visitor session immediately on launch
 getVisitorSession().catch(() => {});
 
-async function resolveBestAudioUrl(videoId, forceFresh = false) {
+async function resolveBestAudioUrl(videoId, forceFresh = false, options = {}) {
   if (!videoId) return null;
+  const resolverContext = createResolverContext(options);
+  throwIfResolverExpired(resolverContext);
 
   // 1. Check Cache with Dynamic Expiration Validation
   if (forceFresh) {
@@ -263,14 +335,23 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
 
   // 2. High-speed Innertube Multi-Client Decipher Engine (YTMUSIC, MWEB, IOS, ANDROID, WEB)
   try {
-    const yt = await getInnertube();
+    const yt = await awaitResolverStep(getInnertube(), resolverContext, 'Innertube initialization');
     if (yt) {
       for (const clientName of ['YTMUSIC', 'MWEB', 'IOS', 'ANDROID', 'WEB']) {
+        throwIfResolverExpired(resolverContext, `${clientName} stream resolution`);
         try {
-          const info = await yt.getBasicInfo(videoId, { client: clientName });
+          const info = await awaitResolverStep(
+            yt.getBasicInfo(videoId, { client: clientName }),
+            resolverContext,
+            `${clientName} video info`
+          );
           const format = info.chooseFormat({ type: 'audio', quality: 'best' });
           if (format) {
-            const deciphered = await format.decipher(yt.session.player);
+            const deciphered = await awaitResolverStep(
+              format.decipher(yt.session.player),
+              resolverContext,
+              `${clientName} stream decipher`
+            );
             const streamUrl = typeof deciphered === 'string' ? deciphered : (deciphered?.toString?.() || '');
             if (streamUrl && streamUrl.startsWith('http')) {
               let expireTimestamp = null;
@@ -310,6 +391,7 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
                 bitrate: format.bitrate,
                 totalSize,
                 clientName,
+                resolverSessionScope: 'innertube-process',
                 headers: clientHeaders
               };
 
@@ -318,16 +400,28 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
             }
           }
         } catch (clientErr) {
+          const normalized = normalizeResolverError(clientErr, resolverContext, `${clientName} stream resolution`);
+          if (normalized?.stage === 'DOWNLOAD_CANCELLED' || normalized?.stage === 'DIRECT_RANGE_RESOLVE_TIMEOUT') {
+            throw normalized;
+          }
           // Continue to next client
         }
       }
     }
   } catch (err) {
+    const normalized = normalizeResolverError(err, resolverContext, 'Innertube stream resolution');
+    if (normalized?.stage === 'DOWNLOAD_CANCELLED' || normalized?.stage === 'DIRECT_RANGE_RESOLVE_TIMEOUT') {
+      throw normalized;
+    }
     console.warn('[resolveBestAudioUrl] Innertube error:', err.message);
   }
 
   // 3. Fallback: Direct Native Android_VR Innertube Client with visitor session
-  let activeSession = await getVisitorSession();
+  let activeSession = await awaitResolverStep(
+    getVisitorSession(),
+    resolverContext,
+    'Visitor session resolution'
+  );
   const fallbackClients = [
     { clientName: 'ANDROID_VR', clientVersion: '1.60.19', deviceModel: 'Quest 3', hl: 'en', gl: 'US' },
     { clientName: 'ANDROID', clientVersion: '19.29.35', hl: 'en', gl: 'US' }
@@ -336,7 +430,7 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
   for (let attempt = 0; attempt < 2; attempt++) {
     for (const c of fallbackClients) {
       try {
-        const playerRes = await fetch('https://www.youtube.com/youtubei/v1/player', {
+        const playerRes = await awaitResolverStep(fetch('https://www.youtube.com/youtubei/v1/player', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -352,11 +446,15 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
             },
             videoId: videoId
           }),
-          signal: AbortSignal.timeout(2800)
-        });
+          signal: getResolverFetchSignal(resolverContext)
+        }), resolverContext, `${c.clientName} player request`);
 
         if (playerRes.ok) {
-          const data = await playerRes.json();
+          const data = await awaitResolverStep(
+            playerRes.json(),
+            resolverContext,
+            `${c.clientName} player response`
+          );
           const formats = (data.streamingData?.adaptiveFormats || []).filter(
             f => f.mimeType?.includes('audio') && Boolean(f.url)
           );
@@ -369,6 +467,7 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
               bitrate: bestF.bitrate,
               totalSize: Number(bestF.contentLength || 0),
               clientName: c.clientName,
+              resolverSessionScope: `visitor-${activeSession?.time || 'ephemeral'}`,
               headers: { 
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
                 ...(activeSession?.cookie ? { 'Cookie': activeSession.cookie } : {})
@@ -378,15 +477,486 @@ async function resolveBestAudioUrl(videoId, forceFresh = false) {
             return audioInfo;
           }
         }
-      } catch (e) {}
+      } catch (error) {
+        const normalized = normalizeResolverError(error, resolverContext, `${c.clientName} player request`);
+        if (normalized?.stage === 'DOWNLOAD_CANCELLED' || normalized?.stage === 'DIRECT_RANGE_RESOLVE_TIMEOUT') {
+          throw normalized;
+        }
+      }
     }
 
     if (attempt === 0) {
-      activeSession = await getVisitorSession(true);
+      activeSession = await awaitResolverStep(
+        getVisitorSession(true),
+        resolverContext,
+        'Visitor session refresh'
+      );
     }
   }
 
+  throwIfResolverExpired(resolverContext);
   return null;
+}
+
+const DIRECT_DOWNLOAD_CHUNK_SIZE = 1024 * 1024;
+const DIRECT_RANGE_CEILING_CACHE_TTL_MS = 10 * 60 * 1000;
+const DIRECT_RANGE_FETCH_TIMEOUT_MS = 12000;
+const BROWSER_CAPTURE_FETCH_TIMEOUT_MS = 10000;
+const BROWSER_GAP_FETCH_TIMEOUT_MS = 12000;
+const directRangeCeilingCache = new Map(); // resolver client/host/session scope -> confirmation
+
+function getDirectRangeScope(audioInfo) {
+  if (!audioInfo?.url) return null;
+  try {
+    const streamUrl = new URL(audioInfo.url);
+    const client = String(audioInfo.clientName || 'unknown').toLowerCase();
+    const host = streamUrl.hostname.toLowerCase();
+    const urlClient = String(streamUrl.searchParams.get('c') || 'none').toLowerCase();
+    const sessionScope = String(audioInfo.resolverSessionScope || 'process');
+    return `${client}|${host}|${urlClient}|${sessionScope}`;
+  } catch {
+    return null;
+  }
+}
+
+function getActiveDirectRangeCeiling(scopeKey) {
+  if (!scopeKey) return null;
+  const cached = directRangeCeilingCache.get(scopeKey);
+  if (!cached) return null;
+  if (Date.now() - cached.confirmedAt >= DIRECT_RANGE_CEILING_CACHE_TTL_MS) {
+    directRangeCeilingCache.delete(scopeKey);
+    return null;
+  }
+  return cached;
+}
+
+function parseContentRangeHeader(value) {
+  if (!value || typeof value !== 'string') return null;
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(value.trim());
+  if (!match) return null;
+
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  const total = Number(match[3]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || !Number.isSafeInteger(total)) return null;
+  if (start < 0 || end < start || total <= end) return null;
+  return { start, end, total };
+}
+
+function getDownloadStage(error, fallbackStage) {
+  if (error && typeof error.stage === 'string' && error.stage) return error.stage;
+  const message = error && typeof error.message === 'string' ? error.message : '';
+  const match = /^\[([A-Z0-9_]+)\]/.exec(message);
+  return match ? match[1] : fallbackStage;
+}
+
+function createDownloadStageError(stage, message) {
+  const error = new Error(`[${stage}] ${message}`);
+  error.stage = stage;
+  return error;
+}
+
+function createBoundedFetchContext(callerSignal, timeoutMs) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return {
+    callerSignal,
+    timeoutSignal,
+    signal: callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal
+  };
+}
+
+function getBoundedFetchAbortError(context, timeoutStage, description) {
+  if (context?.callerSignal?.aborted) {
+    return createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
+  }
+  if (context?.timeoutSignal?.aborted) {
+    return createDownloadStageError(timeoutStage, `${description} timed out`);
+  }
+  return null;
+}
+
+function throwIfBoundedFetchAborted(context, timeoutStage, description) {
+  const error = getBoundedFetchAbortError(context, timeoutStage, description);
+  if (error) throw error;
+}
+
+async function readValidatedRangeBody(response, expectedLength, fetchContext, timeoutStage, description) {
+  if (!response.body) {
+    throw createDownloadStageError('DIRECT_RANGE_EMPTY_BODY', 'Range response did not contain a body');
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+
+  try {
+    while (true) {
+      if (fetchContext?.signal?.aborted) {
+        try { await reader.cancel(); } catch {}
+        throwIfBoundedFetchAborted(fetchContext, timeoutStage, description);
+      }
+
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.length === 0) continue;
+
+      received += value.length;
+      if (received > expectedLength) {
+        try { await reader.cancel(); } catch {}
+        throw createDownloadStageError(
+          'DIRECT_RANGE_LENGTH_MISMATCH',
+          `Range body exceeded its declared length (${received}/${expectedLength} bytes)`
+        );
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    const boundedError = getBoundedFetchAbortError(fetchContext, timeoutStage, description);
+    if (boundedError) throw boundedError;
+    throw error;
+  }
+
+  if (received !== expectedLength) {
+    throw createDownloadStageError(
+      'DIRECT_RANGE_LENGTH_MISMATCH',
+      `Range body length did not match Content-Range (${received}/${expectedLength} bytes)`
+    );
+  }
+
+  return Buffer.concat(chunks, received);
+}
+
+async function writeBufferAtPosition(fileHandle, buffer, position) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const { bytesWritten } = await fileHandle.write(
+      buffer,
+      offset,
+      buffer.length - offset,
+      position + offset
+    );
+    if (!bytesWritten) {
+      throw createDownloadStageError(
+        'DIRECT_RANGE_DISK_WRITE',
+        `Disk write stopped after ${offset}/${buffer.length} bytes`
+      );
+    }
+    offset += bytesWritten;
+  }
+}
+
+// Downloads one exact video stream using explicit byte ranges. Every response is
+// validated before it is written, so expired URLs, HTML error bodies, missing
+// chunks, and overlapping/out-of-order ranges can never be accepted as audio.
+async function downloadTrackViaValidatedRanges(videoId, tempPath, onProgress, abortSignal = null) {
+  if (!videoId) {
+    return { success: false, stage: 'DIRECT_RANGE_RESOLVE', error: '[DIRECT_RANGE_RESOLVE] Missing videoId' };
+  }
+
+  let fileHandle = null;
+  let audioInfo = null;
+  let expectedTotal = 0;
+  let downloadedBytes = 0;
+  let streamIdentity = null;
+  let streamRestartCount = 0;
+  const attempts = [];
+
+  try {
+    audioInfo = await resolveBestAudioUrl(videoId, false, { signal: abortSignal, timeoutMs: 15000 });
+    if (!audioInfo || !audioInfo.url) {
+      throw createDownloadStageError('DIRECT_RANGE_RESOLVE', `Could not resolve an audio stream for ${videoId}`);
+    }
+
+    const directRangeScope = getDirectRangeScope(audioInfo);
+    const cachedCeiling = getActiveDirectRangeCeiling(directRangeScope);
+    if (cachedCeiling) {
+      const ageMs = Date.now() - cachedCeiling.confirmedAt;
+      console.log(
+        `[Download] Skipping direct range probe for ${videoId}; resolver scope ${cachedCeiling.scopeLabel} confirmed a ${cachedCeiling.ceilingBytes}-byte ceiling ${ageMs}ms ago.`
+      );
+      return {
+        success: false,
+        stage: 'DIRECT_RANGE_CEILING_CACHED',
+        error: `[DIRECT_RANGE_CEILING_CACHED] Resolver scope is temporarily capped at ${cachedCeiling.ceilingBytes} bytes`,
+        diagnostics: [{
+          cacheHit: true,
+          scope: cachedCeiling.scopeLabel,
+          ceilingBytes: cachedCeiling.ceilingBytes,
+          confirmedAt: cachedCeiling.confirmedAt,
+          expiresInMs: Math.max(0, DIRECT_RANGE_CEILING_CACHE_TTL_MS - ageMs)
+        }]
+      };
+    }
+
+    fileHandle = await fs.promises.open(tempPath, 'w');
+
+    while (!expectedTotal || downloadedBytes < expectedTotal) {
+      if (abortSignal && abortSignal.aborted) {
+        throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
+      }
+
+      const start = downloadedBytes;
+      const requestedEnd = expectedTotal
+        ? Math.min(expectedTotal - 1, start + DIRECT_DOWNLOAD_CHUNK_SIZE - 1)
+        : start + DIRECT_DOWNLOAD_CHUNK_SIZE - 1;
+      const range = `bytes=${start}-${requestedEnd}`;
+      let rangeResult = null;
+      let lastError = null;
+      let restartRequested = false;
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (abortSignal && abortSignal.aborted) {
+          throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
+        }
+
+        try {
+          const fetchContext = createBoundedFetchContext(abortSignal, DIRECT_RANGE_FETCH_TIMEOUT_MS);
+          let response;
+          try {
+            response = await fetch(audioInfo.url, {
+              headers: {
+                ...(audioInfo.headers || {}),
+                'Accept-Encoding': 'identity',
+                'Range': range
+              },
+              signal: fetchContext.signal
+            });
+          } catch (error) {
+            const boundedError = getBoundedFetchAbortError(
+              fetchContext,
+              'DIRECT_RANGE_TIMEOUT',
+              `Direct range ${range}`
+            );
+            attempts.push({
+              range,
+              attempt: attempt + 1,
+              client: audioInfo.clientName || 'unknown',
+              scope: getDirectRangeScope(audioInfo),
+              status: null,
+              contentRange: null,
+              stage: getDownloadStage(boundedError || error, 'DIRECT_RANGE_FETCH')
+            });
+            throw boundedError || error;
+          }
+          const contentRangeValue = response.headers.get('content-range');
+          attempts.push({
+            range,
+            attempt: attempt + 1,
+            client: audioInfo.clientName || 'unknown',
+            scope: getDirectRangeScope(audioInfo),
+            status: response.status,
+            contentRange: contentRangeValue || null
+          });
+
+          if (response.status !== 206) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError(
+              'DIRECT_RANGE_HTTP_STATUS',
+              `${range} returned HTTP ${response.status} ${response.statusText || ''}`.trim()
+            );
+          }
+
+          const contentRange = parseContentRangeHeader(contentRangeValue);
+          if (!contentRange) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError(
+              'DIRECT_RANGE_INVALID_HEADER',
+              `${range} returned invalid Content-Range "${contentRangeValue || ''}"`
+            );
+          }
+          if (contentRange.start !== start || contentRange.end > requestedEnd) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError(
+              'DIRECT_RANGE_BOUNDARY_MISMATCH',
+              `${range} returned bytes ${contentRange.start}-${contentRange.end}`
+            );
+          }
+          if (contentRange.end < requestedEnd && contentRange.end !== contentRange.total - 1) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError(
+              'DIRECT_RANGE_BOUNDARY_MISMATCH',
+              `${range} ended early at byte ${contentRange.end} of ${contentRange.total}`
+            );
+          }
+          if (expectedTotal && contentRange.total !== expectedTotal) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError(
+              'DIRECT_RANGE_STREAM_CHANGED',
+              `Resolved stream size changed from ${expectedTotal} to ${contentRange.total} bytes`
+            );
+          }
+
+          const responseIdentity = deriveDirectStreamIdentity(audioInfo, contentRange.total);
+          if (!responseIdentity) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError('DIRECT_RANGE_IDENTITY_MISSING', `${range} did not expose a stable stream identity`);
+          }
+          if (streamIdentity && responseIdentity !== streamIdentity) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError('DIRECT_RANGE_STREAM_CHANGED', `${range} changed stream identity`);
+          }
+          if (!streamIdentity) streamIdentity = responseIdentity;
+
+          const contentType = (response.headers.get('content-type') || '').toLowerCase();
+          if (contentType.includes('text/html') || contentType.includes('application/json')) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError(
+              'DIRECT_RANGE_INVALID_CONTENT',
+              `${range} returned non-audio content type ${contentType}`
+            );
+          }
+
+          const expectedLength = contentRange.end - contentRange.start + 1;
+          const declaredLength = Number(response.headers.get('content-length') || 0);
+          if (declaredLength > 0 && declaredLength !== expectedLength) {
+            try { if (response.body) await response.body.cancel(); } catch {}
+            throw createDownloadStageError(
+              'DIRECT_RANGE_LENGTH_MISMATCH',
+              `${range} declared ${declaredLength} bytes but Content-Range described ${expectedLength}`
+            );
+          }
+
+          const buffer = await readValidatedRangeBody(
+            response,
+            expectedLength,
+            fetchContext,
+            'DIRECT_RANGE_TIMEOUT',
+            `Direct range ${range}`
+          );
+          rangeResult = { contentRange, buffer };
+          break;
+        } catch (error) {
+          if (abortSignal && abortSignal.aborted) {
+            throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
+          }
+
+          lastError = error;
+          const latestAttempt = attempts[attempts.length - 1];
+          if (latestAttempt?.range === range && latestAttempt?.attempt === attempt + 1 && !latestAttempt.stage) {
+            latestAttempt.stage = getDownloadStage(error, 'DIRECT_RANGE_FETCH');
+          }
+          if (attempt === 0) {
+            const refreshedAudioInfo = await resolveBestAudioUrl(videoId, true, { signal: abortSignal, timeoutMs: 15000 });
+            if (!refreshedAudioInfo || !refreshedAudioInfo.url) {
+              throw createDownloadStageError(
+                'DIRECT_RANGE_RESOLVE',
+                `Could not refresh the audio stream after ${range} failed: ${error.message}`
+              );
+            }
+            if (downloadedBytes > 0 && streamIdentity) {
+              const refreshedIdentity = deriveDirectStreamIdentity(refreshedAudioInfo, expectedTotal);
+              const refreshAction = decideDirectStreamRefresh(
+                streamIdentity,
+                refreshedIdentity,
+                downloadedBytes,
+                streamRestartCount
+              );
+              if (refreshAction === 'fail') {
+                  throw createDownloadStageError(
+                    'DIRECT_RANGE_STREAM_CHANGED',
+                    `Refreshed stream identity changed after ${downloadedBytes} bytes and restart limit was exhausted`
+                  );
+              }
+              if (refreshAction === 'restart') {
+                streamRestartCount++;
+                await fileHandle.truncate(0);
+                downloadedBytes = 0;
+                expectedTotal = 0;
+                streamIdentity = null;
+                audioInfo = refreshedAudioInfo;
+                attempts.push({ range, stage: 'DIRECT_RANGE_IDENTITY_RESTART', restart: streamRestartCount });
+                restartRequested = true;
+                break;
+              }
+            }
+            audioInfo = refreshedAudioInfo;
+          }
+        }
+      }
+
+      if (restartRequested) continue;
+
+      if (!rangeResult) {
+        const prefixRange = `bytes=0-${DIRECT_DOWNLOAD_CHUNK_SIZE - 1}`;
+        const boundaryAttempts = attempts.filter(item => item.range === range);
+        const boundaryScope = boundaryAttempts[0]?.scope || null;
+        const validatedPrefix = attempts.some(item =>
+          item.range === prefixRange &&
+          item.scope === boundaryScope &&
+          item.status === 206 &&
+          item.contentRange?.startsWith(`bytes 0-${DIRECT_DOWNLOAD_CHUNK_SIZE - 1}/`)
+        );
+        const confirmedCeiling =
+          Boolean(boundaryScope) &&
+          start === DIRECT_DOWNLOAD_CHUNK_SIZE &&
+          downloadedBytes === DIRECT_DOWNLOAD_CHUNK_SIZE &&
+          validatedPrefix &&
+          boundaryAttempts.length >= 2 &&
+          boundaryAttempts.every(item => item.status === 403 && item.scope === boundaryScope);
+
+        if (confirmedCeiling) {
+          const [client, host, urlClient, sessionScope] = boundaryScope.split('|');
+          const scopeLabel = `${client}/${host}/${urlClient}/${sessionScope}`;
+          directRangeCeilingCache.set(boundaryScope, {
+            ceilingBytes: DIRECT_DOWNLOAD_CHUNK_SIZE,
+            confirmedAt: Date.now(),
+            scopeLabel
+          });
+          console.warn(
+            `[Download] Confirmed resolver range ceiling at ${DIRECT_DOWNLOAD_CHUNK_SIZE} bytes for ${scopeLabel}; bypassing matching-scope probes for ${DIRECT_RANGE_CEILING_CACHE_TTL_MS}ms.`
+          );
+        }
+        throw lastError || createDownloadStageError('DIRECT_RANGE_FETCH', `${range} could not be downloaded`);
+      }
+
+      if (!expectedTotal) expectedTotal = rangeResult.contentRange.total;
+      await writeBufferAtPosition(fileHandle, rangeResult.buffer, rangeResult.contentRange.start);
+
+      downloadedBytes = rangeResult.contentRange.end + 1;
+      if (typeof onProgress === 'function') {
+        onProgress({
+          videoId,
+          percent: Math.min(95, 10 + Math.round((downloadedBytes / expectedTotal) * 85)),
+          downloadedBytes,
+          totalBytes: expectedTotal
+        });
+      }
+    }
+
+    await fileHandle.sync();
+    await fileHandle.close();
+    fileHandle = null;
+
+    const stat = await fs.promises.stat(tempPath);
+    if (stat.size !== expectedTotal || downloadedBytes !== expectedTotal) {
+      throw createDownloadStageError(
+        'DIRECT_RANGE_FINAL_SIZE_MISMATCH',
+        `Validated ${downloadedBytes}/${expectedTotal} bytes but temporary file size is ${stat.size}`
+      );
+    }
+
+    return {
+      success: true,
+      stage: 'DIRECT_RANGE_COMPLETE',
+      totalLength: expectedTotal,
+      mimeType: audioInfo.mimeType || 'audio/mp4',
+      diagnostics: { client: audioInfo.clientName || 'unknown', ranges: attempts.length }
+    };
+  } catch (error) {
+    if (fileHandle) {
+      try { await fileHandle.close(); } catch {}
+      fileHandle = null;
+    }
+    try { await fs.promises.unlink(tempPath); } catch {}
+
+    const stage = getDownloadStage(error, 'DIRECT_RANGE_FETCH');
+    return {
+      success: false,
+      stage,
+      error: error && error.message ? error.message : `[${stage}] Direct ranged audio acquisition failed`,
+      diagnostics: attempts.slice(-4)
+    };
+  }
 }
 
 function getFfmpegPath() {
@@ -398,6 +968,38 @@ function getFfmpegPath() {
     if (p && fs.existsSync(p)) return p;
   } catch (e) {}
   return null;
+}
+
+function getHighResolutionCoverCandidates(coverUrl) {
+  if (!coverUrl || typeof coverUrl !== 'string' || !coverUrl.startsWith('http')) return [];
+
+  const original = coverUrl.trim();
+  let upgraded = original;
+
+  try {
+    const parsed = new URL(original);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host.includes('googleusercontent.com') || host.includes('ggpht.com')) {
+      if (/=[^=]+$/.test(upgraded)) {
+        upgraded = upgraded.replace(/=[^=]+$/, '=w1200-h1200-l90-rj');
+      } else {
+        upgraded = `${upgraded}=w1200-h1200-l90-rj`;
+      }
+    } else if (host.includes('mzstatic.com')) {
+      upgraded = upgraded.replace(/\d+x\d+bb(?:-\d+)?/i, '1200x1200bb');
+    } else if (host.includes('i.ytimg.com') || host.includes('img.youtube.com')) {
+      upgraded = upgraded
+        .replace(/\/(?:default|mqdefault|hqdefault|sddefault)\.(?:jpg|webp)(?:\?.*)?$/i, '/maxresdefault.jpg')
+        .replace(/\?.*$/, '');
+    } else if (host.includes('unsplash.com')) {
+      parsed.searchParams.set('w', '1200');
+      parsed.searchParams.set('q', '92');
+      upgraded = parsed.toString();
+    }
+  } catch {}
+
+  return Array.from(new Set([upgraded, original]));
 }
 
 // Transcode raw stream and embed ID3 tags / album art via FFmpeg
@@ -414,17 +1016,20 @@ async function transcodeAndTagAudio({ inputPath, outputPath, format, title, arti
   const isM4a = format === 'm4a';
 
   try {
-    if (coverUrl && typeof coverUrl === 'string' && coverUrl.startsWith('http')) {
+    const coverCandidates = getHighResolutionCoverCandidates(coverUrl);
+    for (const candidate of coverCandidates) {
       try {
-        const coverRes = await net.fetch(coverUrl, { signal: abortSignal });
-        if (coverRes.ok) {
-          const coverBuf = Buffer.from(await coverRes.arrayBuffer());
-          if (coverBuf && coverBuf.length > 0) {
-            tempCoverPath = path.join(path.dirname(outputPath), `.cover_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`);
-            await fs.promises.writeFile(tempCoverPath, coverBuf);
-          }
+        const coverRes = await net.fetch(candidate, { signal: abortSignal });
+        if (!coverRes.ok) continue;
+
+        const coverBuf = Buffer.from(await coverRes.arrayBuffer());
+        if (coverBuf.length > 0) {
+          tempCoverPath = path.join(path.dirname(outputPath), `.cover_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`);
+          await fs.promises.writeFile(tempCoverPath, coverBuf);
+          break;
         }
       } catch (e) {
+        if (abortSignal && abortSignal.aborted) throw e;
         console.warn('[Cover Art Download Warning]:', e.message);
       }
     }
@@ -502,9 +1107,54 @@ function checkByteCoverage(bucket, targetClen) {
     }
   }
 
-  // Complete if we have continuous coverage from 0 up to targetClen
-  const complete = bucket.has(0) && (coveredUntil >= targetClen - 100);
+  // Complete only with exact continuous coverage through the final byte.
+  const complete = bucket.has(0) && coveredUntil >= targetClen - 1;
   return { complete, coveredUntil, totalBytes };
+}
+
+function getByteCoverageGaps(bucket, targetClen) {
+  if (!bucket || !targetClen) return [];
+  const intervals = Array.from(bucket.entries())
+    .map(([start, item]) => ({ start, end: item.end }))
+    .sort((a, b) => a.start - b.start);
+  const gaps = [];
+  let cursor = 0;
+
+  for (const interval of intervals) {
+    if (interval.end < cursor) continue;
+    if (interval.start > cursor) gaps.push({ start: cursor, end: interval.start - 1 });
+    cursor = Math.max(cursor, interval.end + 1);
+    if (cursor >= targetClen) break;
+  }
+  if (cursor < targetClen) gaps.push({ start: cursor, end: targetClen - 1 });
+  return gaps;
+}
+
+function parseBrowserAudioRangeUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const clen = Number(url.searchParams.get('clen'));
+    const rangeValue = url.searchParams.get('range') || '';
+    const rangeMatch = /^(\d+)-(\d+)$/.exec(rangeValue);
+    const mime = String(url.searchParams.get('mime') || '').split(';')[0].trim().toLowerCase();
+    const itag = url.searchParams.get('itag') || '';
+    const streamId = url.searchParams.get('id') || '';
+
+    if (!Number.isSafeInteger(clen) || clen <= 1000000 || !rangeMatch) return null;
+    const start = Number(rangeMatch[1]);
+    const end = Number(rangeMatch[2]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null;
+    if (start < 0 || end < start || end >= clen) return null;
+    if (!mime.startsWith('audio/') || !/^\d+$/.test(itag) || !streamId) return null;
+
+    // The signed Google media id + itag + declared length/mime is the strongest
+    // stable identity exposed by query-range HTTP 200 responses. CDN host and
+    // signature may change across redirects, so they are intentionally excluded.
+    const identity = `${streamId}|${itag}|${clen}|${mime}`;
+    return { url, clen, start, end, mime, identity };
+  } catch {
+    return null;
+  }
 }
 
 // Browser-Assisted YouTube Authenticated Stream Downloader (persist:youtube)
@@ -515,10 +1165,23 @@ async function downloadTrackViaBrowserBuffer(videoId, tempPath, onProgress, abor
   const streamBuckets = new Map(); // clen -> Map<start, { end, buffer }>
   let mimeType = 'audio/webm';
   let observedAudioRequests = 0;
+  let preReadinessAudioRequests = 0;
+  let rejectedAudioRanges = 0;
+  let capturedRangeTimeouts = 0;
+  let queryRangeResponsesWithoutContentRange = 0;
+  let synthesizedGapRanges = 0;
   let targetSongClen = 0;
+  let targetStreamIdentity = null;
+  let validatedStreamTemplateUrl = null;
+  let maxValidatedNaturalRangeLength = 0;
   let maxEmittedPercent = 5;
   const pendingFetches = new Set();
+  const pendingRangeKeys = new Set();
+  const eligibleRequestIds = new Set();
   let win = null;
+  let removeBeforeRequestObserver = null;
+  let exactTrackReady = false;
+  let captureGeneration = 0;
   const startTime = Date.now();
 
   const emitProgress = (computedPercent, downloadedBytes, totalBytes) => {
@@ -551,60 +1214,170 @@ async function downloadTrackViaBrowserBuffer(videoId, tempPath, onProgress, abor
 
     const userAgent = win.webContents.userAgent;
 
-    const listener = (details) => {
-      if (details.url.includes('videoplayback') && details.url.includes('mime=audio') && details.statusCode === 200) {
+    const requestFilter = { urls: ['*://*.googlevideo.com/videoplayback*'] };
+    const beforeRequestObserver = (details) => {
+      const belongsToExtractor = win && !win.isDestroyed() && details.webContentsId === win.webContents.id;
+      const isAudioRequest = details.url.includes('videoplayback') && details.url.includes('mime=audio');
+      if (belongsToExtractor && isAudioRequest) {
         observedAudioRequests++;
-        const u = new URL(details.url);
-        const clen = parseInt(u.searchParams.get('clen') || '0', 10);
-        const range = u.searchParams.get('range');
-        if (u.searchParams.get('mime')) mimeType = u.searchParams.get('mime');
+        if (exactTrackReady) {
+          eligibleRequestIds.add(details.id);
+        } else {
+          preReadinessAudioRequests++;
+        }
+      }
+    };
+
+    const responseListener = (details) => {
+      // The persist:youtube session is also used elsewhere in the app. Only
+      // collect requests initiated by this extractor window after exact-video
+      // readiness. A pre-readiness request whose response arrives later is not
+      // eligible because its request id was never admitted above.
+      if (!win || win.isDestroyed() || details.webContentsId !== win.webContents.id) return;
+      if (
+        details.url.includes('videoplayback') &&
+        details.url.includes('mime=audio') &&
+        (details.statusCode === 200 || details.statusCode === 206)
+      ) {
+        if (!exactTrackReady || !eligibleRequestIds.has(details.id)) return;
+        eligibleRequestIds.delete(details.id);
+
+        const parsed = parseBrowserAudioRangeUrl(details.url);
+        if (!parsed) {
+          rejectedAudioRanges++;
+          return;
+        }
+
+        const { url: u, clen, start, end, mime, identity } = parsed;
+        if (!targetStreamIdentity) {
+          targetStreamIdentity = identity;
+          targetSongClen = clen;
+          mimeType = mime;
+        } else if (identity !== targetStreamIdentity || clen !== targetSongClen || mime !== mimeType) {
+          rejectedAudioRanges++;
+          return;
+        }
 
         // Strip UMP wrapping so YouTube delivers pristine WebM/MP4 media chunks starting with valid headers
         u.searchParams.delete('ump');
         u.searchParams.delete('srfvp');
         const cleanFetchUrl = u.toString();
 
-        if (clen > 0 && range) {
-          if (!streamBuckets.has(clen)) streamBuckets.set(clen, new Map());
-          const bucket = streamBuckets.get(clen);
-          const [start, end] = range.split('-').map(Number);
+        if (!streamBuckets.has(clen)) streamBuckets.set(clen, new Map());
+        const bucket = streamBuckets.get(clen);
+        const rangeKey = `${identity}|${start}`;
+        if (!bucket.has(start) && !pendingRangeKeys.has(rangeKey)) {
+          const requestGeneration = captureGeneration;
+          pendingRangeKeys.add(rangeKey);
+          const fetchP = (async () => {
+            if (abortSignal && abortSignal.aborted) return;
+            const fetchContext = createBoundedFetchContext(abortSignal, BROWSER_CAPTURE_FETCH_TIMEOUT_MS);
+            try {
+              const res = await net.fetch(cleanFetchUrl, {
+                headers: {
+                  'Accept-Encoding': 'identity',
+                  'User-Agent': userAgent,
+                  'Referer': 'https://music.youtube.com/'
+                },
+                signal: fetchContext.signal
+              });
+              if (res.status !== 200 && res.status !== 206) {
+                rejectedAudioRanges++;
+                return;
+              }
 
-          if (!targetSongClen && clen > 1000000) {
-            targetSongClen = clen;
-          }
+              const responseType = String(res.headers.get('content-type') || '')
+                .split(';')[0]
+                .trim()
+                .toLowerCase();
+              if (!responseType.startsWith('audio/') && responseType !== 'application/octet-stream') {
+                rejectedAudioRanges++;
+                return;
+              }
 
-          if (!bucket.has(start)) {
-            const fetchP = (async () => {
-              if (abortSignal && abortSignal.aborted) return;
-              try {
-                const res = await net.fetch(cleanFetchUrl, {
-                  headers: {
-                    'User-Agent': userAgent,
-                    'Referer': 'https://music.youtube.com/'
-                  },
-                  signal: abortSignal
-                });
-                if (res.ok) {
-                  const ab = await res.arrayBuffer();
-                  bucket.set(start, { end, buffer: Buffer.from(ab) });
+              const responseUrl = res.url ? parseBrowserAudioRangeUrl(res.url) : parsed;
+              if (!responseUrl || responseUrl.identity !== identity || responseUrl.start !== start || responseUrl.end !== end) {
+                rejectedAudioRanges++;
+                return;
+              }
 
-                  // Strictly calculate and emit progress ONLY for the target song stream (prevents progress bar jumps)
-                  if (targetSongClen && clen === targetSongClen) {
-                    const cov = checkByteCoverage(bucket, targetSongClen);
-                    const pct = Math.min(90, 5 + Math.round((cov.totalBytes / targetSongClen) * 85));
-                    emitProgress(pct, cov.totalBytes, targetSongClen);
-                  }
+              const expectedLength = end - start + 1;
+              const contentRangeValue = res.headers.get('content-range');
+              const responseRange = parseContentRangeHeader(contentRangeValue);
+              if (contentRangeValue) {
+                if (
+                  !responseRange ||
+                  responseRange.start !== start ||
+                  responseRange.end !== end ||
+                  responseRange.total !== clen
+                ) {
+                  rejectedAudioRanges++;
+                  return;
                 }
-              } catch (e) {}
-            })();
-            pendingFetches.add(fetchP);
-            fetchP.finally(() => pendingFetches.delete(fetchP));
-          }
+              } else if (res.status === 206) {
+                rejectedAudioRanges++;
+                return;
+              } else {
+                // Google query-range responses normally use HTTP 200 without a
+                // Content-Range header. In that case the signed query bounds,
+                // response URL identity, declared length, and exact body length
+                // collectively bind the bytes.
+                queryRangeResponsesWithoutContentRange++;
+              }
+
+              const declaredLength = Number(res.headers.get('content-length') || 0);
+              if (declaredLength > 0 && declaredLength !== expectedLength) {
+                rejectedAudioRanges++;
+                return;
+              }
+
+              const ab = await res.arrayBuffer();
+              throwIfBoundedFetchAborted(
+                fetchContext,
+                'BROWSER_CAPTURE_RANGE_TIMEOUT',
+                `Captured range ${start}-${end}`
+              );
+              const buffer = Buffer.from(ab);
+              if (
+                !exactTrackReady ||
+                requestGeneration !== captureGeneration ||
+                identity !== targetStreamIdentity ||
+                buffer.length !== expectedLength
+              ) {
+                rejectedAudioRanges++;
+                return;
+              }
+              bucket.set(start, { end, buffer });
+              validatedStreamTemplateUrl = cleanFetchUrl;
+              maxValidatedNaturalRangeLength = Math.max(maxValidatedNaturalRangeLength, expectedLength);
+
+              const cov = checkByteCoverage(bucket, targetSongClen);
+              const pct = Math.min(90, 5 + Math.round((cov.totalBytes / targetSongClen) * 85));
+              emitProgress(pct, cov.totalBytes, targetSongClen);
+            } catch (error) {
+              if (abortSignal && abortSignal.aborted) return;
+              const boundedError = getBoundedFetchAbortError(
+                fetchContext,
+                'BROWSER_CAPTURE_RANGE_TIMEOUT',
+                `Captured range ${start}-${end}`
+              );
+              if (boundedError?.stage === 'BROWSER_CAPTURE_RANGE_TIMEOUT') capturedRangeTimeouts++;
+              rejectedAudioRanges++;
+              const reportedError = boundedError || error;
+              console.warn(`[Browser Extractor] Range ${start}-${end} rejected: ${reportedError.message}`);
+            }
+          })();
+          pendingFetches.add(fetchP);
+          fetchP.finally(() => {
+            pendingFetches.delete(fetchP);
+            pendingRangeKeys.delete(rangeKey);
+          });
         }
       }
     };
 
-    s.webRequest.onResponseStarted({ urls: ['*://*.googlevideo.com/videoplayback*'] }, listener);
+    removeBeforeRequestObserver = ensureYouTubeRequestDispatcher().addObserver(beforeRequestObserver);
+    s.webRequest.onResponseStarted(requestFilter, responseListener);
 
     win.loadURL(`https://music.youtube.com/watch?v=${videoId}`).catch(() => {});
 
@@ -668,12 +1441,20 @@ async function downloadTrackViaBrowserBuffer(videoId, tempPath, onProgress, abor
 
         lastDomState = state;
 
-        if (!state.isAd && state.hasVideo && state.duration > 0 && state.readyState >= 2) {
-          if (!state.videoId || state.videoId === videoId) {
-            trackDuration = state.duration;
-            console.log(`[Extractor Ready] videoId=${videoId}, duration=${trackDuration}s, readyState=${state.readyState}, elapsedMs=${Date.now() - startTime}ms`);
-            break;
-          }
+        if (!state.isAd && state.hasVideo && state.duration > 0 && state.readyState >= 2 && state.videoId === videoId) {
+          trackDuration = state.duration;
+          // Start a fresh capture epoch only after the DOM player proves it is
+          // rendering the requested exact video. Nothing observed earlier is
+          // eligible for selection or assembly.
+          captureGeneration++;
+          streamBuckets.clear();
+          pendingRangeKeys.clear();
+          eligibleRequestIds.clear();
+          exactTrackReady = true;
+          targetSongClen = 0;
+          targetStreamIdentity = null;
+          console.log(`[Extractor Ready] videoId=${videoId}, duration=${trackDuration}s, readyState=${state.readyState}, elapsedMs=${Date.now() - startTime}ms`);
+          break;
         }
       }
     }
@@ -693,94 +1474,279 @@ async function downloadTrackViaBrowserBuffer(videoId, tempPath, onProgress, abor
       throw new Error(`[${stageCode}] YouTube Music player failed readiness checks within 30s (duration=${lastDomState.duration}, isAd=${lastDomState.isAd}, readyState=${lastDomState.readyState}, observedAudioRequests=${observedAudioRequests}, elapsedMs=${Date.now() - startTime}ms)`);
     }
 
-    // Accelerated Dynamic Seeking (15s jumps with continuous byte coverage detection)
-    const jumpSeconds = 15;
+    // Seek densely enough for the player to issue its natural authenticated
+    // ranges. Very large/fast jumps leave permanent holes even though later
+    // ranges arrive successfully.
+    const jumpSeconds = 3;
     const stepCount = Math.ceil(trackDuration / jumpSeconds);
 
-    for (let step = 0; step <= stepCount; step++) {
-      if (abortSignal && abortSignal.aborted) throw new Error('Download cancelled');
+    for (let pass = 0; pass < 2; pass++) {
+      for (let step = 0; step <= stepCount; step++) {
+        if (abortSignal && abortSignal.aborted) throw new Error('Download cancelled');
 
-      // Check if continuous byte coverage of target stream is already 100% complete
-      if (targetSongClen) {
-        const bucket = streamBuckets.get(targetSongClen);
-        if (bucket) {
-          const cov = checkByteCoverage(bucket, targetSongClen);
-          if (cov.complete) {
-            console.log(`[Download] 100% byte coverage achieved in ${Date.now() - startTime}ms (step ${step}/${stepCount})`);
-            break;
+        if (targetSongClen) {
+          const bucket = streamBuckets.get(targetSongClen);
+          if (bucket) {
+            const cov = checkByteCoverage(bucket, targetSongClen);
+            if (cov.complete) {
+              console.log(`[Download] 100% byte coverage achieved in ${Date.now() - startTime}ms (pass ${pass + 1}, step ${step}/${stepCount})`);
+              break;
+            }
           }
         }
+
+        const passOffset = pass === 0 ? 0 : jumpSeconds / 2;
+        const targetTime = Math.min(trackDuration - 0.1, (step * jumpSeconds) + passOffset);
+
+        if (win && !win.isDestroyed()) {
+          await win.webContents.executeJavaScript(`
+            (() => {
+              const v = document.querySelector('video');
+              if (v && v.duration > 0) {
+                v.currentTime = ${targetTime};
+                v.play().catch(() => {});
+              }
+            })()
+          `).catch(() => {});
+        }
+
+        await new Promise((r) => setTimeout(r, 180));
       }
 
-      const targetTime = Math.min(trackDuration - 0.1, step * jumpSeconds);
-
-      if (win && !win.isDestroyed()) {
-        await win.webContents.executeJavaScript(`
-          (() => {
-            const v = document.querySelector('video');
-            if (v && v.duration > 0) {
-              v.currentTime = ${targetTime};
-            }
-          })()
-        `).catch(() => {});
+      await Promise.all(Array.from(pendingFetches));
+      if (abortSignal && abortSignal.aborted) {
+        throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
       }
-
-      await new Promise((r) => setTimeout(r, 60));
+      if (targetSongClen) {
+        const bucket = streamBuckets.get(targetSongClen);
+        if (bucket && checkByteCoverage(bucket, targetSongClen).complete) break;
+      }
     }
 
     // Wait for any trailing chunk fetches
     await Promise.all(Array.from(pendingFetches));
+    if (abortSignal && abortSignal.aborted) {
+      throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
+    }
 
-    // Select the best stream bucket (largest collected byte size)
-    let bestClen = targetSongClen || 0;
-    let bestBucket = bestClen ? streamBuckets.get(bestClen) : null;
-    let maxBytes = 0;
+    // Chromium often buffers the opening segment before DOM readiness. That
+    // request is intentionally discarded. Once a later post-readiness natural
+    // range has been fully validated, use its exact signed stream identity as a
+    // template to request only the remaining gaps, with all validations repeated.
+    const targetBucket = targetSongClen ? streamBuckets.get(targetSongClen) : null;
+    if (
+      targetBucket &&
+      targetStreamIdentity &&
+      validatedStreamTemplateUrl &&
+      !checkByteCoverage(targetBucket, targetSongClen).complete
+    ) {
+      const naturalChunkLength = Math.min(
+        DIRECT_DOWNLOAD_CHUNK_SIZE,
+        Math.max(64 * 1024, maxValidatedNaturalRangeLength || 256 * 1024)
+      );
+      const gaps = getByteCoverageGaps(targetBucket, targetSongClen);
 
-    if (!bestBucket) {
-      for (const [clen, bucket] of streamBuckets.entries()) {
-        let totalB = 0;
-        for (const item of bucket.values()) totalB += item.buffer.length;
-        if (totalB > maxBytes) {
-          maxBytes = totalB;
-          bestClen = clen;
-          bestBucket = bucket;
+      for (const gap of gaps) {
+        for (let start = gap.start; start <= gap.end; start += naturalChunkLength) {
+          if (abortSignal && abortSignal.aborted) throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
+          const end = Math.min(gap.end, start + naturalChunkLength - 1);
+          const gapUrl = new URL(validatedStreamTemplateUrl);
+          gapUrl.searchParams.set('range', `${start}-${end}`);
+          const parsedGap = parseBrowserAudioRangeUrl(gapUrl.toString());
+          if (!parsedGap || parsedGap.identity !== targetStreamIdentity) {
+            throw createDownloadStageError('BROWSER_GAP_RANGE_INVALID', `Could not bind synthesized range ${start}-${end} to the validated stream`);
+          }
+
+          const gapFetchContext = createBoundedFetchContext(abortSignal, BROWSER_GAP_FETCH_TIMEOUT_MS);
+          let res;
+          try {
+            res = await net.fetch(gapUrl.toString(), {
+              headers: {
+                'Accept-Encoding': 'identity',
+                'User-Agent': userAgent,
+                'Referer': 'https://music.youtube.com/'
+              },
+              signal: gapFetchContext.signal
+            });
+          } catch (error) {
+            throw getBoundedFetchAbortError(
+              gapFetchContext,
+              'BROWSER_GAP_TIMEOUT',
+              `Gap range ${start}-${end}`
+            ) || error;
+          }
+          if (res.status !== 200 && res.status !== 206) {
+            throw createDownloadStageError('BROWSER_GAP_HTTP_STATUS', `Gap range ${start}-${end} returned HTTP ${res.status}`);
+          }
+
+          const responseType = String(res.headers.get('content-type') || '')
+            .split(';')[0]
+            .trim()
+            .toLowerCase();
+          if (!responseType.startsWith('audio/') && responseType !== 'application/octet-stream') {
+            throw createDownloadStageError('BROWSER_GAP_CONTENT_TYPE', `Gap range ${start}-${end} returned ${responseType || 'no content type'}`);
+          }
+
+          const responseUrl = res.url ? parseBrowserAudioRangeUrl(res.url) : parsedGap;
+          if (
+            !responseUrl ||
+            responseUrl.identity !== targetStreamIdentity ||
+            responseUrl.start !== start ||
+            responseUrl.end !== end
+          ) {
+            throw createDownloadStageError('BROWSER_GAP_STREAM_MISMATCH', `Gap range ${start}-${end} changed stream identity or boundaries`);
+          }
+
+          const expectedLength = end - start + 1;
+          const contentRangeValue = res.headers.get('content-range');
+          const responseRange = parseContentRangeHeader(contentRangeValue);
+          if (contentRangeValue) {
+            if (
+              !responseRange ||
+              responseRange.start !== start ||
+              responseRange.end !== end ||
+              responseRange.total !== targetSongClen
+            ) {
+              throw createDownloadStageError('BROWSER_GAP_CONTENT_RANGE', `Gap range ${start}-${end} returned invalid Content-Range`);
+            }
+          } else if (res.status === 206) {
+            throw createDownloadStageError('BROWSER_GAP_CONTENT_RANGE', `HTTP 206 gap range ${start}-${end} omitted Content-Range`);
+          } else {
+            queryRangeResponsesWithoutContentRange++;
+          }
+
+          const declaredLength = Number(res.headers.get('content-length') || 0);
+          if (declaredLength > 0 && declaredLength !== expectedLength) {
+            throw createDownloadStageError('BROWSER_GAP_LENGTH_MISMATCH', `Gap range ${start}-${end} declared ${declaredLength}/${expectedLength} bytes`);
+          }
+
+          let gapArrayBuffer;
+          try {
+            gapArrayBuffer = await res.arrayBuffer();
+            throwIfBoundedFetchAborted(
+              gapFetchContext,
+              'BROWSER_GAP_TIMEOUT',
+              `Gap range ${start}-${end}`
+            );
+          } catch (error) {
+            throw getBoundedFetchAbortError(
+              gapFetchContext,
+              'BROWSER_GAP_TIMEOUT',
+              `Gap range ${start}-${end}`
+            ) || error;
+          }
+          const buffer = Buffer.from(gapArrayBuffer);
+          if (
+            !exactTrackReady ||
+            parsedGap.identity !== targetStreamIdentity ||
+            buffer.length !== expectedLength
+          ) {
+            throw createDownloadStageError('BROWSER_GAP_LENGTH_MISMATCH', `Gap range ${start}-${end} returned ${buffer.length}/${expectedLength} bytes`);
+          }
+          targetBucket.set(start, { end, buffer });
+          synthesizedGapRanges++;
         }
       }
-    } else {
+    }
+
+    // Only the single post-readiness signed stream identity selected above is
+    // eligible. Never fall back to a merely large bucket from another request.
+    const bestClen = targetSongClen || 0;
+    const bestBucket = bestClen && targetStreamIdentity ? streamBuckets.get(bestClen) : null;
+    let maxBytes = 0;
+    if (bestBucket) {
       for (const item of bestBucket.values()) maxBytes += item.buffer.length;
     }
 
     if (!bestBucket || bestBucket.size === 0) {
-      throw new Error(`[NO_AUDIO_CHUNKS_CAPTURED] 0 chunks collected (trackDuration=${trackDuration}s, observedAudioRequests=${observedAudioRequests})`);
+      if (capturedRangeTimeouts > 0) {
+        throw createDownloadStageError(
+          'BROWSER_CAPTURE_RANGE_TIMEOUT',
+          `${capturedRangeTimeouts} post-readiness range request(s) timed out before any audio chunk was validated`
+        );
+      }
+      throw new Error(`[NO_AUDIO_CHUNKS_CAPTURED] 0 eligible post-readiness chunks collected (trackDuration=${trackDuration}s, observedAudioRequests=${observedAudioRequests}, preReadinessRequests=${preReadinessAudioRequests}, rejectedRanges=${rejectedAudioRanges})`);
+    }
+
+    const finalCoverage = checkByteCoverage(bestBucket, bestClen);
+    if (!finalCoverage.complete) {
+      throw new Error(`[INCOMPLETE_AUDIO_CAPTURE] Captured ${finalCoverage.totalBytes}/${bestClen} bytes with continuous coverage through ${finalCoverage.coveredUntil}`);
     }
 
     emitProgress(92, maxBytes, bestClen || maxBytes);
 
-    // Assemble chunks in ascending byte offset order
+    // Assemble by absolute byte position. Overlapping browser requests are
+    // common, so concatenating whole response buffers would duplicate bytes.
     const sortedStarts = Array.from(bestBucket.keys()).sort((a, b) => a - b);
-    const outStream = fs.createWriteStream(tempPath);
+    const assembled = Buffer.allocUnsafe(bestClen);
+    let assembledThrough = 0;
 
     for (const start of sortedStarts) {
       const item = bestBucket.get(start);
-      outStream.write(item.buffer);
+      if (start > assembledThrough) {
+        throw new Error(`[INCOMPLETE_AUDIO_CAPTURE] Gap before byte ${start}; assembled through ${assembledThrough}`);
+      }
+
+      const sourceOffset = Math.max(0, assembledThrough - start);
+      const available = item.buffer.length - sourceOffset;
+      if (available <= 0) continue;
+      const copyLength = Math.min(available, bestClen - assembledThrough);
+      item.buffer.copy(assembled, assembledThrough, sourceOffset, sourceOffset + copyLength);
+      assembledThrough += copyLength;
+      if (assembledThrough >= bestClen) break;
     }
 
-    await new Promise((resolve, reject) => {
-      outStream.end((err) => (err ? reject(err) : resolve()));
-    });
+    if (assembledThrough !== bestClen) {
+      throw new Error(`[INCOMPLETE_AUDIO_CAPTURE] Assembled ${assembledThrough}/${bestClen} validated bytes`);
+    }
+
+    await fs.promises.writeFile(tempPath, assembled);
 
     emitProgress(95, maxBytes, bestClen || maxBytes);
 
-    return { success: true, totalLength: maxBytes, mimeType };
+    return {
+      success: true,
+      totalLength: bestClen,
+      mimeType,
+      diagnostics: {
+        preReadinessAudioRequests,
+        rejectedAudioRanges,
+        capturedRangeTimeouts,
+        queryRangeResponsesWithoutContentRange,
+        synthesizedGapRanges
+      }
+    };
   } catch (err) {
-    return { success: false, error: err.message };
+    const stage = getDownloadStage(err, 'BROWSER_EXTRACTION_FAILED');
+    return {
+      success: false,
+      stage,
+      error: err.message,
+      diagnostics: {
+        preReadinessAudioRequests,
+        rejectedAudioRanges,
+        capturedRangeTimeouts,
+        queryRangeResponsesWithoutContentRange,
+        synthesizedGapRanges
+      }
+    };
   } finally {
+    if (removeBeforeRequestObserver) {
+      try { removeBeforeRequestObserver(); } catch (e) {}
+      removeBeforeRequestObserver = null;
+    }
     try {
       s.webRequest.onResponseStarted({ urls: ['*://*.googlevideo.com/videoplayback*'] }, null);
     } catch (e) {}
     if (win && !win.isDestroyed()) {
       try { win.destroy(); } catch (e) {}
     }
+    if (pendingFetches.size > 0) {
+      await Promise.allSettled(Array.from(pendingFetches));
+    }
+    pendingFetches.clear();
+    pendingRangeKeys.clear();
+    eligibleRequestIds.clear();
   }
 }
 
@@ -1065,6 +2031,22 @@ function shouldBlockRequest(urlStr, resourceType) {
   }
 }
 
+let youtubeRequestDispatcher = null;
+
+function ensureYouTubeRequestDispatcher() {
+  if (youtubeRequestDispatcher) return youtubeRequestDispatcher;
+
+  const youtubeSession = session.fromPartition('persist:youtube');
+  youtubeRequestDispatcher = new YouTubeRequestDispatcher(shouldBlockRequest);
+  // Electron permits one onBeforeRequest listener per session. This dispatcher
+  // owns it for the lifetime of the partition, so creating/destroying extractor
+  // or background windows can never replace the ad filter or each other.
+  youtubeSession.webRequest.onBeforeRequest((details, callback) => {
+    youtubeRequestDispatcher.dispatch(details, callback);
+  });
+  return youtubeRequestDispatcher;
+}
+
 const INJECTED_AD_HANDLER_SCRIPT = `
 (() => {
   if (window.__owoAdHandlerInstalled) return;
@@ -1180,18 +2162,7 @@ function getOrCreateBgPlayerWindow() {
   }
 
   const s = session.fromPartition('persist:youtube');
-
-  // Install network filter once per session partition
-  if (!s.__owoAdFilterInstalled) {
-    s.__owoAdFilterInstalled = true;
-    s.webRequest.onBeforeRequest((details, callback) => {
-      if (shouldBlockRequest(details.url, details.resourceType)) {
-        callback({ cancel: true });
-      } else {
-        callback({ cancel: false });
-      }
-    });
-  }
+  ensureYouTubeRequestDispatcher();
 
   bgPlayerWindow = new BrowserWindow({
     show: false,
@@ -1694,21 +2665,50 @@ ipcMain.handle('prefetch-stream-urls', async (event, videoIds) => {
   }
 });
 
+ipcMain.handle('get-youtube-track-duration', async (event, videoId) => {
+  if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return 0;
+  try {
+    const yt = await getInnertube();
+    if (!yt) return 0;
+    const info = await yt.getBasicInfo(videoId, { client: 'YTMUSIC' });
+    const duration = Math.round(Number(info?.basic_info?.duration || 0));
+    return Number.isFinite(duration) && duration > 0 ? duration : 0;
+  } catch (error) {
+    console.warn(`[Track Duration] Failed to resolve ${videoId}:`, error.message);
+    return 0;
+  }
+});
+
 ipcMain.handle('get-default-music-dir', () => {
   return getDefaultMusicDirectory();
 });
 
-ipcMain.handle('save-audio-to-disk', async (event, { filename, buffer, targetDir }) => {
+ipcMain.handle('save-audio-to-disk', async (event, { filename, buffer, targetDir, videoId }) => {
+  let tempPath = null;
   try {
     const dir = targetDir || getDefaultMusicDirectory();
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const fullPath = path.join(dir, filename);
-    await fs.promises.writeFile(fullPath, Buffer.from(buffer));
+    const ownedFilename = appendVideoIdSuffix(filename, videoId);
+    const fullPath = path.join(dir, ownedFilename);
+    tempPath = path.join(
+      path.dirname(fullPath),
+      `.${path.basename(fullPath)}.export.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`
+    );
+    await runFinalPathExclusive(fullPath, async () => {
+      await fs.promises.writeFile(tempPath, Buffer.from(buffer));
+      if (fs.existsSync(fullPath)) await fs.promises.unlink(fullPath);
+      await fs.promises.rename(tempPath, fullPath);
+      tempPath = null;
+    });
     return { success: true, filePath: fullPath };
   } catch (err) {
     return { success: false, error: err.message };
+  } finally {
+    if (tempPath && fs.existsSync(tempPath)) {
+      try { await fs.promises.unlink(tempPath); } catch {}
+    }
   }
 });
 
@@ -1939,15 +2939,9 @@ ipcMain.handle('get-genius-lyrics', async (event, query) => {
 });
 
 ipcMain.handle('cancel-download-native', async (event, videoId) => {
-  if (videoId && activeDownloads.has(videoId)) {
-    const controller = activeDownloads.get(videoId);
-    try {
-      controller.abort();
-    } catch {}
-    activeDownloads.delete(videoId);
-    return { success: true };
-  }
-  return { success: false };
+  if (!videoId) return { success: false, cancelledRequests: 0 };
+  const cancelledRequests = cancelActiveDownloads(videoId);
+  return { success: cancelledRequests > 0, cancelledRequests };
 });
 
 ipcMain.handle('download-track-native', async (event, { videoId, title, artist, album, cover, format, targetDir }) => {
@@ -1955,19 +2949,12 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
     return { success: false, error: 'Missing videoId' };
   }
 
-  // Cancel any existing in-flight download for this specific track
-  if (activeDownloads.has(videoId)) {
-    try {
-      activeDownloads.get(videoId).abort();
-    } catch {}
-    activeDownloads.delete(videoId);
-  }
-
-  const controller = new AbortController();
-  activeDownloads.set(videoId, controller);
+  const { requestId, controller } = registerActiveDownload(videoId);
+  let requestRegistered = true;
 
   let tempRawPath = null;
   let tempProcessedPath = null;
+  let acquisitionDiagnostics = null;
 
   try {
     event.sender.send('download-progress-event', { videoId, percent: 5 });
@@ -1975,7 +2962,7 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
     const cleanArtistStr = (artist || 'Unknown Artist').replace(/[\\/:*?"<>|]/g, '_').trim();
     const cleanTitleStr = (title || 'Unknown Track').replace(/[\\/:*?"<>|]/g, '_').trim();
     const ext = format === 'm4a' ? 'm4a' : 'mp3';
-    const fileName = `${cleanArtistStr} - ${cleanTitleStr}.${ext}`;
+    const fileName = appendVideoIdSuffix(`${cleanArtistStr} - ${cleanTitleStr}.${ext}`, videoId);
 
     const dir = targetDir || getDefaultMusicDirectory();
     if (!fs.existsSync(dir)) {
@@ -1989,93 +2976,80 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
       event.sender.send('download-progress-event', data);
     };
 
-    // 1. Primary: Authenticated Browser Buffer Pipeline
-    console.log(`[Download] Starting browser-assisted buffer download for ${videoId}...`);
-    const browserResult = await downloadTrackViaBrowserBuffer(videoId, tempRawPath, onProgress, controller.signal);
+    // 1. Primary: exact-video, fully validated HTTP byte-range acquisition.
+    console.log(`[Download] Starting validated ranged download for ${videoId}...`);
+    const directResult = await downloadTrackViaValidatedRanges(
+      videoId,
+      tempRawPath,
+      onProgress,
+      controller.signal
+    );
 
-    let downloadSuccess = browserResult.success;
-
-    // 2. Secondary Fallback: Multi-Client Innertube Resolver
-    if (!downloadSuccess) {
-      console.log(`[Download] Falling back to multi-client resolver for ${videoId}...`);
-      const writeStream = fs.createWriteStream(tempRawPath);
-      let audioInfo = await resolveBestAudioUrl(videoId);
-      if (!audioInfo || !audioInfo.url) {
-        throw new Error('Could not resolve audio stream');
+    let browserResult = null;
+    if (!directResult.success) {
+      if (controller.signal.aborted || directResult.stage === 'DOWNLOAD_CANCELLED') {
+        throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
       }
 
-      let fetchRes = null;
-      const retryDelays = [1000, 2000];
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          fetchRes = await fetch(audioInfo.url, {
-            headers: audioInfo.headers || {},
-            signal: controller.signal
-          });
-
-          if (fetchRes.ok && fetchRes.body) break;
-
-          if (attempt < retryDelays.length) {
-            await new Promise((r) => setTimeout(r, retryDelays[attempt]));
-            audioInfo = await resolveBestAudioUrl(videoId, true);
-          }
-        } catch (fetchErr) {
-          if (controller.signal.aborted) throw new Error('Download cancelled');
-          if (attempt === 2) throw new Error(`fetch failed: ${fetchErr.message}`);
-          await new Promise((r) => setTimeout(r, retryDelays[attempt]));
-          audioInfo = await resolveBestAudioUrl(videoId, true);
-        }
-      }
-
-      if (!fetchRes || !fetchRes.ok || !fetchRes.body) {
-        const finalStatus = fetchRes ? `HTTP ${fetchRes.status} ${fetchRes.statusText}` : 'No response';
-        throw new Error(`Failed to fetch audio stream (${finalStatus})`);
-      }
-
-      const contentLengthHeader = fetchRes.headers.get('content-length');
-      const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : (audioInfo.totalSize || 0);
-      const reader = fetchRes.body.getReader();
-      let downloadedBytes = 0;
-      let lastProgressTime = Date.now();
-
-      while (true) {
+      console.warn(`[Download] Direct ranged acquisition failed for ${videoId}: ${directResult.error}`);
+      console.log(`[Download] Falling back to authenticated browser extraction for ${videoId}...`);
+      browserResult = await runBrowserDownloadExclusive(async () => {
         if (controller.signal.aborted) {
-          try { await reader.cancel(); } catch {}
-          throw new Error('Download cancelled');
+          return {
+            success: false,
+            stage: 'DOWNLOAD_CANCELLED',
+            error: '[DOWNLOAD_CANCELLED] Download cancelled'
+          };
         }
-
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        if (value && value.length > 0) {
-          downloadedBytes += value.length;
-          const canWrite = writeStream.write(Buffer.from(value));
-          if (!canWrite) {
-            await new Promise((resolve) => writeStream.once('drain', resolve));
-          }
-        }
-
-        const now = Date.now();
-        if (now - lastProgressTime >= 120) {
-          lastProgressTime = now;
-          const percent = totalBytes > 0
-            ? Math.min(99, Math.max(5, Math.round((downloadedBytes / totalBytes) * 90) + 10))
-            : Math.min(95, Math.round(10 + Math.log10(1 + downloadedBytes / 60000) * 35));
-          event.sender.send('download-progress-event', {
-            videoId,
-            percent,
-            downloadedBytes,
-            totalBytes: totalBytes || undefined
-          });
-        }
-      }
-
-      await new Promise((resolve, reject) => {
-        writeStream.end((err) => (err ? reject(err) : resolve()));
+        return downloadTrackViaBrowserBuffer(videoId, tempRawPath, onProgress, controller.signal);
       });
+
+      if (!browserResult.success) {
+        if (controller.signal.aborted || browserResult.stage === 'DOWNLOAD_CANCELLED') {
+          throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled');
+        }
+        acquisitionDiagnostics = {
+          direct: {
+            stage: directResult.stage,
+            error: directResult.error,
+            attempts: directResult.diagnostics || []
+          },
+          browser: {
+            stage: browserResult.stage || 'BROWSER_EXTRACTION_FAILED',
+            error: browserResult.error || 'Unknown browser extraction failure',
+            details: browserResult.diagnostics || null
+          }
+        };
+        const error = createDownloadStageError(
+          'AUDIO_ACQUISITION_FAILED',
+          `Direct ranged acquisition failed: ${directResult.error}; browser fallback failed: ${browserResult.error || 'Unknown error'}`
+        );
+        error.diagnostics = acquisitionDiagnostics;
+        throw error;
+      }
     }
 
-    // 3. Verification of raw stream
+    acquisitionDiagnostics = directResult.success
+      ? {
+          method: 'validated-ranges',
+          stage: directResult.stage,
+          totalLength: directResult.totalLength,
+          details: directResult.diagnostics || null
+        }
+      : {
+          method: 'browser-fallback',
+          direct: {
+            stage: directResult.stage,
+            error: directResult.error,
+            attempts: directResult.diagnostics || []
+          },
+          browser: {
+            stage: 'BROWSER_EXTRACTION_COMPLETE',
+            details: browserResult?.diagnostics || null
+          }
+        };
+
+    // 2. Verification of raw stream
     if (!fs.existsSync(tempRawPath)) {
       throw new Error('Downloaded temporary file was not created');
     }
@@ -2085,7 +3059,7 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
       throw new Error('Downloaded audio file is empty (0 bytes)');
     }
 
-    // 4. Transcode & Embed ID3 Metadata / Cover Art via FFmpeg
+    // 3. Transcode & Embed ID3 Metadata / Cover Art via FFmpeg
     console.log(`[FFmpeg Processing] Transcoding and tagging "${fileName}"...`);
     event.sender.send('download-progress-event', {
       videoId,
@@ -2113,19 +3087,47 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
     });
 
     const targetFileToUse = fs.existsSync(tempProcessedPath) ? tempProcessedPath : tempRawPath;
-    const finalStat = await fs.promises.stat(targetFileToUse);
+    await fs.promises.stat(targetFileToUse);
 
-    // Atomic move from temp to destination
-    if (fs.existsSync(fullPath)) {
-      try { await fs.promises.unlink(fullPath); } catch {}
-    }
-    await fs.promises.rename(targetFileToUse, fullPath);
+    // Different video IDs can sanitize to the same output name. Serialize the
+    // complete replace/rename/read sequence for that normalized path so each
+    // request returns the bytes it produced, never a later request's file.
+    const finalized = await runFinalPathExclusive(fullPath, async () => {
+      if (controller.signal.aborted) {
+        throw createDownloadStageError('DOWNLOAD_CANCELLED', 'Download cancelled before final file commit');
+      }
+
+      if (fs.existsSync(fullPath)) {
+        try { await fs.promises.unlink(fullPath); } catch {}
+      }
+      await fs.promises.rename(targetFileToUse, fullPath);
+      if (targetFileToUse === tempProcessedPath) tempProcessedPath = null;
+      if (targetFileToUse === tempRawPath) tempRawPath = null;
+
+      const finalStat = await fs.promises.stat(fullPath);
+      const fileBuffer = await fs.promises.readFile(fullPath);
+      if (fileBuffer.length !== finalStat.size) {
+        throw createDownloadStageError(
+          'FINAL_FILE_READ_MISMATCH',
+          `Final file changed while being read (${fileBuffer.length}/${finalStat.size} bytes)`
+        );
+      }
+      // Rename is the commit boundary. Cancellation after this point must not
+      // unlink a committed file; the request completes with its own bytes.
+      return { finalStat, fileBuffer };
+    });
+
+    // The replace/read operation is the commit boundary. Once it finishes, the
+    // request is no longer cancellable and must not be included in a later
+    // video-wide cancellation snapshot while it emits progress/returns data.
+    unregisterActiveDownload(videoId, requestId);
+    requestRegistered = false;
 
     // Clean up any remaining temp files
-    if (fs.existsSync(tempRawPath)) {
+    if (tempRawPath && fs.existsSync(tempRawPath)) {
       await fs.promises.unlink(tempRawPath).catch(() => {});
     }
-    if (fs.existsSync(tempProcessedPath)) {
+    if (tempProcessedPath && fs.existsSync(tempProcessedPath)) {
       await fs.promises.unlink(tempProcessedPath).catch(() => {});
     }
     tempRawPath = null;
@@ -2134,21 +3136,19 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
     event.sender.send('download-progress-event', {
       videoId,
       percent: 100,
-      downloadedBytes: finalStat.size,
-      totalBytes: finalStat.size
+      downloadedBytes: finalized.finalStat.size,
+      totalBytes: finalized.finalStat.size
     });
 
-    console.log(`[Download] Track "${fileName}" successfully saved to ${fullPath} (${(finalStat.size / (1024 * 1024)).toFixed(2)} MB).`);
-
-    // Read buffer for frontend IndexedDB caching to ensure UI marks download as complete
-    const fileBuffer = await fs.promises.readFile(fullPath);
+    console.log(`[Download] Track "${fileName}" successfully saved to ${fullPath} (${(finalized.finalStat.size / (1024 * 1024)).toFixed(2)} MB).`);
 
     return {
       success: true,
       filePath: fullPath,
-      buffer: fileBuffer,
+      buffer: finalized.fileBuffer,
       mimeType: ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg',
-      size: finalStat.size
+      size: finalized.finalStat.size,
+      diagnostics: acquisitionDiagnostics
     };
   } catch (err) {
     if (tempRawPath && fs.existsSync(tempRawPath)) {
@@ -2157,27 +3157,41 @@ ipcMain.handle('download-track-native', async (event, { videoId, title, artist, 
     if (tempProcessedPath && fs.existsSync(tempProcessedPath)) {
       try { await fs.promises.unlink(tempProcessedPath); } catch {}
     }
-    console.error(`[Download Error for ${videoId}]:`, err.message);
-    return { success: false, error: err.message };
+    const stage = controller.signal.aborted
+      ? 'DOWNLOAD_CANCELLED'
+      : getDownloadStage(err, 'DOWNLOAD_PROCESSING_FAILED');
+    const diagnostics = err.diagnostics || acquisitionDiagnostics || null;
+    console.error(`[Download Error for ${videoId}] [${stage}]:`, err.message, diagnostics || '');
+    const error = controller.signal.aborted ? '[DOWNLOAD_CANCELLED] Download cancelled' : err.message;
+    return { success: false, stage, error, diagnostics };
   } finally {
-    activeDownloads.delete(videoId);
+    if (requestRegistered) unregisterActiveDownload(videoId, requestId);
   }
 });
 
-ipcMain.handle('delete-audio-from-disk', async (event, { title, artist, targetDir }) => {
+ipcMain.handle('delete-audio-from-disk', async (event, { title, artist, videoId, legacyFallback, targetDir }) => {
   try {
     const dir = targetDir || getDefaultMusicDirectory();
     const cleanArtistStr = (artist || '').replace(/[\\/:*?"<>|]/g, '_').trim();
     const cleanTitleStr = (title || '').replace(/[\\/:*?"<>|]/g, '_').trim();
-    const files = [
-      `${cleanArtistStr} - ${cleanTitleStr}.mp3`,
-      `${cleanArtistStr} - ${cleanTitleStr}.m4a`,
-      `${cleanArtistStr} - ${cleanTitleStr}.webm`
-    ];
+    const stableId = sanitizeStableVideoId(videoId);
+    const base = `${cleanArtistStr} - ${cleanTitleStr}`;
+    const files = getAudioFileNames(base, stableId);
     for (const f of files) {
       const p = path.join(dir, f);
-      if (fs.existsSync(p)) {
-        await fs.promises.unlink(p);
+      await runFinalPathExclusive(p, async () => {
+        if (fs.existsSync(p)) await fs.promises.unlink(p);
+      });
+    }
+    if (legacyFallback && stableId) {
+      const existing = fs.existsSync(dir) ? await fs.promises.readdir(dir) : [];
+      if (shouldDeleteLegacyAudio(existing, base)) {
+        for (const legacyName of getAudioFileNames(base, '')) {
+          const legacyPath = path.join(dir, legacyName);
+          await runFinalPathExclusive(legacyPath, async () => {
+            if (fs.existsSync(legacyPath)) await fs.promises.unlink(legacyPath);
+          });
+        }
       }
     }
     return { success: true };
@@ -2186,30 +3200,36 @@ ipcMain.handle('delete-audio-from-disk', async (event, { title, artist, targetDi
   }
 });
 
-ipcMain.handle('check-audio-on-disk', async (event, { title, artist, targetDir }) => {
+ipcMain.handle('check-audio-on-disk', async (event, { title, artist, videoId, legacyFallback, targetDir }) => {
   try {
     const dir = targetDir || getDefaultMusicDirectory();
     if (!fs.existsSync(dir)) return false;
     const cleanArtistStr = (artist || '').replace(/[\\/:*?"<>|]/g, '_').toLowerCase().trim();
     const cleanTitleStr = (title || '').replace(/[\\/:*?"<>|]/g, '_').toLowerCase().trim();
-    const allFiles = (await fs.promises.readdir(dir)).map(f => f.toLowerCase());
-    return allFiles.some(f => 
-      (f.includes(cleanTitleStr) && f.includes(cleanArtistStr)) ||
-      f.startsWith(`${cleanArtistStr} - ${cleanTitleStr}`)
-    );
+    const allFiles = await fs.promises.readdir(dir);
+    const base = `${cleanArtistStr} - ${cleanTitleStr}`;
+    return hasAudioFile(allFiles, base, videoId, Boolean(legacyFallback));
   } catch (e) {
     return false;
   }
 });
 
 ipcMain.handle('get-disk-audio-files', async (event, targetDir) => {
+  const dir = targetDir || getDefaultMusicDirectory();
   try {
-    const dir = targetDir || getDefaultMusicDirectory();
-    if (!fs.existsSync(dir)) return [];
+    if (!fs.existsSync(dir)) {
+      return { success: false, files: [], stage: 'DISK_DIRECTORY_UNAVAILABLE', error: `Audio directory is unavailable: ${dir}` };
+    }
     const files = await fs.promises.readdir(dir);
-    return files.map(f => f.toLowerCase());
-  } catch (e) {
-    return [];
+    return { success: true, files: files.map(f => f.toLowerCase()), targetDir: dir };
+  } catch (error) {
+    return {
+      success: false,
+      files: [],
+      stage: 'DISK_DIRECTORY_LIST_FAILED',
+      error: error?.message || `Could not list audio directory: ${dir}`,
+      targetDir: dir
+    };
   }
 });
 
@@ -2425,6 +3445,7 @@ function setupMusicFolderWatcher(customDir) {
 }
 
 app.whenReady().then(() => {
+  ensureYouTubeRequestDispatcher();
   // Set up header interception so YouTube Iframe API and media embeds run unrestricted in Electron
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const url = details.url || '';

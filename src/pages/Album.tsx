@@ -191,8 +191,10 @@ export function Album() {
     }
     const resolvedAlbumName = rawAlbumName;
     const resolvedArtistName = artistName || '';
+    const trackArtistId = searchParams.get('artistId') || searchParams.get('channelId') || undefined;
+    const trackVideoId = searchParams.get('videoId') || undefined;
 
-    fetchAlbumDetails(albumId, resolvedAlbumName, resolvedArtistName, initialCover, trackTitleParam)
+    fetchAlbumDetails(albumId, resolvedAlbumName, resolvedArtistName, initialCover, trackTitleParam, trackArtistId, trackVideoId)
       .then(data => {
         if (!isCancelled && data) {
           const seen = new Set<string>();

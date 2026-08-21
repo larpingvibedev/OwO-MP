@@ -18,14 +18,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   prefetchStreamUrls: async (videoIds) => {
     return await ipcRenderer.invoke('prefetch-stream-urls', videoIds);
   },
+  getYouTubeTrackDuration: async (videoId) => {
+    return await ipcRenderer.invoke('get-youtube-track-duration', videoId);
+  },
   getDefaultMusicDir: async () => {
     return await ipcRenderer.invoke('get-default-music-dir');
   },
-  saveAudioToDisk: async (filename, arrayBuffer, targetDir) => {
+  saveAudioToDisk: async (filename, arrayBuffer, targetDir, videoId) => {
     return await ipcRenderer.invoke('save-audio-to-disk', {
       filename,
       buffer: arrayBuffer,
-      targetDir
+      targetDir,
+      videoId
     });
   },
   openFolder: async (folderPath) => {

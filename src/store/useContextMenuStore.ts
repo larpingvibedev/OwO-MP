@@ -1,5 +1,9 @@
 import { create } from 'zustand';
 import type { Track } from '../types';
+import {
+  captureContextMenuAuthOwner,
+  type ContextMenuAuthOwner
+} from '../services/contextMenuAuthOwnership';
 
 export type ContextMenuType = 'track' | 'playlist' | 'album';
 
@@ -36,6 +40,7 @@ interface ContextMenuState {
   trackData: ContextMenuTrackData | null;
   playlistData: ContextMenuPlaylistData | null;
   albumData: ContextMenuAlbumData | null;
+  authOwner: ContextMenuAuthOwner | null;
 
   openTrackContextMenu: (
     e: React.MouseEvent | MouseEvent,
@@ -64,6 +69,7 @@ export const useContextMenuStore = create<ContextMenuState>((set) => ({
   trackData: null,
   playlistData: null,
   albumData: null,
+  authOwner: null,
 
   openTrackContextMenu: (e, track, options) => {
     e.preventDefault();
@@ -77,7 +83,8 @@ export const useContextMenuStore = create<ContextMenuState>((set) => ({
       type: 'track',
       trackData: { track, ...options },
       playlistData: null,
-      albumData: null
+      albumData: null,
+      authOwner: captureContextMenuAuthOwner()
     });
   },
 
@@ -93,7 +100,8 @@ export const useContextMenuStore = create<ContextMenuState>((set) => ({
       type: 'playlist',
       trackData: null,
       playlistData: playlist,
-      albumData: null
+      albumData: null,
+      authOwner: captureContextMenuAuthOwner()
     });
   },
 
@@ -109,7 +117,8 @@ export const useContextMenuStore = create<ContextMenuState>((set) => ({
       type: 'album',
       trackData: null,
       playlistData: null,
-      albumData: album
+      albumData: album,
+      authOwner: captureContextMenuAuthOwner()
     });
   },
 
@@ -118,6 +127,7 @@ export const useContextMenuStore = create<ContextMenuState>((set) => ({
     type: null,
     trackData: null,
     playlistData: null,
-    albumData: null
+    albumData: null,
+    authOwner: null
   })
 }));

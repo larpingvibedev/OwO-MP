@@ -8,7 +8,7 @@ interface SpeedDialGridProps {
   tracks: Track[];
   currentTrack: Track | null;
   onTrackClick: (track: Track, index: number) => void;
-  onArtistClick?: (artistName: string) => void;
+  onArtistClick?: (track: Track) => void;
 }
 
 export function SpeedDialGrid({
@@ -90,7 +90,7 @@ export function SpeedDialGrid({
                   onClick={(e) => {
                     if (onArtistClick) {
                       e.stopPropagation();
-                      onArtistClick(track.artist);
+                      onArtistClick(track);
                     }
                   }}
                   style={{ 

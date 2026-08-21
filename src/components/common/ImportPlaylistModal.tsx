@@ -134,7 +134,7 @@ export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen
       const finalName = customName.trim() || meta.name;
       const newId = createImportedPlaylist({
         name: finalName,
-        cover: meta.cover,
+        cover: resolvedTracks[0]?.cover || meta.cover,
         author: meta.author ? `${meta.author} • ${meta.service === 'spotify' ? 'Spotify' : 'YouTube'}` : (meta.service === 'spotify' ? 'Imported from Spotify' : 'Imported from YouTube'),
         tracks: resolvedTracks
       });

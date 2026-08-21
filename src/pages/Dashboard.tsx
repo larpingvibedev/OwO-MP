@@ -812,9 +812,10 @@ export function Dashboard() {
           onTrackClick={(track) => {
             handlePlayQuickPick(track);
           }}
-          onArtistClick={(artistName) => {
-            if (artistName) recordArtistEngagement(artistName);
-            navigate(`/artist/${encodeURIComponent(artistName)}`);
+          onArtistClick={(track) => {
+            if (track.artist) recordArtistEngagement(track.artist);
+            const artistUrl = `/artist/${encodeURIComponent(track.artist)}${track.artistId ? `?artistId=${encodeURIComponent(track.artistId)}` : (track.channelId ? `?channelId=${encodeURIComponent(track.channelId)}` : '')}`;
+            navigate(artistUrl);
           }}
         />
       ) : (
