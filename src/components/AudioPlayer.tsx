@@ -24,9 +24,6 @@ export const AudioPlayer = () => {
     isPlaying,
     volume,
     playNonce,
-    queue,
-    shuffledQueue,
-    isShuffle,
     repeatMode,
     nextTrack,
     prevTrack,
@@ -246,7 +243,7 @@ export const AudioPlayer = () => {
 
         // A. Check Offline Local Storage First (0ms Instant Audio)
         const offlineBlobUrl = await getOfflineTrackBlobUrl(currentTrack.id);
-        if (isCancelled) return;
+        if (isCancelled || loadGenerationRef.current !== myLoadGen) return;
         if (offlineBlobUrl) {
           isOnlineYtTrackRef.current = false;
           audioEngine.setPlaybackSource('local');
@@ -292,9 +289,22 @@ export const AudioPlayer = () => {
             currentTrack.albumArtist,
             currentTrack.duration
           );
+
+          // Bounded single retry guarded by cancellation and load generation
+          if (!videoId && !isCancelled && loadGenerationRef.current === myLoadGen) {
+            await new Promise(r => setTimeout(r, 500));
+            if (!isCancelled && loadGenerationRef.current === myLoadGen) {
+              videoId = await resolveYouTubeVideoId(
+                currentTrack.artist,
+                currentTrack.title,
+                currentTrack.albumArtist,
+                currentTrack.duration
+              );
+            }
+          }
         }
 
-        if (isCancelled) return;
+        if (isCancelled || loadGenerationRef.current !== myLoadGen) return;
 
         if (videoId) {
           try {
@@ -318,7 +328,7 @@ export const AudioPlayer = () => {
             }
             const directStreamUrl = `http://127.0.0.1:${proxyPort}/api/stream?videoId=${videoId}`;
 
-            if (isCancelled) return;
+            if (isCancelled || loadGenerationRef.current !== myLoadGen) return;
             isOnlineYtTrackRef.current = false;
             audioEngine.setPlaybackSource('local');
 
@@ -351,9 +361,17 @@ export const AudioPlayer = () => {
 
     function prefetchUpcoming() {
       setTimeout(async () => {
-        const activeQueue = isShuffle ? shuffledQueue : queue;
-        const curIdx = activeQueue.findIndex(t => t.id === currentTrack?.id);
-        const nextTracks = activeQueue.slice(curIdx + 1, curIdx + 3);
+        const state = usePlayerStore.getState();
+        const activeQueue = state.isShuffle ? state.shuffledQueue : state.queue;
+        const curIdx = activeQueue.findIndex(t => t.id === state.currentTrack?.id);
+        const nextTracks = curIdx >= 0 ? activeQueue.slice(curIdx + 1, curIdx + 3) : [];
+
+        // Read-only lookahead into recommendedUpNext if autoplay is enabled and queue is ending
+        if (nextTracks.length < 2 && state.autoplay && state.recommendedUpNext && state.recommendedUpNext.length > 0) {
+          const needed = 2 - nextTracks.length;
+          const upNextPeeks = state.recommendedUpNext.slice(0, needed);
+          nextTracks.push(...upNextPeeks);
+        }
 
         const videoIdsToPreload: string[] = [];
         for (const t of nextTracks) {

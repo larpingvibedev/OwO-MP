@@ -112,6 +112,7 @@ export function Dashboard() {
     currentTrack, 
     dislikedTracks, 
     blockedArtists, 
+    setCurrentTrack,
     setQueue, 
     setIsPlaying, 
     toggleFavorite, 
@@ -326,12 +327,13 @@ export function Dashboard() {
 
       const candidatePool = ['bunii', 'DC The Don', 'slayr', 'Kid Moon', 'Malcolm Todd', 'overnight', 'jaydes', 'nettspend', 'scruff'];
       const userSeeds = sorted.length > 0 ? sorted : (allUserArtists.length > 0 ? allUserArtists : ['bunii', 'DC The Don', 'slayr', 'Kid Moon']);
-      const { blended } = getBanditArtistSeeds(userSeeds, candidatePool);
-      const targetArtists = blended.slice(0, 4);
-
-      const seedKey = `${targetArtists.join('|')}_${refreshNonce}`;
+      
+      const seedKey = `${userSeeds.slice(0, 5).join('|')}_${refreshNonce}`;
       if (lastArtistFetchRef.current === seedKey && recommendedTracks.length > 0) return;
       lastArtistFetchRef.current = seedKey;
+
+      const { blended } = getBanditArtistSeeds(userSeeds, candidatePool);
+      const targetArtists = blended.slice(0, 4);
 
       const artistDisplay = targetArtists.slice(0, 3).join(', ');
       setRecommendedArtist(artistDisplay);
@@ -373,7 +375,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [historyArray, allUserArtists, recommendedTracks.length, refreshNonce, isTrackBlocked]);
+  }, [historyArray, allUserArtists, refreshNonce, isTrackBlocked]);
 
   // 6. Fetch dynamic "Covers and Remixes" strictly based on user's top played tracks
   useEffect(() => {
@@ -404,7 +406,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [historyArray, allUserTracks, coversAndRemixes.length, refreshNonce]);
+  }, [historyArray, allUserTracks, refreshNonce]);
 
   // 7. Fetch "Albums for you" and "From the community" (Public User Playlists)
   useEffect(() => {
@@ -441,7 +443,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [topArtists, albumsForYou.length, communityPlaylists.length, refreshNonce]);
+  }, [topArtists, refreshNonce]);
 
   // 8. Fetch "Similar to [Playlist Name]"
   useEffect(() => {
@@ -479,7 +481,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [playlists, allUserTracks, similarPlaylists.length, topArtists, refreshNonce]);
+  }, [playlists, allUserTracks, topArtists, refreshNonce]);
 
   // 9. Fetch "New Releases" (Albums & Singles from Explore)
   useEffect(() => {
@@ -506,7 +508,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [topArtists, newReleases.length, refreshNonce]);
+  }, [topArtists, refreshNonce]);
 
   // 10. Fetch "Your Daily Discover"
   useEffect(() => {
@@ -540,7 +542,7 @@ export function Dashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [historyArray, displayQuickPicks, dailyDiscover.length, playHistory, favorites, refreshNonce]);
+  }, [historyArray, displayQuickPicks, playHistory, favorites, refreshNonce]);
 
   // Group user tracks by artist across history, favorites, playlists and recommendations
   const artistTrackMap = useMemo(() => {
@@ -1127,10 +1129,7 @@ export function Dashboard() {
               className="daily-discover-card"
               onClick={() => {
                 if (track.artist) recordArtistEngagement(track.artist);
-                const unblocked = dailyDiscover.filter(t => !isTrackBlocked(t));
-                const trackIdx = unblocked.findIndex(t => t.id === track.id);
-                setQueue(unblocked, Math.max(0, trackIdx), 'Daily Discover', true, 'finite');
-                setIsPlaying(true);
+                setCurrentTrack(track);
               }}
               onContextMenu={(e) => openTrackContextMenu(e, track)}
             >

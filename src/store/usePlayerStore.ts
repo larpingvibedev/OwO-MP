@@ -331,8 +331,9 @@ async function checkAndTriggerContinuation(
   const remainingTracks = activeQueue.length - queueIndex;
   if (remainingTracks > 3) return;
 
-  // Seamless queue extension for user playlists and finite queues
-  if (playbackContext !== 'user_playlist' && playbackContext !== 'finite') return;
+  // Seamless queue extension is strictly for user playlists.
+  // Finite contexts (Albums/EPs) keep recommendations visually separated in recommendedUpNext.
+  if (playbackContext !== 'user_playlist') return;
 
   isFetchingContinuation = true;
   const currentSessionId = queueSessionId;

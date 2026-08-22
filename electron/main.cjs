@@ -2384,6 +2384,7 @@ let endedSignalSentForVideoId = null;
 let errorSignalSentForVideoId = null;
 let loadRequestId = 0;
 const NAVIGATION_TIMEOUT_MS = 12000;
+const NAVIGATION_ERROR_SETTLE_MS = 400;
 
 function getOrCreateBgPlayerWindow() {
   if (bgPlayerWindow && !bgPlayerWindow.isDestroyed()) {
@@ -2472,23 +2473,20 @@ function getOrCreateBgPlayerWindow() {
       const { currentTime, duration, paused, ended, playerState, urlVideoId, apiVideoId, isAd, playabilityStatus } = state;
 
       // Check for playback errors like age-restriction or unplayable tracks with strict per-track attribution & idempotency
+      // Race condition defense: During navigation transitions, the URL can update before movie_player clears its previous
+      // response or settles. We require:
+      // 1. Minimum settling delay after navigation start
+      // 2. Exact confirmation from movie_player API (apiVideoId === requestedVideoId). Never trust URL-only identity for errors.
       if (playabilityStatus === 'LOGIN_REQUIRED' || playabilityStatus === 'UNPLAYABLE' || playabilityStatus === 'ERROR') {
-        if (requestedVideoId && navigationInProgress && errorSignalSentForVideoId !== requestedVideoId) {
-          const hasUrl = !!urlVideoId;
-          const hasApi = !!apiVideoId;
-          let isAttributedToRequested = false;
+        const hasSettled = (Date.now() - navigationStartTime) >= NAVIGATION_ERROR_SETTLE_MS;
+        if (requestedVideoId && navigationInProgress && hasSettled && errorSignalSentForVideoId !== requestedVideoId) {
+          // Strictly confirm that the error is reported by the API for the requested video ID
+          const isExactApiMatch = apiVideoId && apiVideoId === requestedVideoId;
+          const isUrlAndApiMatch = urlVideoId === requestedVideoId && isExactApiMatch;
 
-          if (hasUrl && hasApi) {
-            isAttributedToRequested = (urlVideoId === requestedVideoId && apiVideoId === requestedVideoId);
-          } else if (hasUrl) {
-            isAttributedToRequested = (urlVideoId === requestedVideoId);
-          } else if (hasApi) {
-            isAttributedToRequested = (apiVideoId === requestedVideoId);
-          }
-
-          if (isAttributedToRequested) {
+          if (isExactApiMatch || isUrlAndApiMatch) {
             errorSignalSentForVideoId = requestedVideoId;
-            console.warn(`[BgPlayer StateMachine] Playback failed for ${requestedVideoId} due to ${playabilityStatus}`);
+            console.warn(`[BgPlayer StateMachine] Confirmed playback failure for ${requestedVideoId} due to ${playabilityStatus} (apiVideoId=${apiVideoId})`);
             mainWindow.webContents.send('yt-player-state-update', {
               error: playabilityStatus,
               videoId: requestedVideoId
