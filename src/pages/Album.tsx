@@ -93,6 +93,7 @@ export function Album() {
   const artistName = searchParams.get('artist') || '';
   const initialCover = searchParams.get('cover') || '';
   const trackTitleParam = searchParams.get('trackTitle') || '';
+  const trackArtistId = searchParams.get('artistId') || searchParams.get('channelId') || undefined;
 
   const safeTracks = useMemo(() => {
     return (album && Array.isArray(album.tracks)) ? album.tracks.filter(Boolean) : [];
@@ -194,32 +195,6 @@ export function Album() {
     const trackArtistId = searchParams.get('artistId') || searchParams.get('channelId') || undefined;
     const trackVideoId = searchParams.get('videoId') || undefined;
 
-    fetchAlbumDetails(albumId, resolvedAlbumName, resolvedArtistName, initialCover, trackTitleParam, trackArtistId, trackVideoId)
-      .then(data => {
-        if (!isCancelled && data) {
-          const seen = new Set<string>();
-          const uniqueTracks = (data.tracks || []).filter(t => {
-            if (!t || !t.id || seen.has(t.id)) return false;
-            seen.add(t.id);
-            return true;
-          });
-          setAlbum({
-            ...data,
-            tracks: uniqueTracks
-          });
-        }
-      })
-      .catch(err => {
-        if (!isCancelled) {
-          console.warn('Error loading album details:', err);
-        }
-      })
-      .finally(() => {
-        if (!isCancelled) {
-          setLoading(false);
-        }
-      });
-
     const cleanAlbumId = (albumId || '').replace('album-', '').replace('album-derived-', '');
     const isPlaylistId = Boolean(
       cleanAlbumId.startsWith('PL') || 
@@ -229,14 +204,14 @@ export function Album() {
       cleanAlbumId.startsWith('mix-')
     );
 
-    if (resolvedArtistName && !isPlaylistId) {
-      // Fetch artist avatar for header
-      resolveArtistAvatar(resolvedArtistName).then(avatar => {
+    const loadArtistContent = (artist: string, id?: string | number) => {
+      if (!artist || isPlaylistId) return;
+      const strId = id !== undefined && id !== null ? String(id) : undefined;
+      resolveArtistAvatar(artist, strId, id).then(avatar => {
         if (!isCancelled && avatar) setArtistAvatar(avatar);
       });
 
-      // Fetch more releases by the artist for the bottom shelf
-      fetchArtistProfileFromYTM(resolvedArtistName).then(profile => {
+      fetchArtistProfileFromYTM(artist, strId, id).then(profile => {
         if (!isCancelled && profile) {
           const combined = [
             ...(profile.singlesAndEPs || []),
@@ -253,6 +228,41 @@ export function Album() {
           setMoreReleases(Array.from(uniqueMap.values()).slice(0, 8));
         }
       });
+    };
+
+    fetchAlbumDetails(albumId, resolvedAlbumName, resolvedArtistName, initialCover, trackTitleParam, trackArtistId, trackVideoId)
+      .then(data => {
+        if (!isCancelled && data) {
+          const seen = new Set<string>();
+          const uniqueTracks = (data.tracks || []).filter(t => {
+            if (!t || !t.id || seen.has(t.id)) return false;
+            seen.add(t.id);
+            return true;
+          });
+          setAlbum({
+            ...data,
+            tracks: uniqueTracks
+          });
+
+          if (data.artist && !isPlaylistId) {
+            const effectiveId = data.channelId || data.artistId || trackArtistId;
+            loadArtistContent(data.artist, effectiveId);
+          }
+        }
+      })
+      .catch(err => {
+        if (!isCancelled) {
+          console.warn('Error loading album details:', err);
+        }
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setLoading(false);
+        }
+      });
+
+    if (resolvedArtistName && !isPlaylistId) {
+      loadArtistContent(resolvedArtistName, trackArtistId);
     }
 
     return () => {
@@ -547,7 +557,8 @@ export function Album() {
               }}
               onClick={() => {
                 if (!isPlaylist) {
-                  navigate(`/artist/${encodeURIComponent(album.artist)}${album.artistId ? `?artistId=${encodeURIComponent(album.artistId)}` : (album.channelId ? `?channelId=${encodeURIComponent(album.channelId)}` : '')}`);
+                  const targetArtistId = album.artistId || album.channelId || trackArtistId;
+                  navigate(`/artist/${encodeURIComponent(album.artist)}${targetArtistId ? `?channelId=${encodeURIComponent(targetArtistId)}` : ''}`);
                 }
               }}
             >
@@ -1115,7 +1126,10 @@ export function Album() {
             </h3>
             <button 
               className="secondary-btn"
-              onClick={() => navigate(`/artist/${encodeURIComponent(album.artist)}${album.artistId ? `?artistId=${encodeURIComponent(album.artistId)}` : (album.channelId ? `?channelId=${encodeURIComponent(album.channelId)}` : '')}`)}
+              onClick={() => {
+                const targetArtistId = album.artistId || album.channelId || trackArtistId;
+                navigate(`/artist/${encodeURIComponent(album.artist)}${targetArtistId ? `?channelId=${encodeURIComponent(targetArtistId)}` : ''}`);
+              }}
               style={{ fontSize: '0.8rem', padding: '4px 12px' }}
             >
               See All Discography

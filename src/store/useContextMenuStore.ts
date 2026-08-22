@@ -32,6 +32,7 @@ export interface ContextMenuAlbumData {
   releaseDate?: string;
   tracks?: Track[];
   artistId?: string | number;
+  channelId?: string;
 }
 
 interface ContextMenuState {

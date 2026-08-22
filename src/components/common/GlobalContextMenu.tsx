@@ -844,7 +844,8 @@ export const GlobalContextMenu: React.FC = () => {
                   className="track-menu-item" 
                   onClick={() => {
                     closeContextMenu();
-                    navigate(`/artist/${encodeURIComponent(album.artist)}${album.artistId ? `?artistId=${encodeURIComponent(album.artistId)}` : ''}`);
+                    const targetArtistId = album.artistId || album.channelId;
+                    navigate(`/artist/${encodeURIComponent(album.artist)}${targetArtistId ? `?channelId=${encodeURIComponent(targetArtistId)}` : ''}`);
                   }}
                 >
                   <User size={16} />

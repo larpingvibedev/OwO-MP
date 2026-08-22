@@ -1046,68 +1046,107 @@ const artistAvatarCache = new Map<string, string>();
 
 /**
  * Resolves an authentic, unique profile avatar for an artist.
- * Uses in-memory caching and fast parallel lookup against YouTube Music and iTunes.
+ * Prioritizes exact YouTube Channel / Artist browseId before falling back to search.
  */
-export async function resolveArtistAvatar(artistName: string): Promise<string> {
-  const clean = artistName.trim();
-  const lower = clean.toLowerCase();
-  if (artistAvatarCache.has(lower)) {
-    return artistAvatarCache.get(lower)!;
+export async function resolveArtistAvatar(
+  artistName: string,
+  channelId?: string,
+  artistId?: string | number
+): Promise<string> {
+  const clean = (artistName || '').trim();
+  const targetBrowseId = (typeof artistId === 'string' && (artistId.startsWith('UC') || artistId.startsWith('FEmusic_artist_'))) 
+    ? artistId 
+    : (channelId && (channelId.startsWith('UC') || channelId.startsWith('FEmusic_artist_')))
+      ? channelId
+      : null;
+
+  const cacheKey = (targetBrowseId || clean).toLowerCase();
+  if (artistAvatarCache.has(cacheKey)) {
+    return artistAvatarCache.get(cacheKey)!;
   }
 
-  // 1. YouTube Music Suggestions (Very fast ~100ms, returns official circular artist avatar)
-  try {
-    const res = await fetch('https://music.youtube.com/youtubei/v1/music/get_search_suggestions?prettyPrint=false', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
-      body: JSON.stringify({
-        context: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20240101.01.00', hl: 'en', gl: 'US' } },
-        input: clean
-      })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const contents = data.contents || [];
-      for (const c of contents) {
-        const items = c.searchSuggestionsSectionRenderer?.contents || [];
-        for (const item of items) {
-          const r = item.musicResponsiveListItemRenderer;
-          if (r) {
-            const sub = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((s: any) => s.text).join('') || '';
-            const isArtist = sub.toLowerCase().includes('artist') || r.navigationEndpoint?.browseEndpoint?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig?.pageType === 'MUSIC_PAGE_TYPE_ARTIST';
-            if (isArtist) {
-              const rawThumb = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
-              if (rawThumb) {
-                const cleanThumb = cleanGoogleImageUrl(rawThumb, 500);
-                artistAvatarCache.set(lower, cleanThumb);
-                return cleanThumb;
+  // 1. Direct YouTube Channel Browse (if exact browseId is known)
+  if (targetBrowseId) {
+    for (const base of ['/api/ytmusic/youtubei/v1', 'https://music.youtube.com/youtubei/v1']) {
+      try {
+        const browseRes = await fetch(`${base}/browse`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20240101.01.00", hl: "en", gl: "US" } },
+            browseId: targetBrowseId
+          })
+        });
+        if (browseRes.ok) {
+          const browseData = await browseRes.json();
+          const headerThumbs = browseData?.header?.musicImmersiveHeaderRenderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails ||
+                               browseData?.header?.musicVisualHeaderRenderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+          const rawBanner = headerThumbs.slice(-1)?.[0]?.url;
+          if (rawBanner) {
+            const cleanThumb = cleanGoogleImageUrl(rawBanner, 500);
+            artistAvatarCache.set(cacheKey, cleanThumb);
+            return cleanThumb;
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // 2. YouTube Music Suggestions (Returns official circular artist avatar for top match)
+  if (clean) {
+    try {
+      const res = await fetch('https://music.youtube.com/youtubei/v1/music/get_search_suggestions?prettyPrint=false', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        body: JSON.stringify({
+          context: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20240101.01.00', hl: 'en', gl: 'US' } },
+          input: clean
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const contents = data.contents || [];
+        for (const c of contents) {
+          const items = c.searchSuggestionsSectionRenderer?.contents || [];
+          for (const item of items) {
+            const r = item.musicResponsiveListItemRenderer;
+            if (r) {
+              const sub = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.map((s: any) => s.text).join('') || '';
+              const isArtist = sub.toLowerCase().includes('artist') || r.navigationEndpoint?.browseEndpoint?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig?.pageType === 'MUSIC_PAGE_TYPE_ARTIST';
+              if (isArtist) {
+                const rawThumb = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url;
+                if (rawThumb) {
+                  const cleanThumb = cleanGoogleImageUrl(rawThumb, 500);
+                  artistAvatarCache.set(cacheKey, cleanThumb);
+                  return cleanThumb;
+                }
               }
             }
           }
         }
       }
-    }
-  } catch {}
+    } catch {}
 
-  // 2. iTunes Artist Search fallback
-  try {
-    const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&entity=song&limit=5`);
-    if (itunesRes.ok) {
-      const itunesData = await itunesRes.json();
-      const match = (itunesData.results || []).find((r: any) => r.artistName?.toLowerCase() === lower) || itunesData.results?.[0];
-      if (match?.artworkUrl100) {
-        const thumb = match.artworkUrl100.replace('100x100bb', '500x500bb');
-        artistAvatarCache.set(lower, thumb);
-        return thumb;
+    // 3. iTunes Artist Search fallback
+    try {
+      const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&entity=song&limit=5`);
+      if (itunesRes.ok) {
+        const itunesData = await itunesRes.json();
+        const match = (itunesData.results || []).find((r: any) => r.artistName?.toLowerCase() === clean.toLowerCase()) || itunesData.results?.[0];
+        if (match?.artworkUrl100) {
+          const thumb = match.artworkUrl100.replace('100x100bb', '500x500bb');
+          artistAvatarCache.set(cacheKey, thumb);
+          return thumb;
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   const fallback = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
-  artistAvatarCache.set(lower, fallback);
+  artistAvatarCache.set(cacheKey, fallback);
   return fallback;
 }
 
@@ -1313,7 +1352,8 @@ export async function fetchArtistProfileFromYTM(
             artist: artistName,
             cover: thumb,
             releaseDate: albSubtitle,
-            channelId: targetBrowseId
+            channelId: targetBrowseId || undefined,
+            artistId: targetBrowseId || undefined
           });
         }
       });
@@ -1344,7 +1384,8 @@ export async function fetchArtistProfileFromYTM(
             artist: artistName,
             cover: thumb,
             releaseDate: sSubtitle,
-            channelId: targetBrowseId
+            channelId: targetBrowseId || undefined,
+            artistId: targetBrowseId || undefined
           });
         }
       });
@@ -1686,13 +1727,22 @@ export async function fetchAlbumDetailsFromYTM(
     }
   });
 
+  let artistBrowseId = leftHeader?.straplineTextOne?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
+                       leftHeader?.subtitle?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
+                       leftHeader?.title?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId;
+  if (!artistBrowseId && trackItems.length > 0) {
+    artistBrowseId = trackItems[0]?.musicResponsiveListItemRenderer?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId;
+  }
+
   return {
     id: albumBrowseId,
     name: albumTitle,
     artist: artist,
     cover: cover,
     releaseDate: albumSubtitle,
-    tracks: tracks
+    tracks: tracks,
+    channelId: artistBrowseId || undefined,
+    artistId: artistBrowseId || undefined
   };
 }
 
