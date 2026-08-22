@@ -14,6 +14,7 @@ import { Carousel } from '../components/Carousel';
 import { SpeedDialGrid } from '../components/SpeedDialGrid';
 import { AddToQueueButton } from '../components/common/AddToQueueButton';
 import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
+import { PlaylistCover } from '../components/common/PlaylistCover';
 import { useContextMenuStore } from '../store/useContextMenuStore';
 import { isSameTrack } from '../utils/trackUtils';
 import type { Track, PublicPlaylist } from '../types';
@@ -109,6 +110,7 @@ export function Dashboard() {
     playHistory, 
     favorites, 
     playlists, 
+    localPlaylistMetadata, 
     currentTrack, 
     dislikedTracks, 
     blockedArtists, 
@@ -1393,17 +1395,17 @@ export function Dashboard() {
                 className="album-card"
                 onClick={() => navigate('/library?tab=playlists')}
               >
-                <div 
-                  className="album-art" 
-                  style={{ 
-                    backgroundImage: `url(${pl.tracks[0]?.cover || 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=300&q=80'})`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    position: 'relative'
-                  }}
-                >
-                  <ListMusic size={32} color="rgba(255,255,255,0.7)" />
+                <div className="album-art" style={{ overflow: 'hidden', position: 'relative' }}>
+                  <PlaylistCover 
+                    playlistId={pl.id}
+                    tracks={pl.tracks}
+                    cover={pl.cover}
+                    coverId={localPlaylistMetadata?.[pl.id]?.coverId ?? pl.coverId}
+                    name={pl.name}
+                    size="100%"
+                    borderRadius={12}
+                    fallbackIconSize={32}
+                  />
                   <div className="card-play-overlay">
                     <Play size={20} fill="currentColor" style={{ marginLeft: '3px' }} />
                   </div>

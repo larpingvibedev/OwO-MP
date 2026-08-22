@@ -1,5 +1,6 @@
 import {
   assertSupabaseMutationSucceeded,
+  preserveLocalPlaylistMetadata,
   reconcileKnownSyncedPlaylistIds
 } from './supabasePlaylistPolicy';
 import { PlaylistSyncMutationTracker } from './playlistSyncMutationTracker';
@@ -45,6 +46,20 @@ export function runSupabaseResolvedErrorAndProvenanceFixtures(): Record<string, 
     throw new Error('Known-synced provenance reconciliation failed');
   }
 
+  // Verify preserveLocalPlaylistMetadata
+  const cloudPl = { id: 'p1', name: 'Cloud Title', cover: 'https://example.com/cover.jpg', tracks: [] };
+  const localWithCover = { id: 'p1', name: 'Old Title', cover: '', coverId: 'cov_local_123', tracks: [] };
+  const preserved = preserveLocalPlaylistMetadata(cloudPl, localWithCover);
+  if (preserved.coverId !== 'cov_local_123' || preserved.name !== 'Cloud Title') {
+    throw new Error('preserveLocalPlaylistMetadata failed to retain local coverId');
+  }
+
+  const localWithoutCover = { id: 'p1', name: 'Old Title', cover: '', tracks: [] };
+  const preservedNoCover = preserveLocalPlaylistMetadata(cloudPl, localWithoutCover);
+  if (preservedNoCover.coverId !== undefined) {
+    throw new Error('preserveLocalPlaylistMetadata erroneously set coverId');
+  }
+
   return {
     resolvedErrorCaught,
     failedDeleteRolledBack: true,
@@ -52,3 +67,4 @@ export function runSupabaseResolvedErrorAndProvenanceFixtures(): Record<string, 
     preservedKnown: Array.from(reconciliation.nextKnownIds)
   };
 }
+

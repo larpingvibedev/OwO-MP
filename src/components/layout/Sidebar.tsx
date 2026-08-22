@@ -27,6 +27,7 @@ export function Sidebar() {
     isSidebarCollapsed, 
     toggleSidebar, 
     playlists, 
+    localPlaylistMetadata,
     favorites, 
     createPlaylist,
     closePlayerDrawer
@@ -236,8 +237,10 @@ export function Sidebar() {
                 >
                   <div className="playlist-item-icon-box" style={{ padding: 0, overflow: 'hidden' }}>
                     <PlaylistCover 
+                      playlistId={pl.id}
                       tracks={pl.tracks} 
                       cover={pl.cover} 
+                      coverId={localPlaylistMetadata?.[pl.id]?.coverId ?? pl.coverId}
                       name={pl.name} 
                       size={36} 
                       borderRadius={4} 

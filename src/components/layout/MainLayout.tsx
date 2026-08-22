@@ -15,7 +15,7 @@ interface MainLayoutProps {
 
 export function MainLayout({ onOpenDeviceModal }: MainLayoutProps) {
   const location = useLocation();
-  const { isPlayerDrawerOpen, closePlayerDrawer } = usePlayerStore();
+  const { isPlayerDrawerOpen, closePlayerDrawer, isSidebarCollapsed } = usePlayerStore();
 
   // Universally close the full viewer player drawer whenever any navigation occurs
   useEffect(() => {
@@ -26,7 +26,7 @@ export function MainLayout({ onOpenDeviceModal }: MainLayoutProps) {
   }, [location.pathname, location.search]);
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${isSidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
       {/* Invisible HTML5 Audio Handler */}
       <AudioPlayer />
 

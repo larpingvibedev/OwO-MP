@@ -16,6 +16,7 @@ import { usePlayerStore } from './store/usePlayerStore';
 import { supabaseSync } from './services/supabaseSyncService';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { GlobalContextMenu } from './components/common/GlobalContextMenu';
+import { BulkTrackActionBar } from './components/common/BulkTrackActionBar';
 import './App.css';
 
 function App() {
@@ -53,6 +54,7 @@ function App() {
       <EditProfileModal />
       <DeviceConnectModal isOpen={showDeviceModal} onClose={() => setShowDeviceModal(false)} />
       <GlobalContextMenu />
+      <BulkTrackActionBar />
       
       <Routes>
         <Route path="/" element={<MainLayout onOpenDeviceModal={() => setShowDeviceModal(true)} />}>

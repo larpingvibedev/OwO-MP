@@ -1,3 +1,21 @@
+/* Layout Dimensions & System Variables */
+:root {
+  --sidebar-width: 240px;
+  --sidebar-collapsed-width: 72px;
+  --current-sidebar-width: var(--sidebar-width);
+  --topbar-height: 64px;
+  --player-height: 80px;
+}
+
+/* Dynamic container state overrides */
+.app-container.sidebar-collapsed {
+  --current-sidebar-width: var(--sidebar-collapsed-width);
+}
+
+.app-container.sidebar-expanded {
+  --current-sidebar-width: var(--sidebar-width);
+}
+
 /* Nuclear Player Style Layout */
 .app-container {
   display: flex;
@@ -15,7 +33,7 @@
 
 /* Sidebar */
 .sidebar {
-  width: 240px;
+  width: var(--sidebar-width);
   background-color: var(--bg-sidebar);
   border-right: 1px solid var(--border-color);
   display: flex;
@@ -29,7 +47,7 @@
 }
 
 .sidebar.collapsed {
-  width: 72px;
+  width: var(--sidebar-collapsed-width);
 }
 
 .sidebar.expanded {
@@ -2202,6 +2220,26 @@
   filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.6));
 }
 
+.card-cover-wrapper,
+.card-avatar-wrapper.playlist-cover-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px !important;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.playlist-cover-wrap .playlist-cover-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
 .card-avatar-wrapper {
   position: relative;
   width: 100%;
@@ -2975,7 +3013,365 @@
   background-color: rgba(231, 76, 60, 0.22);
 }
 
+/* ==========================================================================
+   Bulk Track Action Bar & Selection Mode Styles
+   ========================================================================== */
 
+.bulk-action-bar {
+  position: fixed;
+  bottom: 86px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px 8px 18px;
+  background: rgba(20, 20, 24, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 28px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  animation: bulkBarSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  user-select: none;
+}
 
+@keyframes bulkBarSlideUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 18px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
 
+.bulk-count-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
+.bulk-count-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--accent-primary);
+  color: #000000;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.bulk-count-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+}
+
+.bulk-action-divider {
+  width: 1px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.bulk-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bulk-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.bulk-action-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.bulk-action-btn.active {
+  background: var(--accent-primary);
+  color: #000000;
+  border-color: var(--accent-primary);
+}
+
+.bulk-action-btn.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.bulk-action-btn.danger {
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.25);
+  background: rgba(255, 107, 107, 0.08);
+}
+
+.bulk-action-btn.danger:hover {
+  background: rgba(255, 107, 107, 0.18);
+  border-color: rgba(255, 107, 107, 0.4);
+}
+
+.bulk-sub-badge {
+  font-size: 0.74rem;
+  opacity: 0.8;
+}
+
+.bulk-playlist-wrapper {
+  position: relative;
+}
+
+.bulk-chevron {
+  transition: transform 0.18s ease;
+}
+
+.bulk-chevron.open {
+  transform: rotate(180deg);
+}
+
+.bulk-playlist-dropdown {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 220px;
+  max-height: 240px;
+  background: #18181c;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 1300;
+  animation: bulkDropdownFade 0.15s ease forwards;
+}
+
+@keyframes bulkDropdownFade {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.bulk-dropdown-header {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 6px 10px 4px;
+}
+
+.bulk-dropdown-list {
+  overflow-y: auto;
+  max-height: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bulk-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.bulk-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.bulk-dropdown-pl-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-dropdown-pl-count {
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.bulk-dropdown-empty {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.4);
+  padding: 12px;
+  text-align: center;
+}
+
+.bulk-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bulk-close-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+/* Track Row Multi-Selection & Drag Grip Styling */
+.track-selection-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.track-selection-checkbox:hover {
+  border-color: var(--accent-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.track-selection-checkbox.selected {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #000000;
+}
+
+.track-drag-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 24px;
+  color: rgba(255, 255, 255, 0.3);
+  cursor: grab;
+  border-radius: 4px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  touch-action: none;
+}
+
+.track-drag-grip:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.track-drag-grip:active {
+  cursor: grabbing;
+}
+
+.track-row.is-selected {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-left: 2px solid var(--accent-primary);
+}
+
+.track-row.is-dragging {
+  opacity: 0.35;
+  background: rgba(0, 0, 0, 0.5) !important;
+}
+
+.track-drag-overlay {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(24, 24, 28, 0.95);
+  border: 1px solid var(--accent-primary);
+  border-radius: 12px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(12px);
+  color: #ffffff;
+  pointer-events: none;
+}
+
+/* Generic Modal Backdrop & Content */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding-left: var(--current-sidebar-width, 240px);
+  padding-bottom: var(--player-height, 80px);
+  padding-right: 0;
+  padding-top: 0;
+  transition: padding 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: modalBackdropFadeIn 0.2s ease forwards;
+}
+
+@media (max-width: 768px) {
+  .modal-backdrop {
+    padding-left: 0;
+    padding-bottom: var(--player-height, 80px);
+  }
+}
+
+@keyframes modalBackdropFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal-content {
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.modal-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modal-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}

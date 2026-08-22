@@ -35,6 +35,7 @@ export function Library() {
 
   const { 
     playlists, 
+    localPlaylistMetadata,
     favorites, 
     savedAlbums,
     followedArtists,
@@ -386,12 +387,14 @@ export function Library() {
                     onClick={() => navigate(`/playlist/${pl.id}`)}
                     onContextMenu={(e) => openPlaylistContextMenu(e, pl)}
                   >
-                    <div className="card-avatar-wrapper playlist-cover-wrap">
+                    <div className="card-cover-wrapper playlist-cover-wrap">
                       <PlaylistCover 
+                        playlistId={pl.id}
                         tracks={pl.tracks} 
                         cover={pl.cover} 
+                        coverId={localPlaylistMetadata?.[pl.id]?.coverId ?? pl.coverId}
                         name={pl.name} 
-                        size={180} 
+                        size="100%" 
                         borderRadius={12} 
                         fallbackIconSize={48} 
                       />
@@ -430,7 +433,7 @@ export function Library() {
                     onContextMenu={(e) => openAlbumContextMenu(e, alb)}
                   >
                     <div 
-                      className="card-avatar-wrapper"
+                      className="card-cover-wrapper"
                       style={{
                         backgroundImage: `url(${alb.cover})`,
                         backgroundSize: 'cover',
@@ -522,12 +525,14 @@ export function Library() {
               onClick={() => navigate(`/playlist/${pl.id}`)}
               onContextMenu={(e) => openPlaylistContextMenu(e, pl)}
             >
-              <div className="card-avatar-wrapper playlist-cover-wrap">
+              <div className="card-cover-wrapper playlist-cover-wrap">
                 <PlaylistCover 
+                  playlistId={pl.id}
                   tracks={pl.tracks} 
                   cover={pl.cover} 
+                  coverId={localPlaylistMetadata?.[pl.id]?.coverId ?? pl.coverId}
                   name={pl.name} 
-                  size={200} 
+                  size="100%" 
                   borderRadius={12} 
                   fallbackIconSize={48} 
                 />
@@ -696,7 +701,7 @@ export function Library() {
               onContextMenu={(e) => openAlbumContextMenu(e, alb)}
             >
               <div 
-                className="card-avatar-wrapper"
+                className="card-cover-wrapper"
                 style={{
                   backgroundImage: `url(${alb.cover})`,
                   backgroundSize: 'cover',

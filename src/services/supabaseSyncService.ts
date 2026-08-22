@@ -20,6 +20,7 @@ import {
 import { buildHandoffPlaybackState } from './handoffPlaybackState';
 import {
   assertSupabaseMutationSucceeded,
+  preserveLocalPlaylistMetadata,
   reconcileKnownSyncedPlaylistIds,
   selectLocalPlaylistsForUser
 } from './supabasePlaylistPolicy';
@@ -550,7 +551,7 @@ class SupabaseSyncService {
             return;
           }
           const existingIdx = merged.findIndex(p => p.id === cloudPl.id);
-          const plObj: Playlist = {
+          const rawCloudPl: Playlist = {
             id: cloudPl.id,
             name: cloudPl.title,
             description: cloudPl.description || '',
@@ -559,10 +560,14 @@ class SupabaseSyncService {
             createdAt: new Date(cloudPl.created_at).getTime()
           };
 
+          const preservedPl = existingIdx >= 0
+            ? preserveLocalPlaylistMetadata(rawCloudPl, merged[existingIdx])
+            : rawCloudPl;
+
           if (existingIdx >= 0) {
-            merged[existingIdx] = plObj;
+            merged[existingIdx] = preservedPl;
           } else {
-            merged.push(plObj);
+            merged.push(preservedPl);
           }
           this.playlistOwnership.assign(context.userId, cloudPl.id);
         });

@@ -44,3 +44,24 @@ export function selectLocalPlaylistsForUser<T extends { id: string }>(options: {
     return !switchedUsers || !previousKnownIds.has(playlist.id) || ownedByCurrent;
   });
 }
+
+/**
+ * Merges cloud playlist data with existing local playlist data while strictly preserving
+ * device-local metadata (such as custom IndexedDB coverId).
+ */
+export function preserveLocalPlaylistMetadata<
+  TCloud extends Record<string, any>,
+  TLocal extends Record<string, any>
+>(
+  cloudPlaylist: TCloud,
+  localPlaylist?: TLocal
+): TCloud & { coverId?: string } {
+  if (!localPlaylist) return cloudPlaylist;
+  return {
+    ...cloudPlaylist,
+    // Strictly preserve device-local coverId if set locally on this device
+    coverId: localPlaylist.coverId !== undefined ? localPlaylist.coverId : (cloudPlaylist as any).coverId
+  };
+}
+
+

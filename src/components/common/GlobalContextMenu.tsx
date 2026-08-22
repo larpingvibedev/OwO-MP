@@ -6,13 +6,14 @@ import {
   Trash2, X, Download, Loader2, HardDrive, Pencil, Check,
   Ban, UserX, ExternalLink
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useContextMenuStore } from '../../store/useContextMenuStore';
 import { isLocalTrack, canGoToArtist } from '../../types';
 
 export const GlobalContextMenu: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const menuRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -717,9 +718,14 @@ export const GlobalContextMenu: React.FC = () => {
                       className="track-menu-item" 
                       style={{ color: '#e74c3c' }}
                       onClick={() => {
+                        const isViewingDeletedPlaylist = location.pathname.includes(`/album/${playlist.id}`) ||
+                                                         location.pathname.includes(`/playlist/${playlist.id}`);
                         closeContextMenu();
                         deletePlaylist(playlist.id);
                         showToast(`Deleted "${playlist.name}"`);
+                        if (isViewingDeletedPlaylist) {
+                          navigate('/', { replace: true });
+                        }
                       }}
                     >
                       <Trash2 size={16} color="#e74c3c" />

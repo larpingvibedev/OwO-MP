@@ -36,6 +36,24 @@ export interface Track {
   ext?: string;
   bitrate?: number;
   sampleRate?: number;
+  // Unique Instance ID for list rendering & duplicate-safe DnD/selection
+  _uid?: string;
+}
+
+/** Returns a stable list-instance ID for a track */
+export function getTrackInstanceId(track: Track, fallbackIndex?: number): string {
+  if (track._uid) return track._uid;
+  if (fallbackIndex !== undefined) return `${track.id || track.streamUrl || 'item'}_idx_${fallbackIndex}`;
+  return track.id || track.streamUrl || 'track_item';
+}
+
+/** Ensures a track has a unique instance ID for playlist/queue persistence */
+export function ensureTrackInstanceId(track: Track): Track {
+  if (track._uid) return track;
+  return {
+    ...track,
+    _uid: `${track.id || 'track'}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`
+  };
 }
 
 /** Determines if a track represents physical local PC media */
@@ -83,11 +101,16 @@ export function normalizeTrack(track: Track): Track {
 }
 
 
+export interface LocalPlaylistMetadata {
+  coverId?: string;
+}
+
 export interface Playlist {
   id: string;
   name: string;
   description?: string;
   cover?: string;
+  coverId?: string;
   author?: string;
   tracks: Track[];
   createdAt?: number;
@@ -144,6 +167,7 @@ export interface AlbumDetail {
   artist: string;
   artistId?: string | number;
   cover: string;
+  coverId?: string;
   description?: string;
   releaseDate?: string;
   tracks: Track[];

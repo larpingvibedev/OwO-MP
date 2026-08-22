@@ -1,17 +1,35 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { 
+  DndContext, 
+  DragOverlay, 
+  closestCenter, 
+  PointerSensor, 
+  useSensor, 
+  useSensors, 
+  type DragEndEvent 
+} from '@dnd-kit/core';
+import { 
+  SortableContext, 
+  verticalListSortingStrategy 
+} from '@dnd-kit/sortable';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { fetchAlbumDetails, fetchArtistProfileFromYTM, cleanGoogleImageUrl, resolveArtistAvatar } from '../services/musicSearch';
 import { usePlayerStore } from '../store/usePlayerStore';
+import { useSelectionStore } from '../store/useSelectionStore';
+import { savePlaylistCover } from '../services/playlistCoverStorage';
 import { isSameTrack } from '../utils/trackUtils';
 import { 
-  Play, Pause, Shuffle, Heart, Plus, ChevronLeft, Loader2, Disc, 
-  Check, Download, HardDrive, ListMusic, Trash2, Pencil, MoreVertical, 
-  Search, Share2, ListPlus, X 
+  Play, Pause, Shuffle, Heart, ChevronLeft, Loader2, Disc, 
+  Download, HardDrive, ListMusic, Trash2, Pencil, MoreVertical, 
+  Search, Share2, ListPlus, X, Camera, GripVertical 
 } from 'lucide-react';
 import { PlaylistCover } from '../components/common/PlaylistCover';
-import { TrackOptionsMenu } from '../components/common/TrackOptionsMenu';
+import { SortableTrackRow } from '../components/common/SortableTrackRow';
+import { EditPlaylistModal } from '../components/modals/EditPlaylistModal';
 import { useContextMenuStore } from '../store/useContextMenuStore';
 import type { AlbumDetail, Track, Album as ReleaseItem } from '../types';
+import { getTrackInstanceId, ensureTrackInstanceId } from '../types';
 
 function safeDecode(str?: string): string {
   if (!str) return '';
@@ -20,13 +38,6 @@ function safeDecode(str?: string): string {
   } catch {
     return str;
   }
-}
-
-function formatTime(seconds: number): string {
-  if (isNaN(seconds) || seconds < 0) return '0:00';
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
 function formatTotalTime(totalSeconds: number): string {
@@ -49,13 +60,10 @@ export function Album() {
   const [loading, setLoading] = useState(true);
   const [artistAvatar, setArtistAvatar] = useState<string>('');
   const [moreReleases, setMoreReleases] = useState<ReleaseItem[]>([]);
-  const [addedTrackId, setAddedTrackId] = useState<string | null>(null);
 
   // Edit Playlist Modal State
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editName, setEditName] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editCover, setEditCover] = useState('');
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
 
   // 3-Dots Menu & In-Playlist Search State
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
@@ -64,6 +72,14 @@ export function Album() {
 
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    })
+  );
+
   const { 
     currentTrack, 
     isPlaying, 
@@ -71,11 +87,12 @@ export function Album() {
     setIsPlaying, 
     togglePlayPause,
     favorites,
-    toggleFavorite,
     addToQueue,
     playNext,
     playlists,
+    localPlaylistMetadata,
     updatePlaylist,
+    reorderPlaylistTrack,
     removeTrackFromPlaylist,
     toggleSavePlaylist,
     deletePlaylist,
@@ -86,6 +103,15 @@ export function Album() {
     downloadTrackBatch,
     showToast
   } = usePlayerStore();
+
+  const { 
+    setContext, 
+    toggleItem, 
+    selectAll, 
+    clearSelection, 
+    selectedItemIds, 
+    selectionMode 
+  } = useSelectionStore();
 
   const { openTrackContextMenu, openPlaylistContextMenu, openAlbumContextMenu } = useContextMenuStore();
 
@@ -111,6 +137,30 @@ export function Album() {
       (t.album && t.album.toLowerCase().includes(q))
     );
   }, [album, safeTracks, filterQuery]);
+
+  // Sync selection context
+  useEffect(() => {
+    if (albumId && safeTracks.length > 0) {
+      setContext(`playlist-${albumId}`, safeTracks);
+    }
+  }, [albumId, safeTracks, setContext]);
+
+  // Keyboard shortcut listeners (Ctrl/Cmd+A to select all, Escape to clear)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        clearSelection();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+        const target = e.target as HTMLElement;
+        if (target && target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+          e.preventDefault();
+          selectAll(filteredTracks);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [clearSelection, selectAll, filteredTracks]);
 
   // Close options menu when clicking outside
   useEffect(() => {
@@ -142,12 +192,7 @@ export function Album() {
 
     // 1. Auto-Playlist: Liked Music
     if (albumId === 'liked' || albumId === 'liked-music' || albumId === 'favorites') {
-      const seen = new Set<string>();
-      const uniqueFavs = (favorites || []).filter(t => {
-        if (!t || !t.id || seen.has(t.id)) return false;
-        seen.add(t.id);
-        return true;
-      });
+      const uniqueFavs = (favorites || []).filter(Boolean);
 
       setAlbum({
         id: 'liked',
@@ -162,26 +207,31 @@ export function Album() {
     }
 
     // 2. Custom User Playlists
+    const cleanAlbumId = (albumId || '').replace('album-', '').replace('album-derived-', '');
     const decodedId = safeDecode(albumId).toLowerCase();
-    const localPl = (playlists || []).find(p => p && (p.id === albumId || (p.name && p.name.toLowerCase() === decodedId)));
+    const localPl = (playlists || []).find(p => p && (p.id === albumId || p.id === cleanAlbumId || (p.name && p.name.toLowerCase() === decodedId)));
     if (localPl) {
-      const seen = new Set<string>();
-      const uniqueTracks = (localPl.tracks || []).filter(t => {
-        if (!t || !t.id || seen.has(t.id)) return false;
-        seen.add(t.id);
-        return true;
-      });
-
+      const plTracks = (localPl.tracks || []).filter(Boolean).map(ensureTrackInstanceId);
+      const effectiveCoverId = localPlaylistMetadata?.[localPl.id]?.coverId ?? localPl.coverId;
       setAlbum({
         id: localPl.id,
         name: localPl.name || 'Playlist',
         description: localPl.description,
         artist: localPl.author || 'Playlist',
         cover: localPl.cover || '',
-        tracks: uniqueTracks,
+        coverId: effectiveCoverId,
+        tracks: plTracks,
         releaseDate: 'Playlist'
       });
       setLoading(false);
+      return;
+    }
+
+    // Defensive Guard: If this is a local playlist ID ('pl-...') that was deleted or doesn't exist locally,
+    // do NOT fall through to YouTube release lookup. Redirect home immediately.
+    if (cleanAlbumId.startsWith('pl-')) {
+      setLoading(false);
+      navigate('/', { replace: true });
       return;
     }
 
@@ -195,7 +245,6 @@ export function Album() {
     const trackArtistId = searchParams.get('artistId') || searchParams.get('channelId') || undefined;
     const trackVideoId = searchParams.get('videoId') || undefined;
 
-    const cleanAlbumId = (albumId || '').replace('album-', '').replace('album-derived-', '');
     const isPlaylistId = Boolean(
       cleanAlbumId.startsWith('PL') || 
       cleanAlbumId.startsWith('VLPL') || 
@@ -361,21 +410,6 @@ export function Album() {
     setIsPlaying(true);
   };
 
-  const handleAddAllToQueue = () => {
-    if (!album || !safeTracks.length) return;
-    safeTracks.forEach(t => addToQueue(t));
-    showToast(`Added ${safeTracks.length} tracks to queue`);
-  };
-
-  const handleAddSingleToQueue = (e: React.MouseEvent, track: Track) => {
-    e.stopPropagation();
-    addToQueue(track);
-    setAddedTrackId(track.id);
-    setTimeout(() => {
-      setAddedTrackId(prev => (prev === track.id ? null : prev));
-    }, 2000);
-  };
-
   return (
     <div className="album-detail-page" style={{ padding: '0 32px 64px', maxWidth: '1400px', margin: '0 auto' }}>
       {/* Back Button */}
@@ -425,14 +459,54 @@ export function Album() {
       >
         {/* Cover Artwork */}
         {isPlaylist ? (
-          <PlaylistCover 
-            tracks={safeTracks}
-            cover={album.cover}
-            name={album.name}
-            size={240}
-            borderRadius="12px"
-            fallbackIconSize={48}
-          />
+          <div 
+            style={{ 
+              position: 'relative', 
+              width: '240px', 
+              height: '240px', 
+              borderRadius: '12px', 
+              overflow: 'hidden', 
+              cursor: isCustomUserPlaylist ? 'pointer' : 'default', 
+              flexShrink: 0,
+              boxShadow: '0 16px 40px rgba(0,0,0,0.6)'
+            }}
+            onClick={isCustomUserPlaylist ? () => setShowEditModal(true) : undefined}
+            title={isCustomUserPlaylist ? "Click to change cover & edit details" : undefined}
+          >
+            <PlaylistCover 
+              playlistId={album.id}
+              tracks={safeTracks}
+              cover={album.cover}
+              coverId={localPlaylistMetadata?.[album.id]?.coverId ?? album.coverId}
+              name={album.name}
+              size={240}
+              borderRadius="12px"
+              fallbackIconSize={48}
+            />
+            {isCustomUserPlaylist && (
+              <div 
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: 'rgba(0, 0, 0, 0.55)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  color: '#ffffff',
+                  opacity: 0,
+                  transition: 'opacity 0.2s ease',
+                  backdropFilter: 'blur(3px)'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
+                onMouseLeave={(e) => e.currentTarget.style.opacity = '0'}
+              >
+                <Camera size={32} />
+                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Change Cover</span>
+              </div>
+            )}
+          </div>
         ) : (
           <div 
             className="album-hero-cover" 
@@ -500,12 +574,7 @@ export function Album() {
 
             {isCustomUserPlaylist && (
               <button 
-                onClick={() => {
-                  setEditName(album.name);
-                  setEditDescription(album.description || '');
-                  setEditCover(album.cover || '');
-                  setShowEditModal(true);
-                }}
+                onClick={() => setShowEditModal(true)}
                 title="Edit playlist name & description"
                 style={{
                   backgroundColor: 'rgba(255,255,255,0.08)',
@@ -578,24 +647,23 @@ export function Album() {
           </div>
 
           {/* Action Buttons Row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-            {/* Main Play / Pause Button */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            {/* Play All / Pause Button */}
             <button 
-              className="hero-play-btn"
               onClick={handlePlayRelease}
+              className="primary-btn"
               style={{ 
-                backgroundColor: 'var(--accent-primary)', 
                 padding: '12px 28px', 
-                borderRadius: '32px', 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '10px', 
-                color: '#000', 
-                fontWeight: 700, 
-                fontSize: '0.95rem', 
-                border: 'none', 
+                fontSize: '0.95rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                backgroundColor: 'var(--accent-primary)',
+                color: '#000',
+                fontWeight: 700,
+                border: 'none',
+                borderRadius: '32px',
                 cursor: 'pointer',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
                 transition: 'transform 0.15s, filter 0.15s'
               }}
               onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.03)'}
@@ -752,88 +820,67 @@ export function Album() {
                 <MoreVertical size={18} />
               </button>
 
-              {/* Options Dropdown Menu */}
+              {/* 3-Dots Dropdown Menu */}
               {showOptionsMenu && (
                 <div 
+                  className="track-options-menu"
                   style={{
                     position: 'absolute',
-                    top: '52px',
+                    top: 'calc(100% + 8px)',
                     left: 0,
-                    backgroundColor: 'var(--bg-card, #1e1e24)',
+                    zIndex: 100,
+                    minWidth: '200px',
+                    backgroundColor: 'var(--bg-card)',
                     border: '1px solid var(--border-color)',
                     borderRadius: '12px',
-                    padding: '8px 0',
-                    minWidth: '220px',
-                    boxShadow: '0 12px 36px rgba(0,0,0,0.6)',
-                    zIndex: 1000,
-                    backdropFilter: 'blur(16px)'
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                    padding: '6px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px'
                   }}
-                  onClick={(e) => e.stopPropagation()}
                 >
                   <button 
                     className="track-menu-item"
                     onClick={() => {
                       setShowOptionsMenu(false);
-                      handleShuffleRelease();
-                    }}
-                  >
-                    <Shuffle size={16} />
-                    <span>Shuffle play</span>
-                  </button>
-
-                  <button 
-                    className="track-menu-item"
-                    onClick={() => {
-                      setShowOptionsMenu(false);
-                      setShowFilter(true);
-                    }}
-                  >
-                    <Search size={16} />
-                    <span>Find in playlist</span>
-                  </button>
-
-                  <button 
-                    className="track-menu-item"
-                    onClick={() => {
-                      setShowOptionsMenu(false);
                       if (safeTracks.length > 0) {
-                        safeTracks.slice().reverse().forEach(t => playNext(t));
-                        showToast(`Playing "${album.name}" next`);
+                        playNext(safeTracks[0]);
                       }
                     }}
                   >
                     <ListPlus size={16} />
                     <span>Play next</span>
                   </button>
-
                   <button 
                     className="track-menu-item"
                     onClick={() => {
                       setShowOptionsMenu(false);
-                      handleAddAllToQueue();
+                      safeTracks.forEach(t => addToQueue(t));
+                      showToast(`Added ${safeTracks.length} tracks to queue`);
                     }}
                   >
-                    <Plus size={16} />
+                    <ListMusic size={16} />
                     <span>Add to queue</span>
                   </button>
-
                   <button 
                     className="track-menu-item"
                     onClick={() => {
                       setShowOptionsMenu(false);
-                      downloadTrackBatch(safeTracks, album.name);
+                      setShowFilter(prev => !prev);
                     }}
                   >
-                    <Download size={16} />
-                    <span>Download playlist</span>
+                    <Search size={16} />
+                    <span>Find in playlist</span>
                   </button>
-
                   <button 
                     className="track-menu-item"
                     onClick={() => {
                       setShowOptionsMenu(false);
-                      navigator.clipboard.writeText(window.location.href);
-                      showToast('Playlist link copied to clipboard');
+                      if (navigator.clipboard) {
+                        navigator.clipboard.writeText(window.location.href);
+                        showToast('Link copied to clipboard!');
+                      }
                     }}
                   >
                     <Share2 size={16} />
@@ -842,14 +889,11 @@ export function Album() {
 
                   {isCustomUserPlaylist && (
                     <>
-                      <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
+                      <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '4px 0' }} />
                       <button 
                         className="track-menu-item"
                         onClick={() => {
                           setShowOptionsMenu(false);
-                          setEditName(album.name);
-                          setEditDescription(album.description || '');
-                          setEditCover(album.cover || '');
                           setShowEditModal(true);
                         }}
                       >
@@ -862,7 +906,7 @@ export function Album() {
                         onClick={() => {
                           setShowOptionsMenu(false);
                           deletePlaylist(album.id);
-                          navigate('/library?tab=playlists');
+                          navigate('/', { replace: true });
                         }}
                       >
                         <Trash2 size={16} color="#e74c3c" />
@@ -878,7 +922,7 @@ export function Album() {
       </div>
 
       {/* ========================================================================= */}
-      {/* TRACKLIST TABLE                                                          */}
+      {/* TRACKLIST TABLE WITH SORTABLE DND & MULTI-SELECTION                      */}
       {/* ========================================================================= */}
       <div style={{ marginBottom: '56px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
@@ -925,7 +969,7 @@ export function Album() {
           }}>
             <Search size={15} color="var(--text-secondary)" />
             <input 
-              type="text"
+              type="text" 
               placeholder="Search in this playlist..."
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
@@ -950,170 +994,138 @@ export function Album() {
           </div>
         )}
 
-        <div className="top-tracks-list">
-          {filteredTracks.map((track, idx) => {
-            const isCurrent = isSameTrack(currentTrack, track);
-            const isFav = favorites.some(f => f.id === track.id);
-            const isAdded = addedTrackId === track.id;
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          modifiers={[restrictToVerticalAxis]}
+          onDragStart={(event) => setActiveDragId(String(event.active.id))}
+          onDragEnd={(event: DragEndEvent) => {
+            setActiveDragId(null);
+            const { active, over } = event;
+            if (over && active.id !== over.id && album && isCustomUserPlaylist) {
+              reorderPlaylistTrack(album.id, String(active.id), String(over.id));
+              // Update local state snapshot instantly for snappy feel
+              setAlbum(prev => {
+                if (!prev) return null;
+                const tracks = [...prev.tracks];
+                const activeIdx = tracks.findIndex((t, i) => getTrackInstanceId(t, i) === active.id || t._uid === active.id);
+                const overIdx = tracks.findIndex((t, i) => getTrackInstanceId(t, i) === over.id || t._uid === over.id);
+                if (activeIdx === -1 || overIdx === -1 || activeIdx === overIdx) return prev;
+                const [moved] = tracks.splice(activeIdx, 1);
+                tracks.splice(overIdx, 0, moved);
+                return { ...prev, tracks };
+              });
+            }
+          }}
+          onDragCancel={() => setActiveDragId(null)}
+        >
+          <SortableContext
+            items={filteredTracks.map((t, i) => getTrackInstanceId(t, i))}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="top-tracks-list">
+              {filteredTracks.map((track, idx) => {
+                const itemId = getTrackInstanceId(track, idx);
+                const isCurrent = isSameTrack(currentTrack, track);
+                const isSelected = selectedItemIds.has(itemId);
 
-            return (
-              <div 
-                key={`${album.id || albumId}-${track.id}-${idx}`} 
-                className={`track-row ${isCurrent ? 'active-playing' : ''}`}
-                onClick={() => handlePlayTrack(track)}
-                onContextMenu={(e) => openTrackContextMenu(e, track, {
-                  onRemoveFromPlaylist: isCustomUserPlaylist ? () => removeTrackFromPlaylist(album.id, track.id) : undefined
-                })}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: '10px 16px',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  transition: 'background-color 0.15s'
-                }}
-              >
-                {/* Index / Playing Indicator */}
-                <div style={{ width: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {isCurrent && isPlaying ? (
-                    <div style={{ display: 'flex', gap: '2px', alignItems: 'flex-end', height: '14px' }}>
-                      <span className="equalizer-bar" style={{ width: '3px', height: '100%', backgroundColor: 'var(--accent-primary)', animation: 'equalize 0.8s ease-in-out infinite alternate' }} />
-                      <span className="equalizer-bar" style={{ width: '3px', height: '60%', backgroundColor: 'var(--accent-primary)', animation: 'equalize 0.8s ease-in-out infinite alternate 0.2s' }} />
-                      <span className="equalizer-bar" style={{ width: '3px', height: '80%', backgroundColor: 'var(--accent-primary)', animation: 'equalize 0.8s ease-in-out infinite alternate 0.4s' }} />
-                    </div>
-                  ) : (
-                    <span className="track-row-index" style={{ fontSize: '0.9rem', color: isCurrent ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
-                      {idx + 1}
-                    </span>
-                  )}
-                </div>
-
-                {/* Artwork Thumbnail */}
-                <div 
-                  className="track-row-cover" 
-                  style={{ 
-                    width: '42px', 
-                    height: '42px', 
-                    borderRadius: '6px', 
-                    overflow: 'hidden', 
-                    backgroundColor: 'var(--bg-main)',
-                    marginLeft: '12px',
-                    marginRight: '16px',
-                    flexShrink: 0 
-                  }} 
-                >
-                  <img 
-                    src={cleanGoogleImageUrl(track.cover || displayCover, 500)} 
-                    alt={track.title} 
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                    loading="lazy"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = displayCover || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80';
-                    }}
-                  />
-                </div>
-
-                {/* Track Info */}
-                <div className="track-row-info" style={{ flex: 1, minWidth: 0 }}>
-                  <div 
-                    className="track-row-title"
-                    style={{ 
-                      fontWeight: 600, 
-                      fontSize: '0.95rem',
-                      color: isCurrent ? 'var(--accent-primary)' : 'var(--text-primary)',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis'
-                    }}
-                  >
-                    {track.title}
-                  </div>
-                  <div 
-                    className="track-row-artist"
-                    style={{ 
-                      fontSize: '0.85rem', 
-                      color: 'var(--text-secondary)',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis'
-                    }}
-                  >
-                    {track.artist}
-                  </div>
-                </div>
-
-                {/* Album Name */}
-                <div 
-                  className="track-row-album"
-                  style={{ 
-                    flex: 1, 
-                    color: 'var(--text-secondary)', 
-                    fontSize: '0.85rem',
-                    padding: '0 16px',
-                    display: 'none',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis'
-                  }}
-                >
-                  {track.album || album.name}
-                </div>
-
-                {/* Action Buttons (Heart & Plus & TrackOptionsMenu) */}
-                <div 
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px', marginRight: '16px' }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <button 
-                    onClick={() => toggleFavorite(track)}
-                    title={isFav ? "Favorited" : "Favorite"}
-                    style={{ 
-                      background: 'none', 
-                      border: 'none', 
-                      cursor: 'pointer', 
-                      color: isFav ? 'var(--accent-primary)' : 'rgba(255,255,255,0.4)',
-                      padding: '4px',
-                      display: 'flex',
-                      alignItems: 'center'
-                    }}
-                  >
-                    <Heart size={16} fill={isFav ? "currentColor" : "none"} />
-                  </button>
-
-                  <button 
-                    onClick={(e) => handleAddSingleToQueue(e, track)}
-                    title="Add to queue"
-                    style={{ 
-                      background: 'none', 
-                      border: 'none', 
-                      cursor: 'pointer', 
-                      color: isAdded ? 'var(--accent-primary)' : 'rgba(255,255,255,0.4)',
-                      padding: '4px',
-                      display: 'flex',
-                      alignItems: 'center'
-                    }}
-                  >
-                    {isAdded ? <Check size={16} /> : <Plus size={16} />}
-                  </button>
-
-                  <TrackOptionsMenu 
+                return (
+                  <SortableTrackRow
+                    key={itemId}
+                    itemId={itemId}
                     track={track}
-                    onRemoveFromPlaylist={isCustomUserPlaylist ? () => {
-                      removeTrackFromPlaylist(album.id, track.id);
-                      setAlbum(prev => prev ? { ...prev, tracks: prev.tracks.filter(t => t.id !== track.id) } : null);
-                    } : undefined}
+                    index={idx}
+                    isCurrent={isCurrent}
+                    isPlaying={isPlaying}
+                    isSelected={isSelected}
+                    selectionMode={selectionMode}
+                    canReorder={Boolean(isCustomUserPlaylist && !filterQuery.trim())}
+                    onPlay={() => handlePlayTrack(track)}
+                    onSelect={(e) => {
+                      toggleItem(itemId, {
+                        isMulti: e.ctrlKey || e.metaKey,
+                        isRange: e.shiftKey,
+                        allItems: filteredTracks
+                      });
+                    }}
+                    onContextMenu={(e) => openTrackContextMenu(e, track, {
+                      onRemoveFromPlaylist: isCustomUserPlaylist ? () => {
+                        removeTrackFromPlaylist(album.id, track.id);
+                        setAlbum(prev => prev ? { ...prev, tracks: prev.tracks.filter(t => t.id !== track.id) } : null);
+                      } : undefined
+                    })}
+                    displayCover={displayCover}
                   />
-                </div>
+                );
+              })}
+            </div>
+          </SortableContext>
 
-                {/* Duration */}
-                <span className="track-row-duration" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', minWidth: '40px', textAlign: 'right' }}>
-                  {formatTime(track.duration)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
+          <DragOverlay>
+            {activeDragId ? (() => {
+              const activeTrack = safeTracks.find((t, i) => getTrackInstanceId(t, i) === activeDragId || t._uid === activeDragId);
+              if (!activeTrack) return null;
+              return (
+                <div className="track-drag-overlay">
+                  <GripVertical size={16} color="var(--accent-primary)" />
+                  <img
+                    src={cleanGoogleImageUrl(activeTrack.cover || displayCover, 120)}
+                    alt={activeTrack.title}
+                    style={{ width: '36px', height: '36px', borderRadius: '4px', objectFit: 'cover' }}
+                  />
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                      {activeTrack.title}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)' }}>
+                      {activeTrack.artist}
+                    </div>
+                  </div>
+                </div>
+              );
+            })() : null}
+          </DragOverlay>
+        </DndContext>
       </div>
+
+      {/* Edit Playlist Modal */}
+      {isCustomUserPlaylist && album && (
+        <EditPlaylistModal
+          isOpen={showEditModal}
+          playlist={{
+            id: album.id,
+            name: album.name,
+            description: album.description,
+            cover: album.cover,
+            coverId: localPlaylistMetadata?.[album.id]?.coverId ?? album.coverId,
+            tracks: safeTracks
+          }}
+          onClose={() => setShowEditModal(false)}
+          onSave={async (updates) => {
+            let newCoverId = localPlaylistMetadata?.[album.id]?.coverId ?? album.coverId;
+            if (updates.removeCover) {
+              newCoverId = undefined;
+            } else if (updates.coverBlob) {
+              const coverKey = `cov_${album.id}_${Date.now()}`;
+              await savePlaylistCover(coverKey, updates.coverBlob);
+              newCoverId = coverKey;
+            }
+            updatePlaylist(album.id, {
+              name: updates.name,
+              description: updates.description,
+              coverId: newCoverId,
+              cover: updates.removeCover ? '' : (updates.coverBlob ? '' : album.cover)
+            });
+            setAlbum(prev => prev ? {
+              ...prev,
+              name: updates.name,
+              description: updates.description,
+              coverId: newCoverId,
+              cover: updates.removeCover ? '' : (updates.coverBlob ? '' : prev.cover)
+            } : null);
+          }}
+        />
+      )}
 
       {/* ========================================================================= */}
       {/* MORE RELEASES BY ARTIST SHELF (Official Releases Only)                    */}
@@ -1179,87 +1191,6 @@ export function Album() {
                 <div className="album-artist">{rel.releaseDate ? `${rel.releaseDate} • ` : ''}Release</div>
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* EDIT PLAYLIST DETAILS MODAL                                              */}
-      {/* ========================================================================= */}
-      {showEditModal && (
-        <div className="playlist-detail-modal-backdrop" onClick={() => setShowEditModal(false)}>
-          <div className="playlist-detail-modal-dialog" style={{ maxWidth: '440px' }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-              <h2 className="modal-title" style={{ margin: 0 }}>Edit playlist details</h2>
-              <button 
-                onClick={() => setShowEditModal(false)}
-                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-            
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              if (!editName.trim()) return;
-              updatePlaylist(album.id, { 
-                name: editName.trim(), 
-                description: editDescription.trim(), 
-                cover: editCover.trim() 
-              });
-              setAlbum(prev => prev ? { 
-                ...prev, 
-                name: editName.trim(), 
-                description: editDescription.trim(), 
-                cover: editCover.trim() 
-              } : null);
-              setShowEditModal(false);
-            }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>Title</label>
-                  <input 
-                    type="text" 
-                    value={editName}
-                    onChange={e => setEditName(e.target.value)}
-                    className="new-playlist-input"
-                    placeholder="Playlist title"
-                    required
-                    autoFocus
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>Description</label>
-                  <textarea 
-                    value={editDescription}
-                    onChange={e => setEditDescription(e.target.value)}
-                    className="new-playlist-input"
-                    placeholder="Add an optional description"
-                    rows={3}
-                    style={{ resize: 'vertical', minHeight: '70px' }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>Custom Cover URL (optional)</label>
-                  <input 
-                    type="url" 
-                    value={editCover}
-                    onChange={e => setEditCover(e.target.value)}
-                    className="new-playlist-input"
-                    placeholder="https://..."
-                  />
-                </div>
-              </div>
-              <div className="modal-footer" style={{ marginTop: '24px' }}>
-                <button type="button" className="modal-close-btn" onClick={() => setShowEditModal(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="modal-play-all-btn">
-                  <Check size={16} color="#000" />
-                  <span>Save</span>
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

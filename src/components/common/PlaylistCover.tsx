@@ -1,10 +1,14 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { ListMusic } from 'lucide-react';
 import type { Track } from '../../types';
+import { getPlaylistCover } from '../../services/playlistCoverStorage';
+import { usePlayerStore } from '../../store/usePlayerStore';
 
 interface PlaylistCoverProps {
+  playlistId?: string;
   tracks?: Track[];
   cover?: string;
+  coverId?: string;
   name?: string;
   size?: number | string;
   aspectRatio?: string;
@@ -15,8 +19,10 @@ interface PlaylistCoverProps {
 }
 
 export function PlaylistCover({
+  playlistId,
   tracks = [],
   cover,
+  coverId,
   name = 'Playlist',
   size = '100%',
   aspectRatio = '1 / 1',
@@ -25,11 +31,41 @@ export function PlaylistCover({
   style = {},
   fallbackIconSize = 40
 }: PlaylistCoverProps) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const storeCoverId = usePlayerStore(state => playlistId ? state.localPlaylistMetadata?.[playlistId]?.coverId : undefined);
+  const effectiveCoverId = coverId ?? storeCoverId;
+
+  useEffect(() => {
+    let currentUrl: string | null = null;
+    let isCancelled = false;
+
+    if (effectiveCoverId) {
+      void getPlaylistCover(effectiveCoverId).then((blob) => {
+        if (!isCancelled && blob) {
+          currentUrl = URL.createObjectURL(blob);
+          setBlobUrl(currentUrl);
+        } else if (!isCancelled) {
+          setBlobUrl(null);
+        }
+      });
+    } else {
+      setBlobUrl(null);
+    }
+
+    return () => {
+      isCancelled = true;
+      if (currentUrl) {
+        URL.revokeObjectURL(currentUrl);
+      }
+    };
+  }, [effectiveCoverId]);
+
+  const activeCover = blobUrl || cover;
   const safeTracks = useMemo(() => (Array.isArray(tracks) ? tracks.filter(Boolean) : []), [tracks]);
 
   // Extract up to 4 distinct valid covers from the tracks list
   const fourCovers = useMemo(() => {
-    if (typeof cover === 'string' && cover.trim().length > 0 && !cover.includes('placeholder')) {
+    if (typeof activeCover === 'string' && activeCover.trim().length > 0 && !activeCover.includes('placeholder')) {
       return null;
     }
     if (safeTracks.length < 4) {
@@ -62,9 +98,9 @@ export function PlaylistCover({
     }
 
     return null;
-  }, [safeTracks, cover]);
+  }, [safeTracks, activeCover]);
 
-  const singleCover = (typeof cover === 'string' && cover.trim()) || (safeTracks[0] && typeof safeTracks[0].cover === 'string' && safeTracks[0].cover.trim()) || null;
+  const singleCover = (typeof activeCover === 'string' && activeCover.trim()) || (safeTracks[0] && typeof safeTracks[0].cover === 'string' && safeTracks[0].cover.trim()) || null;
 
   return (
     <div

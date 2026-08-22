@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Track, Playlist, ViewType, ArtistProfile, SavedAlbum, FollowedArtist } from '../types';
+import type { Track, Playlist, ViewType, ArtistProfile, SavedAlbum, FollowedArtist, LocalPlaylistMetadata } from '../types';
+import { getTrackInstanceId, ensureTrackInstanceId } from '../types';
+import { deletePlaylistCover } from '../services/playlistCoverStorage';
 import { fetchUpNextMix } from '../services/musicSearch';
 import { 
   downloadTrackOffline, 
@@ -126,6 +128,7 @@ interface PlayerState {
   
   // Library Collections (Spotify & YouTube Music Criteria)
   playlists: Playlist[];
+  localPlaylistMetadata: Record<string, LocalPlaylistMetadata>;
   favorites: Track[];
   savedAlbums: SavedAlbum[];
   followedArtists: FollowedArtist[];
@@ -230,14 +233,18 @@ interface PlayerState {
   toggleSavePlaylist: (playlist: { id: string; name: string; cover?: string; tracks?: Track[]; author?: string }) => void;
   toggleFollowArtist: (artist: { name: string; cover: string; subscriberCount?: string; channelId?: string; artistId?: string | number }) => void;
   playNext: (track: Track) => void;
+  playTracksNext: (tracks: Track[]) => void;
   createPlaylist: (name: string) => string;
   deletePlaylist: (playlistId: string) => void;
-  updatePlaylist: (playlistId: string, updates: { name?: string; description?: string; cover?: string }) => void;
+  updatePlaylist: (playlistId: string, updates: { name?: string; description?: string; cover?: string; coverId?: string }) => void;
   enrichPlaylistDurations: (playlistId: string, trackIds?: string[]) => Promise<PlaylistDurationBackfillResult>;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => void;
+  removeTracksFromPlaylist: (playlistId: string, itemIds: string[]) => void;
   addToPlaylist: (playlistId: string, track: Track) => void;
   addTracksToPlaylist: (playlistId: string, tracks: Track[]) => void;
   reorderPlaylistTracks: (playlistId: string, startIndex: number, endIndex: number) => void;
+  reorderPlaylistTrack: (playlistId: string, activeItemId: string, overItemId: string) => void;
+  reorderQueueTrack: (activeItemId: string, overItemId: string) => void;
   createPlaylistWithTrack: (name: string, track: Track) => void;
   createImportedPlaylist: (playlist: { name: string; cover?: string; author?: string; tracks: Track[] }) => string;
   saveQueueAsPlaylist: (customName?: string) => void;
@@ -435,6 +442,7 @@ export const usePlayerStore = create<PlayerState>()(
   libraryFilter: 'all',
   
   playlists: [],
+  localPlaylistMetadata: {},
   favorites: [],
   savedAlbums: [],
   followedArtists: [],
@@ -729,6 +737,98 @@ export const usePlayerStore = create<PlayerState>()(
       shuffledQueueOccurrenceIds: newShuffledOccurrenceIds,
       toastMessage: `Playing "${track.title}" next`
     };
+  }),
+
+  playTracksNext: (tracks) => set((state) => {
+    if (!tracks || tracks.length === 0) return {};
+    const validTracks = tracks.filter(Boolean).map(ensureTrackInstanceId);
+    const occurrenceIds = validTracks.map(() => createQueueOccurrenceId());
+
+    if (!state.currentTrack || state.queue.length === 0) {
+      const first = validTracks[0];
+      return {
+        queue: validTracks,
+        queueOccurrenceIds: occurrenceIds,
+        shuffledQueue: validTracks,
+        shuffledQueueOccurrenceIds: occurrenceIds,
+        queueIndex: 0,
+        currentTrack: first,
+        playingFrom: `${first.title} Mix`,
+        currentTime: 0,
+        duration: first.duration || 0,
+        isPlaying: true,
+        toastMessage: `Playing ${validTracks.length} tracks`,
+        playNonce: state.playNonce + 1
+      };
+    }
+
+    const insertIdx = state.queueIndex + 1;
+    const newQueue = [
+      ...state.queue.slice(0, insertIdx),
+      ...validTracks,
+      ...state.queue.slice(insertIdx)
+    ];
+    const newShuffled = [
+      ...state.shuffledQueue.slice(0, insertIdx),
+      ...validTracks,
+      ...state.shuffledQueue.slice(insertIdx)
+    ];
+    const newQueueOccurrenceIds = [
+      ...state.queueOccurrenceIds.slice(0, insertIdx),
+      ...occurrenceIds,
+      ...state.queueOccurrenceIds.slice(insertIdx)
+    ];
+    const newShuffledOccurrenceIds = [
+      ...state.shuffledQueueOccurrenceIds.slice(0, insertIdx),
+      ...occurrenceIds,
+      ...state.shuffledQueueOccurrenceIds.slice(insertIdx)
+    ];
+    return {
+      queue: newQueue,
+      queueOccurrenceIds: newQueueOccurrenceIds,
+      shuffledQueue: newShuffled,
+      shuffledQueueOccurrenceIds: newShuffledOccurrenceIds,
+      toastMessage: `Playing ${validTracks.length} tracks next`
+    };
+  }),
+
+  reorderQueueTrack: (activeItemId, overItemId) => set((state) => {
+    if (!activeItemId || !overItemId || activeItemId === overItemId) return {};
+
+    const activeList = state.isShuffle ? [...state.shuffledQueue] : [...state.queue];
+    const activeOccurrences = state.isShuffle ? [...state.shuffledQueueOccurrenceIds] : [...state.queueOccurrenceIds];
+
+    const activeIdx = activeOccurrences.findIndex((occ, i) => occ === activeItemId || getTrackInstanceId(activeList[i], i) === activeItemId);
+    const overIdx = activeOccurrences.findIndex((occ, i) => occ === overItemId || getTrackInstanceId(activeList[i], i) === overItemId);
+
+    if (activeIdx === -1 || overIdx === -1 || activeIdx === overIdx) return {};
+
+    const currentOccurrenceId = activeOccurrences[state.queueIndex];
+
+    const [movedTrack] = activeList.splice(activeIdx, 1);
+    const [movedOcc] = activeOccurrences.splice(activeIdx, 1);
+    activeList.splice(overIdx, 0, movedTrack);
+    activeOccurrences.splice(overIdx, 0, movedOcc);
+
+    let newQueueIndex = currentOccurrenceId ? activeOccurrences.indexOf(currentOccurrenceId) : state.queueIndex;
+    if (newQueueIndex === -1 && state.currentTrack) {
+      newQueueIndex = activeList.findIndex(t => t.id === state.currentTrack?.id);
+    }
+    if (newQueueIndex === -1) newQueueIndex = Math.min(state.queueIndex, activeList.length - 1);
+
+    if (state.isShuffle) {
+      return {
+        shuffledQueue: activeList,
+        shuffledQueueOccurrenceIds: activeOccurrences,
+        queueIndex: newQueueIndex
+      };
+    } else {
+      return {
+        queue: activeList,
+        queueOccurrenceIds: activeOccurrences,
+        queueIndex: newQueueIndex
+      };
+    }
   }),
 
   removeFromQueue: (index) => set((state) => {
@@ -1410,17 +1510,25 @@ export const usePlayerStore = create<PlayerState>()(
 
   deletePlaylist: (playlistId: string) => {
     const before = get();
+    const pl = before.playlists.find(p => p.id === playlistId);
+    const storedCoverId = before.localPlaylistMetadata?.[playlistId]?.coverId ?? pl?.coverId;
+    if (storedCoverId) {
+      void deletePlaylistCover(storedCoverId);
+    }
     const owner = captureContextMenuAuthOwner();
     const version = playlistOptimisticLedger.mark(playlistId, owner);
     const removedPlaylists = captureRemovedEntities(before.playlists, item => item.id === playlistId);
     const removedAlbums = captureRemovedEntities(before.savedAlbums,
       item => item.id === playlistId || item.id === `album-${playlistId}` || item.id === `playlist-${playlistId}`);
     set((state) => {
-      const pl = state.playlists.find(p => p.id === playlistId);
+      const plItem = state.playlists.find(p => p.id === playlistId);
+      const nextMeta = { ...(state.localPlaylistMetadata || {}) };
+      delete nextMeta[playlistId];
       return {
         playlists: state.playlists.filter(p => p.id !== playlistId),
         savedAlbums: state.savedAlbums.filter(a => a.id !== playlistId && a.id !== `album-${playlistId}` && a.id !== `playlist-${playlistId}`),
-        toastMessage: pl ? `Deleted "${pl.name}"` : 'Deleted playlist'
+        localPlaylistMetadata: nextMeta,
+        toastMessage: plItem ? `Deleted "${plItem.name}"` : 'Deleted playlist'
       };
     });
     void supabaseSync.syncPlaylistDelete(playlistId).then(result => {
@@ -1437,16 +1545,34 @@ export const usePlayerStore = create<PlayerState>()(
   updatePlaylist: (playlistId, updates) => set((state) => {
     const pl = state.playlists.find(p => p.id === playlistId);
     if (!pl) return {};
+
+    const currentCoverId = state.localPlaylistMetadata?.[playlistId]?.coverId ?? pl.coverId;
+    // Clean up old cover blob if a new one is provided or explicitly cleared
+    if ('coverId' in updates && currentCoverId && currentCoverId !== updates.coverId) {
+      void deletePlaylistCover(currentCoverId);
+    }
+
+    const nextMeta = { ...(state.localPlaylistMetadata || {}) };
+    if ('coverId' in updates) {
+      if (updates.coverId) {
+        nextMeta[playlistId] = { ...nextMeta[playlistId], coverId: updates.coverId };
+      } else {
+        delete nextMeta[playlistId];
+      }
+    }
+
     const updatedPl: Playlist = {
       ...pl,
       name: updates.name !== undefined ? updates.name.trim() || pl.name : pl.name,
-      description: updates.description !== undefined ? updates.description : pl.description,
-      cover: updates.cover !== undefined ? updates.cover : pl.cover
+      description: 'description' in updates ? (updates.description ?? '') : pl.description,
+      cover: 'cover' in updates ? (updates.cover ?? '') : pl.cover,
+      coverId: 'coverId' in updates ? updates.coverId : pl.coverId
     };
     const updated = state.playlists.map(p => p.id === playlistId ? updatedPl : p);
     syncPlaylistUpTracked(updatedPl);
     return {
       playlists: updated,
+      localPlaylistMetadata: nextMeta,
       toastMessage: `Updated "${updatedPl.name}"`
     };
   }),
@@ -1471,10 +1597,6 @@ export const usePlayerStore = create<PlayerState>()(
     const initialCandidateIds = new Set(
       initialPlaylist.tracks.filter(isMissingExactRequestedTrack).map(track => track.id)
     );
-    // Each attempt needs its own full pass because the last page may be only
-    // partially filled. Multiplying after rounding guarantees that every
-    // initial candidate can receive every bounded attempt (for example 205
-    // tracks require 3 pages per pass, not 5 pages total for two attempts).
     const maxPages = Math.ceil(initialCandidateIds.size / pageSize) * maxAttemptsPerTrack;
     const isEligibleMissingTrack = (track: Track) =>
       initialCandidateIds.has(track.id) && isMissingExactRequestedTrack(track);
@@ -1533,8 +1655,6 @@ export const usePlayerStore = create<PlayerState>()(
     if (!latestPlaylist) return { attempted, resolved, remaining: 0, exhausted: false };
     const remaining = latestPlaylist.tracks.filter(isEligibleMissingTrack).length;
 
-    // Persist one freshest snapshot after all pages so concurrent reorder/name/
-    // description edits cannot be replaced by an older backfill snapshot.
     if (changedAny) await syncPlaylistUpTracked(latestPlaylist);
     return {
       attempted,
@@ -1549,13 +1669,30 @@ export const usePlayerStore = create<PlayerState>()(
     if (!pl) return {};
     const updatedPl: Playlist = {
       ...pl,
-      tracks: pl.tracks.filter(t => t.id !== trackId)
+      tracks: pl.tracks.filter(t => t.id !== trackId && t._uid !== trackId)
     };
     const updated = state.playlists.map(p => p.id === playlistId ? updatedPl : p);
     syncPlaylistUpTracked(updatedPl);
     return {
       playlists: updated,
       toastMessage: `Removed from "${pl.name}"`
+    };
+  }),
+
+  removeTracksFromPlaylist: (playlistId, itemIds) => set((state) => {
+    const pl = state.playlists.find(p => p.id === playlistId);
+    if (!pl || !itemIds || itemIds.length === 0) return {};
+    const itemIdsSet = new Set(itemIds);
+
+    const updatedPl: Playlist = {
+      ...pl,
+      tracks: pl.tracks.filter((t, idx) => !itemIdsSet.has(getTrackInstanceId(t, idx)) && !itemIdsSet.has(t.id) && !itemIdsSet.has(t._uid || ''))
+    };
+    const updated = state.playlists.map(p => p.id === playlistId ? updatedPl : p);
+    syncPlaylistUpTracked(updatedPl);
+    return {
+      playlists: updated,
+      toastMessage: `Removed ${itemIds.length} tracks from "${pl.name}"`
     };
   }),
 
@@ -1568,7 +1705,8 @@ export const usePlayerStore = create<PlayerState>()(
         return { toastMessage: `"${track.title}" is already in ${pl.name}` };
       }
       added = true;
-      const updatedPl: Playlist = { ...pl, tracks: [...pl.tracks, track] };
+      const trackWithUid = ensureTrackInstanceId(track);
+      const updatedPl: Playlist = { ...pl, tracks: [...pl.tracks, trackWithUid] };
       const updated = state.playlists.map(p =>
         p.id === playlistId ? updatedPl : p
       );
@@ -1590,11 +1728,14 @@ export const usePlayerStore = create<PlayerState>()(
       if (!pl) return {};
 
       const existingIds = new Set(pl.tracks.map(t => t.id));
-      const additions = tracks.filter(track => {
-        if (!track || existingIds.has(track.id)) return false;
-        existingIds.add(track.id);
-        return true;
-      });
+      const additions = tracks
+        .filter(track => {
+          if (!track || existingIds.has(track.id)) return false;
+          existingIds.add(track.id);
+          return true;
+        })
+        .map(ensureTrackInstanceId);
+
       if (additions.length === 0) {
         return { toastMessage: `Selected tracks are already in ${pl.name}` };
       }
@@ -1629,6 +1770,28 @@ export const usePlayerStore = create<PlayerState>()(
     return {
       playlists: state.playlists.map(p => p.id === playlistId ? updatedPl : p),
       toastMessage: `Updated the order of ${pl.name}`
+    };
+  }),
+
+  reorderPlaylistTrack: (playlistId, activeItemId, overItemId) => set((state) => {
+    const pl = state.playlists.find(p => p.id === playlistId);
+    if (!pl || !activeItemId || !overItemId || activeItemId === overItemId) return {};
+
+    const activeIdx = pl.tracks.findIndex((t, idx) => getTrackInstanceId(t, idx) === activeItemId || t._uid === activeItemId);
+    const overIdx = pl.tracks.findIndex((t, idx) => getTrackInstanceId(t, idx) === overItemId || t._uid === overItemId);
+
+    if (activeIdx === -1 || overIdx === -1 || activeIdx === overIdx) return {};
+
+    const reordered = [...pl.tracks];
+    const [moved] = reordered.splice(activeIdx, 1);
+    reordered.splice(overIdx, 0, moved);
+
+    const updatedPl: Playlist = { ...pl, tracks: reordered };
+    syncPlaylistUpTracked(updatedPl);
+
+    return {
+      playlists: state.playlists.map(p => p.id === playlistId ? updatedPl : p),
+      toastMessage: `Updated order of "${pl.name}"`
     };
   }),
 
@@ -2035,6 +2198,7 @@ export const usePlayerStore = create<PlayerState>()(
       partialize: (state) => ({
         favorites: state.favorites,
         playlists: state.playlists,
+        localPlaylistMetadata: state.localPlaylistMetadata,
         savedAlbums: state.savedAlbums,
         followedArtists: state.followedArtists,
         volume: state.volume,
@@ -2056,6 +2220,20 @@ export const usePlayerStore = create<PlayerState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
+        if (!state.localPlaylistMetadata || typeof state.localPlaylistMetadata !== 'object') {
+          state.localPlaylistMetadata = {};
+        }
+        // Seamless migration: Ensure any legacy playlist coverIds are captured in localPlaylistMetadata
+        if (Array.isArray(state.playlists)) {
+          for (const p of state.playlists) {
+            if (p?.id && p?.coverId && !state.localPlaylistMetadata[p.id]?.coverId) {
+              state.localPlaylistMetadata[p.id] = {
+                ...state.localPlaylistMetadata[p.id],
+                coverId: p.coverId
+              };
+            }
+          }
+        }
         if (!Array.isArray(state.queueOccurrenceIds) || state.queueOccurrenceIds.length !== state.queue.length) {
           state.queueOccurrenceIds = state.queue.map(() => createQueueOccurrenceId());
         }
