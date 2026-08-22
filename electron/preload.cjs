@@ -123,5 +123,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getYoutubeAuthState: async () => {
     return await ipcRenderer.invoke('get-youtube-auth-state');
+  },
+  updateDiscordPresence: async (payload) => {
+    return await ipcRenderer.invoke('discord-rpc-update', payload);
+  },
+  clearDiscordPresence: async () => {
+    return await ipcRenderer.invoke('discord-rpc-clear');
+  },
+  setDiscordPresenceEnabled: async (enabled) => {
+    return await ipcRenderer.invoke('discord-rpc-set-enabled', enabled);
   }
 });
+

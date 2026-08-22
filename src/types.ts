@@ -222,3 +222,35 @@ export interface DownloadedTrackMeta {
 
 export type DownloadStatus = 'idle' | 'downloading' | 'completed' | 'error';
 
+export interface DiscordPresencePayload {
+  title: string;
+  artist: string;
+  album?: string;
+  artworkUrl?: string;
+  duration: number;
+  currentTime: number;
+  isPlaying: boolean;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      isElectron: boolean;
+      getProxyPort?: () => Promise<number>;
+      getDefaultMusicDir?: () => Promise<string>;
+      getDefaultDownloadDir?: () => Promise<string>;
+      saveAudioToDisk?: (filename: string, buffer: ArrayBuffer, targetDir?: string, videoId?: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+      openFolder?: (folderPath?: string) => Promise<void>;
+      selectDirectory?: () => Promise<string | null>;
+      showItemInFolder?: (fullPath: string) => Promise<void>;
+      openYoutubeSignIn?: () => Promise<boolean>;
+      signOutYoutube?: () => Promise<boolean>;
+      getYoutubeAuthState?: () => Promise<'signed_in' | 'signed_out'>;
+      updateDiscordPresence?: (payload: DiscordPresencePayload) => Promise<{ success: boolean; error?: string }>;
+      clearDiscordPresence?: () => Promise<{ success: boolean; error?: string }>;
+      setDiscordPresenceEnabled?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+      [key: string]: any;
+    };
+  }
+}
+

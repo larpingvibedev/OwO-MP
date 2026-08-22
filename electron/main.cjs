@@ -24,6 +24,7 @@ const {
   awaitResolverStep,
   normalizeResolverError
 } = require('./resolver-deadline.cjs');
+const { getDiscordPresenceService } = require('./discordPresence.cjs');
 let mm = null;
 try { mm = require('music-metadata'); } catch (e) {}
 
@@ -3747,6 +3748,42 @@ app.whenReady().then(() => {
   });
 });
 
+// ----------------------------------------------------
+// DISCORD RICH PRESENCE IPC HANDLERS
+// ----------------------------------------------------
+ipcMain.handle('discord-rpc-update', async (event, payload) => {
+  try {
+    getDiscordPresenceService().updateActivity(payload);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('discord-rpc-clear', async () => {
+  try {
+    getDiscordPresenceService().clearActivity();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('discord-rpc-set-enabled', async (event, enabled) => {
+  try {
+    getDiscordPresenceService().setEnabled(enabled);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err?.message || String(err) };
+  }
+});
+
+app.on('before-quit', () => {
+  try {
+    getDiscordPresenceService().cleanup();
+  } catch (e) {}
+});
+
 app.on('window-all-closed', () => {
   if (musicFolderWatcher) {
     try { musicFolderWatcher.close(); } catch (e) {}
@@ -3755,3 +3792,4 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+

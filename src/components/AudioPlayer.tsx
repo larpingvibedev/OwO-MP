@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { 
   getDirectYouTubeId,
@@ -35,6 +35,28 @@ export const AudioPlayer = () => {
     showToast
   } = usePlayerStore();
 
+  // Authoritative, validated MediaSession position state synchronizer (Windows SMTC & OS Controls)
+  const syncMediaSessionPosition = useCallback((customTime?: number, customDuration?: number) => {
+    if (!('mediaSession' in navigator) || typeof navigator.mediaSession.setPositionState !== 'function') return;
+    const state = usePlayerStore.getState();
+    const effectiveDuration = customDuration !== undefined ? customDuration : state.duration;
+    const effectiveTime = customTime !== undefined ? customTime : state.currentTime;
+
+    if (!state.currentTrack || !Number.isFinite(effectiveDuration) || effectiveDuration <= 0 || !Number.isFinite(effectiveTime)) {
+      return;
+    }
+
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: effectiveDuration,
+        playbackRate: state.isPlaying ? 1 : 0,
+        position: Math.min(Math.max(effectiveTime, 0), effectiveDuration)
+      });
+    } catch {
+      // Safe no-op on transient boundary condition
+    }
+  }, []);
+
   // 1. Initialize Web Audio Engine & Listeners
   useEffect(() => {
     syncOfflineTracks();
@@ -58,15 +80,27 @@ export const AudioPlayer = () => {
             return;
           }
 
-          if (data.error === 'LOGIN_REQUIRED') {
-            const authState = electronAPI.getYoutubeAuthState ? await electronAPI.getYoutubeAuthState() : 'signed_out';
-            if (authState === 'signed_in') {
-              showToast("This track isn't available for this account.");
-            } else {
-              showToast("Sign in to YouTube (Settings) to play this track.");
+          if (cur) {
+            console.warn('[AudioPlayer] Background YouTube error, falling back:', data.error);
+            invalidateVideoId(cur.artist, cur.title);
+            const currentFailCount = (trackFailedCountRef.current.get(cur.id) || 0) + 1;
+            trackFailedCountRef.current.set(cur.id, currentFailCount);
+
+            if (currentFailCount <= 2) {
+              try {
+                const fallbackId = await resolveAlternativeVideoId(
+                  cur.artist,
+                  cur.title,
+                  getDirectYouTubeId(cur) || undefined
+                );
+                if (fallbackId && electronAPI?.playYouTubeTrack) {
+                  electronAPI.playYouTubeTrack(fallbackId, cur.title, cur.artist, volume);
+                  return;
+                }
+              } catch (e) {
+                console.warn('[AudioPlayer] Fallback resolution failed:', e);
+              }
             }
-          } else if (data.error === 'UNPLAYABLE' || data.error === 'ERROR') {
-            showToast("This track is unavailable or age-restricted.");
           }
           nextTrack();
           return;
@@ -90,6 +124,8 @@ export const AudioPlayer = () => {
         if (typeof data.currentTime === 'number') {
           setCurrentTime(data.currentTime);
         }
+        syncMediaSessionPosition(data.currentTime, data.duration);
+
         if (data.ended) {
           if (usePlayerStore.getState().repeatMode === 'one') {
             electronAPI.seekYouTubeTrack?.(0);
@@ -115,7 +151,7 @@ export const AudioPlayer = () => {
       if (unsubscribeYtState) unsubscribeYtState();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [syncMediaSessionPosition]);
 
   // 2. Play / Pause Control
   useEffect(() => {
@@ -169,12 +205,14 @@ export const AudioPlayer = () => {
       if (isOnlineYtTrackRef.current && electronAPI?.seekYouTubeTrack) {
         electronAPI.seekYouTubeTrack(targetTime);
         setCurrentTime(targetTime);
+        syncMediaSessionPosition(targetTime);
         return;
       }
 
       if (audioRef.current) {
         try {
           audioRef.current.currentTime = targetTime;
+          syncMediaSessionPosition(targetTime);
         } catch (err) {
           console.warn('[AudioPlayer] Seek error:', err);
         }
@@ -183,7 +221,7 @@ export const AudioPlayer = () => {
 
     window.addEventListener('music:seek', handleSeek);
     return () => window.removeEventListener('music:seek', handleSeek);
-  }, [setCurrentTime]);
+  }, [setCurrentTime, syncMediaSessionPosition]);
 
   // 5. Track Loading & Native Streaming
   useEffect(() => {
@@ -395,24 +433,101 @@ export const AudioPlayer = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.id, playNonce]);
 
-  // 6. MediaSession Integration
+  // 6. MediaSession Integration & System Media Transport Controls (Windows/Mac/Mobile)
   useEffect(() => {
-    if ('mediaSession' in navigator && currentTrack) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: currentTrack.title,
-        artist: currentTrack.artist,
-        album: currentTrack.album || 'OwO Music Player',
-        artwork: [
-          { src: currentTrack.cover, sizes: '512x512', type: 'image/png' }
-        ]
-      });
+    if (!('mediaSession' in navigator)) return;
 
-      navigator.mediaSession.setActionHandler('play', () => setIsPlaying(true));
-      navigator.mediaSession.setActionHandler('pause', () => setIsPlaying(false));
-      navigator.mediaSession.setActionHandler('previoustrack', () => prevTrack());
-      navigator.mediaSession.setActionHandler('nexttrack', () => nextTrack());
+    if (currentTrack) {
+      const artwork: MediaImage[] = [];
+      if (currentTrack.cover && (currentTrack.cover.startsWith('http://') || currentTrack.cover.startsWith('https://') || currentTrack.cover.startsWith('data:') || currentTrack.cover.startsWith('blob:'))) {
+        artwork.push({
+          src: currentTrack.cover,
+          sizes: '512x512',
+          type: 'image/png'
+        });
+      }
+
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title || 'Unknown Track',
+        artist: currentTrack.artist || 'Unknown Artist',
+        album: currentTrack.album || 'OwO Music Player',
+        artwork
+      });
+    } else {
+      navigator.mediaSession.metadata = null;
     }
-  }, [currentTrack, setIsPlaying, prevTrack, nextTrack]);
+
+    syncMediaSessionPosition();
+  }, [currentTrack, syncMediaSessionPosition]);
+
+  // 7. MediaSession Playback State
+  useEffect(() => {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+      syncMediaSessionPosition();
+    }
+  }, [isPlaying, syncMediaSessionPosition]);
+
+  // 8. MediaSession Action Handlers (Seek bar, Next/Prev, Play/Pause)
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    const safeSetAction = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch {}
+    };
+
+    safeSetAction('play', () => {
+      setIsPlaying(true);
+    });
+
+    safeSetAction('pause', () => {
+      setIsPlaying(false);
+    });
+
+    safeSetAction('previoustrack', () => {
+      prevTrack();
+    });
+
+    safeSetAction('nexttrack', () => {
+      nextTrack();
+    });
+
+    safeSetAction('seekto', (details) => {
+      if (typeof details.seekTime === 'number' && Number.isFinite(details.seekTime)) {
+        const state = usePlayerStore.getState();
+        const duration = state.duration || 0;
+        const target = Math.max(0, duration > 0 ? Math.min(details.seekTime, duration) : details.seekTime);
+        window.dispatchEvent(new CustomEvent('music:seek', { detail: { time: target } }));
+        syncMediaSessionPosition(target, duration);
+      }
+    });
+
+    safeSetAction('seekforward', (details) => {
+      const state = usePlayerStore.getState();
+      const offset = details.seekOffset || 10;
+      const duration = state.duration || 0;
+      const target = duration > 0 ? Math.min(duration, state.currentTime + offset) : state.currentTime + offset;
+      window.dispatchEvent(new CustomEvent('music:seek', { detail: { time: target } }));
+      syncMediaSessionPosition(target, duration);
+    });
+
+    safeSetAction('seekbackward', (details) => {
+      const state = usePlayerStore.getState();
+      const offset = details.seekOffset || 10;
+      const target = Math.max(0, state.currentTime - offset);
+      window.dispatchEvent(new CustomEvent('music:seek', { detail: { time: target } }));
+      syncMediaSessionPosition(target, state.duration);
+    });
+
+    return () => {
+      const actions: MediaSessionAction[] = ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto', 'seekforward', 'seekbackward'];
+      actions.forEach((act) => {
+        safeSetAction(act, null);
+      });
+    };
+  }, [setIsPlaying, prevTrack, nextTrack, syncMediaSessionPosition]);
 
   return (
     <audio
@@ -435,12 +550,16 @@ export const AudioPlayer = () => {
       }}
       onTimeUpdate={() => {
         if (!isOnlineYtTrackRef.current && audioRef.current) {
-          setCurrentTime(audioRef.current.currentTime);
+          const cur = audioRef.current.currentTime;
+          setCurrentTime(cur);
+          syncMediaSessionPosition(cur, audioRef.current.duration);
         }
       }}
       onLoadedMetadata={() => {
         if (!isOnlineYtTrackRef.current && audioRef.current && audioRef.current.duration > 0) {
-          setDuration(audioRef.current.duration);
+          const dur = audioRef.current.duration;
+          setDuration(dur);
+          syncMediaSessionPosition(audioRef.current.currentTime, dur);
         }
       }}
       onEnded={() => {

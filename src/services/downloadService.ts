@@ -71,24 +71,6 @@ function appendDiskVideoId(fileName: string, videoId?: string): string {
   return `${stem} [${videoId}]${extension}`;
 }
 
-declare global {
-  interface Window {
-    electronAPI?: {
-      isElectron: boolean;
-      getProxyPort: () => Promise<number>;
-      getDefaultMusicDir: () => Promise<string>;
-      getDefaultDownloadDir?: () => Promise<string>;
-      saveAudioToDisk: (filename: string, buffer: ArrayBuffer, targetDir?: string, videoId?: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
-      openFolder: (folderPath?: string) => Promise<void>;
-      selectDirectory: () => Promise<string | null>;
-      showItemInFolder: (fullPath: string) => Promise<void>;
-      openYoutubeSignIn: () => Promise<boolean>;
-      signOutYoutube: () => Promise<boolean>;
-      getYoutubeAuthState: () => Promise<'signed_in' | 'signed_out'>;
-    };
-  }
-}
-
 /**
  * Resolves direct high-quality audio stream for a track.
  */
@@ -115,7 +97,7 @@ export async function resolveDirectAudioStream(track: Track): Promise<{ url: str
 
   // If running inside Electron, stream via internal background proxy port
   let baseUrl = '';
-  if (window.electronAPI?.isElectron) {
+  if (window.electronAPI?.isElectron && window.electronAPI.getProxyPort) {
     try {
       const port = await window.electronAPI.getProxyPort();
       if (port) baseUrl = `http://127.0.0.1:${port}`;
@@ -376,13 +358,13 @@ export async function exportTrackToDisk(track: Track, existingBlob?: Blob): Prom
   const fileName = appendDiskVideoId(`${cleanArtist} - ${cleanTitle}.${ext}`, videoId);
 
   // 0. If running inside Electron, use native disk saving directly into chosen folder
-  if (window.electronAPI?.isElectron) {
+  if (window.electronAPI?.isElectron && window.electronAPI.saveAudioToDisk) {
     try {
       const db = await getDB();
       const targetDir = await db.get(STORE_CONFIG, 'custom_directory_name');
       const buffer = await blob.arrayBuffer();
       const res = await window.electronAPI.saveAudioToDisk(fileName, buffer, targetDir || undefined, videoId);
-      if (res.success) {
+      if (res && res.success) {
         return { success: true, path: res.filePath || fileName };
       }
     } catch (e) {

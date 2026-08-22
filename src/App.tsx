@@ -17,6 +17,7 @@ import { supabaseSync } from './services/supabaseSyncService';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { GlobalContextMenu } from './components/common/GlobalContextMenu';
 import { BulkTrackActionBar } from './components/common/BulkTrackActionBar';
+import { DiscordRPCManager } from './components/common/DiscordRPCManager';
 import './App.css';
 
 function App() {
@@ -50,6 +51,7 @@ function App() {
 
   return (
     <ErrorBoundary>
+      <DiscordRPCManager />
       <AuthModal />
       <EditProfileModal />
       <DeviceConnectModal isOpen={showDeviceModal} onClose={() => setShowDeviceModal(false)} />

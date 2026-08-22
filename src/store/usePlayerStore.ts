@@ -142,6 +142,7 @@ interface PlayerState {
   activePlayerTab: 'up_next' | 'lyrics' | 'related';
   isPlayerDrawerOpen: boolean;
   useRotatingCD: boolean;
+  discordRpcEnabled: boolean;
   
   // Advanced Playback State & History
   isShuffle: boolean;
@@ -201,6 +202,8 @@ interface PlayerState {
   closePlayerDrawer: () => void;
   togglePlayerDrawer: (tab?: 'up_next' | 'lyrics' | 'related') => void;
   toggleRotatingCD: () => void;
+  toggleDiscordRpc: () => void;
+  setDiscordRpcEnabled: (enabled: boolean) => void;
 
   toggleShuffle: () => void;
   toggleRepeat: () => void;
@@ -420,6 +423,7 @@ export const usePlayerStore = create<PlayerState>()(
   activePlayerTab: 'up_next',
   isPlayerDrawerOpen: false,
   useRotatingCD: false,
+  discordRpcEnabled: true,
 
   activeView: 'dashboard',
   searchQuery: '',
@@ -555,6 +559,19 @@ export const usePlayerStore = create<PlayerState>()(
     return { isPlayerDrawerOpen: true, activePlayerTab: tab || state.activePlayerTab };
   }),
   toggleRotatingCD: () => set((state) => ({ useRotatingCD: !state.useRotatingCD })),
+  toggleDiscordRpc: () => {
+    const next = !get().discordRpcEnabled;
+    set({ discordRpcEnabled: next });
+    if (window.electronAPI?.setDiscordPresenceEnabled) {
+      window.electronAPI.setDiscordPresenceEnabled(next);
+    }
+  },
+  setDiscordRpcEnabled: (enabled: boolean) => {
+    set({ discordRpcEnabled: enabled });
+    if (window.electronAPI?.setDiscordPresenceEnabled) {
+      window.electronAPI.setDiscordPresenceEnabled(enabled);
+    }
+  },
 
   setQueue: (tracks, initialIndex = 0, playingFrom, forceRefresh = true, contextType) => {
     const isShuffle = get().isShuffle;
@@ -2216,7 +2233,8 @@ export const usePlayerStore = create<PlayerState>()(
         blockedArtists: state.blockedArtists,
         downloadedTrackIds: state.downloadedTrackIds,
         isOfflineOnly: state.isOfflineOnly,
-        useRotatingCD: state.useRotatingCD
+        useRotatingCD: state.useRotatingCD,
+        discordRpcEnabled: state.discordRpcEnabled ?? true
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;

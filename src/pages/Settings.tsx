@@ -142,7 +142,9 @@ export function Settings() {
     autoplay,
     toggleAutoplay,
     useRotatingCD,
-    toggleRotatingCD
+    toggleRotatingCD,
+    discordRpcEnabled,
+    toggleDiscordRpc
   } = usePlayerStore();
 
   const historyCount = Object.keys(playHistory || {}).length;
@@ -316,6 +318,28 @@ export function Settings() {
             <div className="settings-switch-thumb" />
           </div>
         </div>
+
+        {/* Discord Rich Presence (RPC) */}
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">
+              <span>Discord Rich Presence</span>
+              <span className="settings-badge" style={{ backgroundColor: discordRpcEnabled ? 'rgba(88, 101, 242, 0.18)' : 'rgba(255,255,255,0.06)', color: discordRpcEnabled ? '#5865F2' : 'var(--text-secondary)' }}>
+                {discordRpcEnabled ? 'Broadcasting' : 'Off'}
+              </span>
+            </div>
+            <div className="settings-row-desc">
+              Broadcast your currently playing song, artist, album art, and progress bar to your Discord profile status.
+            </div>
+          </div>
+          <div 
+            className={`settings-switch ${discordRpcEnabled ? 'active' : ''}`}
+            onClick={toggleDiscordRpc}
+            title="Toggle Discord Rich Presence"
+          >
+            <div className="settings-switch-thumb" />
+          </div>
+        </div>
       </div>
 
       {/* ========================================================================= */}
@@ -375,7 +399,7 @@ export function Settings() {
             {window.electronAPI?.isElectron && (
               <button 
                 className="settings-btn-secondary"
-                onClick={() => window.electronAPI?.openFolder(customDirName || undefined)}
+                onClick={() => window.electronAPI?.openFolder?.(customDirName || undefined)}
                 title="Open download folder in File Explorer"
               >
                 <FolderOpen size={13} />
