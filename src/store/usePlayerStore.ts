@@ -8,7 +8,8 @@ import {
   getAllOfflineRecords, 
   clearAllOfflineStorage,
   getCustomDirectoryName,
-  exportTrackToDisk 
+  exportTrackToDisk,
+  type OfflineRecord
 } from '../services/downloadService';
 import {
   reconcileConfiguredOfflineRecords
@@ -37,6 +38,9 @@ const playlistOptimisticLedger = new OptimisticMutationLedger();
 const favoriteOptimisticLedger = new OptimisticMutationLedger();
 let queueOccurrenceSequence = 1;
 const createQueueOccurrenceId = () => `qo_${Date.now().toString(36)}_${queueOccurrenceSequence++}`;
+
+let lastSyncToastTime = 0;
+let lastSyncToastMsg = '';
 
 function syncPlaylistUpTracked(playlist: Playlist) {
   playlistOptimisticLedger.mark(playlist.id, captureContextMenuAuthOwner());
@@ -156,6 +160,7 @@ interface PlayerState {
   // Offline Downloads & Storage
   downloadedTrackIds: Record<string, { downloadedAt: number; sizeBytes?: number; title?: string; artist?: string }>;
   downloadingTrackIds: Record<string, number>;
+  offlineRecords: OfflineRecord[];
   isOfflineOnly: boolean;
 
   // Toast Notifications
@@ -253,6 +258,48 @@ let isFetchingContinuation = false;
 const activeTrackDownloadPromises = new Map<string, Promise<boolean>>();
 const BATCH_OWNER_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
 
+export function isOfflineTrack(track?: Track | null): boolean {
+  if (!track) return false;
+  return Boolean(
+    track.source === 'local' ||
+    track.isLocal ||
+    track.isDownloaded ||
+    track.isAppDownload ||
+    track.id?.startsWith('local-') ||
+    track.filePath
+  );
+}
+
+export function shouldAllowOnlineContinuation(params: {
+  autoplay?: boolean;
+  playingFrom?: string;
+  currentTrack?: Track | null;
+  activeQueue: Track[];
+}): boolean {
+  if (!params.autoplay) return false;
+  if (!params.activeQueue || params.activeQueue.length === 0) return false;
+
+  const pf = (params.playingFrom || '').toLowerCase();
+  if (
+    pf.includes('local files') ||
+    pf.includes('offline storage') ||
+    pf.includes('offline downloads')
+  ) {
+    return false;
+  }
+
+  const isPurelyOffline = params.activeQueue.length > 0 && params.activeQueue.every(isOfflineTrack);
+  if (isPurelyOffline) {
+    return false;
+  }
+
+  if (isOfflineTrack(params.currentTrack) && params.activeQueue.every(isOfflineTrack)) {
+    return false;
+  }
+
+  return true;
+}
+
 async function checkAndTriggerContinuation(
   get: () => PlayerState,
   set: (fn: (state: PlayerState) => Partial<PlayerState> | PlayerState) => void
@@ -269,17 +316,14 @@ async function checkAndTriggerContinuation(
     playHistory, 
     dislikedTracks, 
     blockedArtists, 
-    queueSessionId 
+    queueSessionId,
+    playingFrom
   } = get();
 
-  if (!autoplay) return;
   if (isFetchingContinuation) return;
 
   const activeQueue = isShuffle ? shuffledQueue : queue;
-  if (activeQueue.length === 0) return;
-
-  // Local tracks must NEVER trigger online mix continuation
-  if (currentTrack?.isLocal || currentTrack?.id?.startsWith('local-') || activeQueue.some(t => t.isLocal || t.id?.startsWith('local-'))) {
+  if (!shouldAllowOnlineContinuation({ autoplay, playingFrom, currentTrack, activeQueue })) {
     return;
   }
 
@@ -383,6 +427,7 @@ export const usePlayerStore = create<PlayerState>()(
 
   downloadedTrackIds: {},
   downloadingTrackIds: {},
+  offlineRecords: [],
   isOfflineOnly: false,
 
   isSidebarCollapsed: false,
@@ -411,10 +456,10 @@ export const usePlayerStore = create<PlayerState>()(
   playbackContext: null,
   setPlaybackContext: (playbackContext) => set({ playbackContext }),
   setCurrentTrack: (track, forceRefresh = true, contextType) => {
-    const isLocalTrack = track.isLocal || track.id?.startsWith('local-');
-    const context = isLocalTrack ? (track.album || 'Local Files') : `${track.title} Mix`;
+    const isOffline = isOfflineTrack(track);
+    const context = isOffline ? (track.album || 'Local Files') : `${track.title} Mix`;
     const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const newContextType = isLocalTrack ? 'user_playlist' : (contextType !== undefined ? contextType : 'radio');
+    const newContextType = isOffline ? 'user_playlist' : (contextType !== undefined ? contextType : 'radio');
     const occurrenceId = createQueueOccurrenceId();
     set((state) => ({ 
       currentTrack: track, 
@@ -434,7 +479,14 @@ export const usePlayerStore = create<PlayerState>()(
       playNonce: state.playNonce + 1
     }));
 
-    if (!isLocalTrack && newContextType !== 'user_playlist') {
+    const allowContinuation = shouldAllowOnlineContinuation({
+      autoplay: get().autoplay,
+      playingFrom: context,
+      currentTrack: track,
+      activeQueue: [track]
+    });
+
+    if (allowContinuation && newContextType !== 'user_playlist') {
       // Synthesize mix anchored to this seed track
       fetchUpNextMix([track], get().favorites, get().playHistory, new Set([track.id]), get().dislikedTracks, get().blockedArtists, forceRefresh)
         .then(mix => {
@@ -443,7 +495,7 @@ export const usePlayerStore = create<PlayerState>()(
           }
         })
         .catch(() => {});
-    } else if (!isLocalTrack) {
+    } else if (allowContinuation) {
       checkAndTriggerContinuation(get, set);
     }
   },
@@ -519,7 +571,8 @@ export const usePlayerStore = create<PlayerState>()(
     const shuffledQueueOccurrenceIds = shuffledEntries.map(entry => entry.occurrenceId);
 
     const cur = isShuffle ? shuffled[newIndex] : tracks[newIndex];
-    const isLocalQueue = tracks.every(t => t.isLocal || t.id?.startsWith('local-')) || (cur?.isLocal || cur?.id?.startsWith('local-'));
+    const isOfflineContext = (playingFrom || '').toLowerCase().includes('local files') || (playingFrom || '').toLowerCase().includes('offline');
+    const isLocalQueue = isOfflineContext || (tracks.length > 0 && tracks.every(isOfflineTrack));
     const sourceContext = playingFrom || (isLocalQueue ? 'Local Files' : (cur ? `${cur.title} Mix` : 'Queue'));
     const sessionId = `qs_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
@@ -547,7 +600,14 @@ export const usePlayerStore = create<PlayerState>()(
       playNonce: state.playNonce + 1
     }));
 
-    if (!isLocalQueue && resolvedContextType !== 'user_playlist') {
+    const allowContinuation = shouldAllowOnlineContinuation({
+      autoplay: get().autoplay,
+      playingFrom: sourceContext,
+      currentTrack: cur,
+      activeQueue: isShuffle ? shuffled : tracks
+    });
+
+    if (allowContinuation && resolvedContextType !== 'user_playlist') {
       // Synthesize multi-track radio mix for this entire queue session
       const queuedIds = new Set(tracks.map(t => t.id));
       fetchUpNextMix(tracks, get().favorites, get().playHistory, queuedIds, get().dislikedTracks, get().blockedArtists, forceRefresh)
@@ -557,7 +617,7 @@ export const usePlayerStore = create<PlayerState>()(
           }
         })
         .catch(() => {});
-    } else if (!isLocalQueue) {
+    } else if (allowContinuation) {
       checkAndTriggerContinuation(get, set);
     }
   },
@@ -784,17 +844,26 @@ export const usePlayerStore = create<PlayerState>()(
   },
 
   nextTrack: async () => {
-    const { queue, shuffledQueue, queueIndex, isShuffle, repeatMode, autoplay, recommendedUpNext, currentTrack, favorites, playHistory } = get();
+    const { queue, shuffledQueue, queueIndex, isShuffle, repeatMode, autoplay, recommendedUpNext, currentTrack, favorites, playHistory, playingFrom } = get();
     const activeQueue = isShuffle ? shuffledQueue : queue;
     if (activeQueue.length === 0 && !currentTrack) return;
+
+    const canContinue = shouldAllowOnlineContinuation({
+      autoplay,
+      playingFrom,
+      currentTrack,
+      activeQueue
+    });
 
     const nextIndex = queueIndex + 1;
     if (nextIndex < activeQueue.length) {
       set((state) => ({ queueIndex: nextIndex, currentTrack: activeQueue[nextIndex], currentTime: 0, duration: activeQueue[nextIndex].duration ?? 0, isPlaying: true, playNonce: state.playNonce + 1 }));
-      checkAndTriggerContinuation(get, set);
+      if (canContinue) {
+        checkAndTriggerContinuation(get, set);
+      }
     } else if (repeatMode === 'all' && activeQueue.length > 0) {
       set((state) => ({ queueIndex: 0, currentTrack: activeQueue[0], currentTime: 0, duration: activeQueue[0].duration ?? 0, isPlaying: true, playNonce: state.playNonce + 1 }));
-    } else if (autoplay && !currentTrack?.isLocal && !currentTrack?.id?.startsWith('local-') && !activeQueue.some(t => t.isLocal || t.id?.startsWith('local-'))) {
+    } else if (canContinue) {
       // 1. If pre-fetched auto-mix exists, play immediately
       if (recommendedUpNext && recommendedUpNext.length > 0) {
         const autoTrack = recommendedUpNext[0];
@@ -1699,8 +1768,11 @@ export const usePlayerStore = create<PlayerState>()(
           const nextDownloading = { ...state.downloadingTrackIds };
           delete nextDownloading[trackId];
 
+          const existingWithoutThis = (state.offlineRecords || []).filter(r => r.id !== trackId);
+
           return {
             downloadingTrackIds: nextDownloading,
+            offlineRecords: [...existingWithoutThis, record],
             downloadedTrackIds: {
               ...state.downloadedTrackIds,
               [trackId]: {
@@ -1746,6 +1818,7 @@ export const usePlayerStore = create<PlayerState>()(
         delete nextDownloaded[trackId];
         return {
           downloadedTrackIds: nextDownloaded,
+          offlineRecords: (state.offlineRecords || []).filter(r => r.id !== trackId),
           toastMessage: 'Removed from offline downloads'
         };
       });
@@ -1875,13 +1948,29 @@ export const usePlayerStore = create<PlayerState>()(
       const records = await getAllOfflineRecords();
       let recordsToKeep = records;
       if ((window as any).electronAPI?.getDiskAudioFiles) {
-        const reconciliation = await reconcileConfiguredOfflineRecords({
-          records,
-          getConfiguredDirectory: getCustomDirectoryName,
-          listFiles: targetDir => (window as any).electronAPI.getDiskAudioFiles(targetDir),
-          removeMissing: missingRecord => removeOfflineTrack(missingRecord.id)
-        });
-        recordsToKeep = reconciliation.present;
+        try {
+          const reconciliation = await reconcileConfiguredOfflineRecords({
+            records,
+            getConfiguredDirectory: getCustomDirectoryName,
+            listFiles: targetDir => (window as any).electronAPI.getDiskAudioFiles(targetDir),
+            removeMissing: missingRecord => removeOfflineTrack(missingRecord.id)
+          });
+          recordsToKeep = reconciliation.present;
+        } catch (reconErr) {
+          console.warn('Reconcile offline records failed, falling back to cached records:', reconErr);
+          recordsToKeep = records;
+          const stage = (reconErr as { stage?: string })?.stage;
+          const msg = stage
+            ? `Could not verify downloads (${stage}). Existing offline records were preserved.`
+            : 'Could not verify downloads. Existing offline records were preserved.';
+
+          const now = Date.now();
+          if (now - lastSyncToastTime > 15000 || lastSyncToastMsg !== msg) {
+            lastSyncToastTime = now;
+            lastSyncToastMsg = msg;
+            get().showToast(msg);
+          }
+        }
       }
 
       const map: Record<string, { downloadedAt: number; sizeBytes?: number; title?: string; artist?: string }> = {};
@@ -1893,15 +1982,39 @@ export const usePlayerStore = create<PlayerState>()(
           artist: r.track?.artist
         };
       }
-      set({ downloadedTrackIds: map });
+
+      // Check for actual data changes to avoid object identity churn in Zustand
+      const currentMap = get().downloadedTrackIds || {};
+      const currentRecords = get().offlineRecords || [];
+      const mapKeys = Object.keys(map);
+      const currentKeys = Object.keys(currentMap);
+
+      let hasChanged = mapKeys.length !== currentKeys.length || recordsToKeep.length !== currentRecords.length;
+      if (!hasChanged) {
+        for (const k of mapKeys) {
+          if (!currentMap[k] || currentMap[k].downloadedAt !== map[k].downloadedAt || currentMap[k].sizeBytes !== map[k].sizeBytes) {
+            hasChanged = true;
+            break;
+          }
+        }
+      }
+
+      if (hasChanged) {
+        set({ downloadedTrackIds: map, offlineRecords: recordsToKeep });
+      }
     } catch (e) {
       console.warn('Sync offline tracks failed:', e);
       const stage = (e as { stage?: string })?.stage;
-      set({
-        toastMessage: stage
-          ? `Could not verify downloads (${stage}). Existing offline records were preserved.`
-          : 'Could not verify downloads. Existing offline records were preserved.'
-      });
+      const msg = stage
+        ? `Could not verify downloads (${stage}). Existing offline records were preserved.`
+        : 'Could not verify downloads. Existing offline records were preserved.';
+
+      const now = Date.now();
+      if (now - lastSyncToastTime > 15000 || lastSyncToastMsg !== msg) {
+        lastSyncToastTime = now;
+        lastSyncToastMsg = msg;
+        get().showToast(msg);
+      }
     }
   },
 
@@ -1910,7 +2023,7 @@ export const usePlayerStore = create<PlayerState>()(
   clearAllDownloads: async () => {
     try {
       await clearAllOfflineStorage();
-      set({ downloadedTrackIds: {}, toastMessage: 'Cleared all offline downloads' });
+      set({ downloadedTrackIds: {}, offlineRecords: [], toastMessage: 'Cleared all offline downloads' });
     } catch (e) {
       console.error('Clear downloads failed:', e);
     }

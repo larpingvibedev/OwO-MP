@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDefaultMusicDir: async () => {
     return await ipcRenderer.invoke('get-default-music-dir');
   },
+  getDefaultDownloadDir: async () => {
+    return await ipcRenderer.invoke('get-default-download-dir');
+  },
   saveAudioToDisk: async (filename, arrayBuffer, targetDir, videoId) => {
     return await ipcRenderer.invoke('save-audio-to-disk', {
       filename,
@@ -70,6 +73,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   removeLocalMusicFolder: async (dir) => {
     return await ipcRenderer.invoke('remove-local-music-folder', dir);
+  },
+  deleteLocalMusicFile: async (filePath) => {
+    return await ipcRenderer.invoke('delete-local-music-file', filePath);
   },
   onDownloadProgress: (callback) => {
     const listener = (event, data) => callback(data);
@@ -119,4 +125,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return await ipcRenderer.invoke('get-youtube-auth-state');
   }
 });
-

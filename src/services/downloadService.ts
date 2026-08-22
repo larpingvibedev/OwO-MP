@@ -77,6 +77,7 @@ declare global {
       isElectron: boolean;
       getProxyPort: () => Promise<number>;
       getDefaultMusicDir: () => Promise<string>;
+      getDefaultDownloadDir?: () => Promise<string>;
       saveAudioToDisk: (filename: string, buffer: ArrayBuffer, targetDir?: string, videoId?: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
       openFolder: (folderPath?: string) => Promise<void>;
       selectDirectory: () => Promise<string | null>;
@@ -320,8 +321,13 @@ export async function getConfiguredDownloadDirectory(): Promise<ConfiguredDownlo
   // to an unset directory and must abort disk reconciliation.
   const name = await db.get(STORE_CONFIG, 'custom_directory_name');
   return resolveConfiguredDownloadDirectory(name, async () => {
-    if (window.electronAPI?.isElectron && window.electronAPI.getDefaultMusicDir) {
-      return await window.electronAPI.getDefaultMusicDir();
+    if (window.electronAPI?.isElectron) {
+      if (window.electronAPI.getDefaultDownloadDir) {
+        return await window.electronAPI.getDefaultDownloadDir();
+      }
+      if (window.electronAPI.getDefaultMusicDir) {
+        return await window.electronAPI.getDefaultMusicDir();
+      }
     }
     return null;
   });

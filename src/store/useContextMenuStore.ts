@@ -11,6 +11,8 @@ export interface ContextMenuTrackData {
   track: Track;
   onRemoveFromQueue?: () => void;
   onRemoveFromPlaylist?: () => void;
+  onDeleteFromPC?: () => void;
+  onShowInExplorer?: () => void;
 }
 
 export interface ContextMenuPlaylistData {
@@ -45,7 +47,12 @@ interface ContextMenuState {
   openTrackContextMenu: (
     e: React.MouseEvent | MouseEvent,
     track: Track,
-    options?: { onRemoveFromQueue?: () => void; onRemoveFromPlaylist?: () => void }
+    options?: { 
+      onRemoveFromQueue?: () => void; 
+      onRemoveFromPlaylist?: () => void;
+      onDeleteFromPC?: () => void;
+      onShowInExplorer?: () => void;
+    }
   ) => void;
 
   openPlaylistContextMenu: (

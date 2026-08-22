@@ -303,6 +303,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
       ? 'radio'
       : 'finite'
   ));
+  const canReorderQueue = effectiveContext === 'finite' || effectiveContext === 'user_playlist';
 
   // 1. Sync Up Next loading state with the active queue session without firing duplicate parallel fetches
   useEffect(() => {
@@ -756,14 +757,14 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                         onRemoveFromQueue: !isCurrent ? () => removeFromQueue(idx) : undefined
                       })}
                       onDragOver={(event) => {
-                        if (draggedQueueIndex === null || idx <= queueIndex) return;
+                        if (!canReorderQueue || draggedQueueIndex === null || idx <= queueIndex) return;
                         event.preventDefault();
                         event.dataTransfer.dropEffect = 'move';
                         setDragOverQueueIndex(idx);
                       }}
                       onDrop={(event) => {
                         event.preventDefault();
-                        if (draggedQueueIndex !== null && draggedQueueIndex > queueIndex && idx > queueIndex && draggedQueueIndex !== idx) {
+                        if (canReorderQueue && draggedQueueIndex !== null && draggedQueueIndex > queueIndex && idx > queueIndex && draggedQueueIndex !== idx) {
                           reorderQueue(draggedQueueIndex, idx);
                         }
                         setDraggedQueueIndex(null);
@@ -792,7 +793,7 @@ export function PlayerDrawer({ onOpenDeviceModal }: PlayerDrawerProps = {}) {
                         if (isPast) e.currentTarget.style.opacity = '0.6';
                       }}
                     >
-                      {idx > queueIndex && (
+                      {idx > queueIndex && canReorderQueue && (
                         <div
                           className="track-drag-handle"
                           draggable

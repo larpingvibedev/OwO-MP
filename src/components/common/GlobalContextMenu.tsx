@@ -1,14 +1,15 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Play, Shuffle, Radio, ListPlus, Plus, Heart, FolderPlus, 
   User, Disc, Info, Share2, Music2,
   Trash2, X, Download, Loader2, HardDrive, Pencil, Check,
-  Ban, UserX
+  Ban, UserX, ExternalLink
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useContextMenuStore } from '../../store/useContextMenuStore';
+import { isLocalTrack, canGoToArtist } from '../../types';
 
 export const GlobalContextMenu: React.FC = () => {
   const navigate = useNavigate();
@@ -34,7 +35,6 @@ export const GlobalContextMenu: React.FC = () => {
     downloadTrack,
     downloadTrackBatch,
     removeDownloadedTrack,
-    syncOfflineTracks,
     toggleFavorite,
     addToQueue,
     playNext,
@@ -62,51 +62,46 @@ export const GlobalContextMenu: React.FC = () => {
   const [editDesc, setEditDesc] = useState('');
   const [editCover, setEditCover] = useState('');
 
-  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number }>({ top: 0, left: 0, maxHeight: 480 });
-
-  // Calculate smart coordinates relative to viewport
-  const updatePosition = useCallback(() => {
-    if (!isOpen) return;
-    const menuWidth = 250;
-    let left = x;
+  // Calculate smart coordinates relative to viewport synchronously on every render
+  const menuWidth = 250;
+  let left = x;
+  if (typeof window !== 'undefined') {
     if (left + menuWidth > window.innerWidth - 12) {
       left = window.innerWidth - menuWidth - 12;
     }
     if (left < 12) left = 12;
+  }
 
-    const estimatedMenuHeight = 390;
-    const windowH = window.innerHeight;
+  const estimatedMenuHeight = 390;
+  const windowH = typeof window !== 'undefined' ? window.innerHeight : 800;
 
-    let top: number;
-    let maxHeight: number;
+  let top: number;
+  let maxHeight: number;
 
-    // Check if menu fits completely downwards
-    if (y + estimatedMenuHeight <= windowH - 16) {
-      top = Math.max(12, y);
-      maxHeight = windowH - top - 16;
-    } 
-    // Check if menu fits completely upwards
-    else if (y - estimatedMenuHeight >= 12) {
-      top = Math.max(12, y - estimatedMenuHeight);
-      maxHeight = estimatedMenuHeight;
-    } 
-    // If it doesn't fully fit in either single direction, center/clamp intelligently:
-    else {
-      // Position top so as much of the menu is visible as possible while staying within [12, windowH - 16]
-      top = Math.max(12, Math.min(y - (estimatedMenuHeight / 2), windowH - estimatedMenuHeight - 16));
-      maxHeight = windowH - top - 16;
-    }
+  // Check if menu fits completely downwards
+  if (y + estimatedMenuHeight <= windowH - 16) {
+    top = Math.max(12, y);
+    maxHeight = windowH - top - 16;
+  } 
+  // Check if menu fits completely upwards
+  else if (y - estimatedMenuHeight >= 12) {
+    top = Math.max(12, y - estimatedMenuHeight);
+    maxHeight = estimatedMenuHeight;
+  } 
+  // If it doesn't fully fit in either single direction, center/clamp intelligently:
+  else {
+    top = Math.max(12, Math.min(y - (estimatedMenuHeight / 2), windowH - estimatedMenuHeight - 16));
+    maxHeight = windowH - top - 16;
+  }
 
-    setPos({ top, left, maxHeight: Math.max(180, maxHeight) });
-  }, [isOpen, x, y]);
+  const pos = { top, left, maxHeight: Math.max(180, maxHeight) };
 
-  useEffect(() => {
+  // Reset submenu state synchronously before paint whenever a new menu opens
+  useLayoutEffect(() => {
     if (isOpen) {
-      syncOfflineTracks();
       setShowPlaylistPicker(false);
-      updatePosition();
     }
-  }, [isOpen, updatePosition, syncOfflineTracks]);
+  }, [isOpen, x, y]);
 
   // Click outside, scroll, resize, key handlers
   useEffect(() => {
@@ -396,10 +391,12 @@ export const GlobalContextMenu: React.FC = () => {
 
               {!showPlaylistPicker ? (
                 <div style={{ display: 'flex', flexDirection: 'column', padding: '4px 0' }}>
-                  <button className="track-menu-item" onClick={handleStartMix}>
-                    <Radio size={16} />
-                    <span>Start mix</span>
-                  </button>
+                  {!isLocalTrack(track) && (
+                    <button className="track-menu-item" onClick={handleStartMix}>
+                      <Radio size={16} />
+                      <span>Start mix</span>
+                    </button>
+                  )}
 
                   <button className="track-menu-item" onClick={handlePlayNext}>
                     <ListPlus size={16} />
@@ -421,21 +418,57 @@ export const GlobalContextMenu: React.FC = () => {
                     <span>Save to playlist</span>
                   </button>
 
-                  {/* Offline Download */}
-                  {downloadProgress !== undefined ? (
-                    <button className="track-menu-item" style={{ color: 'var(--accent-primary)' }} onClick={(e) => e.stopPropagation()}>
-                      <Loader2 size={16} className="animate-spin" />
-                      <span>Downloading ({downloadProgress}%)</span>
+                  {/* Offline Download (Online catalog only) */}
+                  {!isLocalTrack(track) && (
+                    downloadProgress !== undefined ? (
+                      <button className="track-menu-item" style={{ color: 'var(--accent-primary)' }} onClick={(e) => e.stopPropagation()}>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>Downloading ({downloadProgress}%)</span>
+                      </button>
+                    ) : isDownloaded ? (
+                      <button className="track-menu-item" onClick={() => { closeContextMenu(); removeDownloadedTrack(track.id); showToast('Download removed from cache'); }}>
+                        <HardDrive size={16} color="var(--accent-primary)" />
+                        <span style={{ color: 'var(--accent-primary)' }}>Remove download</span>
+                      </button>
+                    ) : (
+                      <button className="track-menu-item" onClick={() => { closeContextMenu(); downloadTrack(track); }}>
+                        <Download size={16} />
+                        <span>Download for offline</span>
+                      </button>
+                    )
+                  )}
+
+                  {/* Local File Actions */}
+                  {isLocalTrack(track) && (track.filePath || trackData?.onShowInExplorer) && (
+                    <button className="track-menu-item" onClick={() => {
+                      closeContextMenu();
+                      if (trackData?.onShowInExplorer) {
+                        trackData.onShowInExplorer();
+                      } else if (track.filePath) {
+                        const electronAPI = (window as any).electronAPI;
+                        if (electronAPI?.showItemInFolder) electronAPI.showItemInFolder(track.filePath);
+                        else if (electronAPI?.openFolder) electronAPI.openFolder(track.filePath);
+                      }
+                    }}>
+                      <ExternalLink size={16} />
+                      <span>Show in File Explorer</span>
                     </button>
-                  ) : isDownloaded ? (
-                    <button className="track-menu-item" onClick={() => { closeContextMenu(); removeDownloadedTrack(track.id); }}>
-                      <HardDrive size={16} color="var(--accent-primary)" />
-                      <span style={{ color: 'var(--accent-primary)' }}>Downloaded (Click to remove)</span>
-                    </button>
-                  ) : (
-                    <button className="track-menu-item" onClick={() => { closeContextMenu(); downloadTrack(track); }}>
-                      <Download size={16} />
-                      <span>Download for offline</span>
+                  )}
+
+                  {isLocalTrack(track) && (track.filePath || trackData?.onDeleteFromPC) && (
+                    <button className="track-menu-item" style={{ color: '#ff4d4d' }} onClick={() => {
+                      closeContextMenu();
+                      if (trackData?.onDeleteFromPC) {
+                        trackData.onDeleteFromPC();
+                      } else if (track.filePath) {
+                        if (window.confirm(`Move "${track.title}" to the Recycle Bin?`)) {
+                          (window as any).electronAPI?.deleteLocalMusicFile?.(track.filePath);
+                          showToast('Moved to Recycle Bin');
+                        }
+                      }
+                    }}>
+                      <Trash2 size={16} color="#ff4d4d" />
+                      <span style={{ color: '#ff4d4d' }}>Delete from PC</span>
                     </button>
                   )}
 
@@ -454,47 +487,53 @@ export const GlobalContextMenu: React.FC = () => {
                     </button>
                   )}
 
-                  <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
+                  {!isLocalTrack(track) && (
+                    <>
+                      <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
 
-                  <button className="track-menu-item" onClick={handleGoToArtist}>
-                    <User size={16} />
-                    <span>Go to artist</span>
-                  </button>
+                      {canGoToArtist(track) && (
+                        <button className="track-menu-item" onClick={handleGoToArtist}>
+                          <User size={16} />
+                          <span>Go to artist</span>
+                        </button>
+                      )}
 
-                  <button className="track-menu-item" onClick={handleGoToAlbum}>
-                    <Disc size={16} />
-                    <span>Go to album</span>
-                  </button>
+                      <button className="track-menu-item" onClick={handleGoToAlbum}>
+                        <Disc size={16} />
+                        <span>Go to album</span>
+                      </button>
 
-                  <button className="track-menu-item" onClick={() => { closeContextMenu(); setShowDetailsModal(true); }}>
-                    <Info size={16} />
-                    <span>View song credits</span>
-                  </button>
+                      <button className="track-menu-item" onClick={() => { closeContextMenu(); setShowDetailsModal(true); }}>
+                        <Info size={16} />
+                        <span>View song credits</span>
+                      </button>
 
-                  <button className="track-menu-item" onClick={handleShareTrack}>
-                    <Share2 size={16} />
-                    <span>Share</span>
-                  </button>
+                      <button className="track-menu-item" onClick={handleShareTrack}>
+                        <Share2 size={16} />
+                        <span>Share</span>
+                      </button>
 
-                  <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
+                      <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
 
-                  <button 
-                    className="track-menu-item" 
-                    style={{ color: '#ff4d4d' }}
-                    onClick={() => { closeContextMenu(); markTrackNotInterested(track); }}
-                  >
-                    <Ban size={16} color="#ff4d4d" />
-                    <span style={{ color: '#ff4d4d' }}>Not interested</span>
-                  </button>
+                      <button 
+                        className="track-menu-item" 
+                        style={{ color: '#ff4d4d' }}
+                        onClick={() => { closeContextMenu(); markTrackNotInterested(track); }}
+                      >
+                        <Ban size={16} color="#ff4d4d" />
+                        <span style={{ color: '#ff4d4d' }}>Not interested</span>
+                      </button>
 
-                  <button 
-                    className="track-menu-item" 
-                    style={{ color: '#ff4d4d' }}
-                    onClick={() => { closeContextMenu(); blockArtist(track.artist); }}
-                  >
-                    <UserX size={16} color="#ff4d4d" />
-                    <span style={{ color: '#ff4d4d' }}>Don't recommend artist</span>
-                  </button>
+                      <button 
+                        className="track-menu-item" 
+                        style={{ color: '#ff4d4d' }}
+                        onClick={() => { closeContextMenu(); blockArtist(track.artist); }}
+                      >
+                        <UserX size={16} color="#ff4d4d" />
+                        <span style={{ color: '#ff4d4d' }}>Don't recommend artist</span>
+                      </button>
+                    </>
+                  )}
                 </div>
               ) : (
                 /* Save to Playlist Submenu */

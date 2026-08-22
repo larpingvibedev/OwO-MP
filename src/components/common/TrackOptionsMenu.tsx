@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/usePlayerStore';
-import type { Track } from '../../types';
+import { isLocalTrack, canGoToArtist, type Track } from '../../types';
 
 interface TrackOptionsMenuProps {
   track: Track;
@@ -34,7 +34,6 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     downloadingTrackIds,
     downloadTrack,
     removeDownloadedTrack,
-    syncOfflineTracks,
     toggleFavorite,
     addToQueue,
     playNext,
@@ -100,7 +99,6 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     e.preventDefault();
 
     if (!isOpen) {
-      syncOfflineTracks();
       calculatePosition();
       setShowPlaylistPicker(false);
       setIsOpen(true);
@@ -113,7 +111,6 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
   // Re-calculate position or handle outside clicks
   useEffect(() => {
     if (!isOpen) return;
-    syncOfflineTracks();
 
     const handleScrollOrResize = () => {
       calculatePosition();
@@ -135,7 +132,6 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
       if (e.key === 'Escape') {
         setIsOpen(false);
         setShowPlaylistPicker(false);
-        setShowDetailsModal(false);
       }
     };
 
@@ -150,7 +146,7 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, calculatePosition, syncOfflineTracks]);
+  }, [isOpen, calculatePosition]);
 
   const handleStartMix = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -252,6 +248,28 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     e.stopPropagation();
     setIsOpen(false);
     removeDownloadedTrack(track.id);
+    showToast('Download removed from cache');
+  };
+
+  const handleShowInExplorer = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsOpen(false);
+    if (track.filePath) {
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI?.showItemInFolder) electronAPI.showItemInFolder(track.filePath);
+      else if (electronAPI?.openFolder) electronAPI.openFolder(track.filePath);
+    }
+  };
+
+  const handleDeleteFromPC = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsOpen(false);
+    if (track.filePath) {
+      if (window.confirm(`Move "${track.title}" to the Recycle Bin?`)) {
+        (window as any).electronAPI?.deleteLocalMusicFile?.(track.filePath);
+        showToast('Moved to Recycle Bin');
+      }
+    }
   };
 
   const handleSaveToPlaylist = (playlistId: string) => {
@@ -270,6 +288,8 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
     }
   };
 
+  const isLocal = isLocalTrack(track);
+
   return (
     <>
       {/* 3-Dots Trigger Button */}
@@ -278,7 +298,8 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
         type="button"
         className={`track-menu-trigger-btn ${isOpen ? 'active' : ''} ${className}`}
         onClick={toggleMenu}
-        title="More options"
+        aria-label="Track Options"
+        title="More Options"
         style={{
           background: variant === 'card' ? 'rgba(0, 0, 0, 0.65)' : 'none',
           border: variant === 'card' ? '1px solid rgba(255, 255, 255, 0.15)' : 'none',
@@ -305,12 +326,13 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
         <MoreVertical size={16} />
       </button>
 
-      {/* Floating Glassmorphic Context Menu Overlay (Portaled directly to document.body) */}
+      {/* Render Dropdown Menu into Portal */}
       {isOpen && createPortal(
         <div
           ref={menuRef}
-          className="track-options-dropdown"
+          className="track-options-menu-portal"
           onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
           style={{
             position: 'fixed',
             top: `${menuCoords.top}px`,
@@ -377,55 +399,74 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
           {/* Regular Menu Options */}
           {!showPlaylistPicker ? (
             <div style={{ display: 'flex', flexDirection: 'column', padding: '4px 0' }}>
-              {/* 1. Start Mix */}
-              <button className="track-menu-item" onClick={handleStartMix}>
-                <Radio size={16} />
-                <span>Start mix</span>
-              </button>
+              {/* Start Mix (Online only) */}
+              {!isLocal && (
+                <button className="track-menu-item" onClick={handleStartMix}>
+                  <Radio size={16} />
+                  <span>Start mix</span>
+                </button>
+              )}
 
-              {/* 2. Play Next */}
+              {/* Play Next */}
               <button className="track-menu-item" onClick={handlePlayNext}>
                 <ListPlus size={16} />
                 <span>Play next</span>
               </button>
 
-              {/* 3. Add to Queue */}
+              {/* Add to Queue */}
               <button className="track-menu-item" onClick={handleAddToQueue}>
                 <Plus size={16} />
                 <span>Add to queue</span>
               </button>
 
-              {/* 4. Add to / Remove from Liked Songs */}
+              {/* Add to / Remove from Liked Songs */}
               <button className="track-menu-item" onClick={handleToggleFavorite}>
                 <Heart size={16} fill={isFav ? 'var(--accent-primary)' : 'none'} color={isFav ? 'var(--accent-primary)' : 'currentColor'} />
                 <span>{isFav ? 'Remove from liked songs' : 'Add to liked songs'}</span>
               </button>
 
-              {/* 5. Save to Playlist */}
+              {/* Save to Playlist */}
               <button className="track-menu-item" onClick={() => setShowPlaylistPicker(true)}>
                 <FolderPlus size={16} />
                 <span>Save to playlist</span>
               </button>
 
-              {/* 6. Offline Download & Local Disk Export */}
-              {downloadProgress !== undefined ? (
-                <button className="track-menu-item" style={{ color: 'var(--accent-primary)' }} onClick={(e) => e.stopPropagation()}>
-                  <Loader2 size={16} className="animate-spin" />
-                  <span>Downloading ({downloadProgress}%)</span>
-                </button>
-              ) : isDownloaded ? (
-                <button className="track-menu-item" onClick={handleRemoveDownload}>
-                  <HardDrive size={16} color="var(--accent-primary)" />
-                  <span style={{ color: 'var(--accent-primary)' }}>Downloaded (Click to remove)</span>
-                </button>
-              ) : (
-                <button className="track-menu-item" onClick={handleDownload}>
-                  <Download size={16} />
-                  <span>Download for Offline Play</span>
+              {/* Offline Download (Online catalog only) */}
+              {!isLocal && (
+                downloadProgress !== undefined ? (
+                  <button className="track-menu-item" style={{ color: 'var(--accent-primary)' }} onClick={(e) => e.stopPropagation()}>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Downloading ({downloadProgress}%)</span>
+                  </button>
+                ) : isDownloaded ? (
+                  <button className="track-menu-item" onClick={handleRemoveDownload}>
+                    <HardDrive size={16} color="var(--accent-primary)" />
+                    <span style={{ color: 'var(--accent-primary)' }}>Remove download</span>
+                  </button>
+                ) : (
+                  <button className="track-menu-item" onClick={handleDownload}>
+                    <Download size={16} />
+                    <span>Download for offline</span>
+                  </button>
+                )
+              )}
+
+              {/* Local File Operations */}
+              {isLocal && track.filePath && (
+                <button className="track-menu-item" onClick={handleShowInExplorer}>
+                  <ExternalLink size={16} />
+                  <span>Show in File Explorer</span>
                 </button>
               )}
 
-              {/* 7. Remove from Queue (if in queue drawer) */}
+              {isLocal && track.filePath && (
+                <button className="track-menu-item" style={{ color: '#ff4d4d' }} onClick={handleDeleteFromPC}>
+                  <Trash2 size={16} color="#ff4d4d" />
+                  <span style={{ color: '#ff4d4d' }}>Delete from PC</span>
+                </button>
+              )}
+
+              {/* Remove from Queue (if in queue drawer) */}
               {onRemoveFromQueue && (
                 <button className="track-menu-item" onClick={() => { setIsOpen(false); onRemoveFromQueue(); }}>
                   <Trash2 size={16} color="#e74c3c" />
@@ -441,45 +482,51 @@ export const TrackOptionsMenu: React.FC<TrackOptionsMenuProps> = ({
                 </button>
               )}
 
-              <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
+              {!isLocal && (
+                <>
+                  <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
 
-              {/* 7. Go to Artist */}
-              <button className="track-menu-item" onClick={handleGoToArtist}>
-                <User size={16} />
-                <span>Go to artist</span>
-              </button>
+                  {/* Go to Artist */}
+                  {canGoToArtist(track) && (
+                    <button className="track-menu-item" onClick={handleGoToArtist}>
+                      <User size={16} />
+                      <span>Go to artist</span>
+                    </button>
+                  )}
 
-              {/* 8. Go to Album */}
-              <button className="track-menu-item" onClick={handleGoToAlbum}>
-                <Disc size={16} />
-                <span>Go to album</span>
-              </button>
+                  {/* Go to Album */}
+                  <button className="track-menu-item" onClick={handleGoToAlbum}>
+                    <Disc size={16} />
+                    <span>Go to album</span>
+                  </button>
 
-              {/* 9. View Song Credits & Details */}
-              <button className="track-menu-item" onClick={handleOpenDetails}>
-                <Info size={16} />
-                <span>View song credits</span>
-              </button>
+                  {/* View Song Credits & Details */}
+                  <button className="track-menu-item" onClick={handleOpenDetails}>
+                    <Info size={16} />
+                    <span>View song credits</span>
+                  </button>
 
-              {/* 10. Share */}
-              <button className="track-menu-item" onClick={handleShare}>
-                <Share2 size={16} />
-                <span>Share</span>
-              </button>
+                  {/* Share */}
+                  <button className="track-menu-item" onClick={handleShare}>
+                    <Share2 size={16} />
+                    <span>Share</span>
+                  </button>
 
-              <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
+                  <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
 
-              {/* 11. Not interested */}
-              <button className="track-menu-item" style={{ color: '#ff4d4d' }} onClick={handleNotInterested}>
-                <Ban size={16} color="#ff4d4d" />
-                <span style={{ color: '#ff4d4d' }}>Not interested</span>
-              </button>
+                  {/* Not interested */}
+                  <button className="track-menu-item" style={{ color: '#ff4d4d' }} onClick={handleNotInterested}>
+                    <Ban size={16} color="#ff4d4d" />
+                    <span style={{ color: '#ff4d4d' }}>Not interested</span>
+                  </button>
 
-              {/* 12. Don't recommend artist */}
-              <button className="track-menu-item" style={{ color: '#ff4d4d' }} onClick={handleDontRecommendArtist}>
-                <UserX size={16} color="#ff4d4d" />
-                <span style={{ color: '#ff4d4d' }}>Don't recommend artist</span>
-              </button>
+                  {/* Don't recommend artist */}
+                  <button className="track-menu-item" style={{ color: '#ff4d4d' }} onClick={handleDontRecommendArtist}>
+                    <UserX size={16} color="#ff4d4d" />
+                    <span style={{ color: '#ff4d4d' }}>Don't recommend artist</span>
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             /* Sub-Menu: Save to Playlist */

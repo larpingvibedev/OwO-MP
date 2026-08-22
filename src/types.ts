@@ -1,3 +1,5 @@
+export type TrackSource = 'youtube' | 'local' | 'piped' | 'itunes' | 'soundcloud' | 'jamendo' | 'demo';
+
 export interface Track {
   id: string;
   title: string;
@@ -10,20 +12,76 @@ export interface Track {
   cover: string;
   streamUrl: string;
   resolvedStreamUrl?: string;
-  source?: 'youtube' | 'piped' | 'itunes' | 'soundcloud' | 'jamendo' | 'demo';
+  source?: TrackSource;
   category?: 'song' | 'video' | 'artist' | 'playlist';
   channelId?: string;
+  videoId?: string;
   recommendReason?: string;
   playCountText?: string;
-  isLocal?: boolean;
+  
+  // Canonical State
   isDownloaded?: boolean;
+  
+  // Backwards-compatibility fields for persisted data
+  isLocal?: boolean;
+  isAppDownload?: boolean;
+  downloadRecordId?: string;
+  
+  // Local PC Media Properties
   filePath?: string;
   fileName?: string;
+  folderPath?: string;
+  folder?: string;
   sizeBytes?: number;
   ext?: string;
   bitrate?: number;
   sampleRate?: number;
 }
+
+/** Determines if a track represents physical local PC media */
+export function isLocalTrack(track?: Track | null): boolean {
+  if (!track) return false;
+  return track.source === 'local' || Boolean(track.isLocal) || Boolean(track.id?.startsWith('local-')) || Boolean(track.filePath);
+}
+
+/** Determines if an online catalog track is cached offline */
+export function isDownloadedTrack(track?: Track | null): boolean {
+  if (!track) return false;
+  return Boolean(track.isDownloaded || track.isAppDownload);
+}
+
+/** Determines if a track has official online artist identity */
+export function canGoToArtist(track?: Track | null): boolean {
+  if (!track) return false;
+  if (isLocalTrack(track)) return false;
+  return Boolean(track.artistId || track.channelId || (track.artist && !track.artist.toLowerCase().includes('unknown')));
+}
+
+/** Determines if a track can be deleted from physical PC storage */
+export function canDeleteFromDisk(track?: Track | null): boolean {
+  if (!track) return false;
+  return isLocalTrack(track) && Boolean(track.filePath);
+}
+
+/** Determines if a track's offline cached download can be removed */
+export function canRemoveDownload(track?: Track | null): boolean {
+  if (!track) return false;
+  return isDownloadedTrack(track) && !isLocalTrack(track);
+}
+
+/** Normalizes a track to guarantee canonical source and download status */
+export function normalizeTrack(track: Track): Track {
+  if (!track) return track;
+  const isLocal = isLocalTrack(track);
+  const isDownloaded = isDownloadedTrack(track);
+  return {
+    ...track,
+    source: isLocal ? 'local' : (track.source || 'youtube'),
+    isLocal,
+    isDownloaded
+  };
+}
+
 
 export interface Playlist {
   id: string;
@@ -127,8 +185,8 @@ export interface SearchSuggestionsResult {
   entitySuggestions: SuggestionEntity[];
 }
 
-export type ViewType = 'dashboard' | 'discover' | 'library' | 'albums' | 'playlists' | 'downloads' | 'settings';
-export type LibraryFilterType = 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'downloads';
+export type ViewType = 'dashboard' | 'discover' | 'library' | 'albums' | 'playlists' | 'local' | 'downloads' | 'settings';
+export type LibraryFilterType = 'all' | 'playlists' | 'songs' | 'albums' | 'artists' | 'local' | 'downloads';
 export type SearchCategory = 'all' | 'songs' | 'videos' | 'playlists';
 
 export interface DownloadedTrackMeta {

@@ -63,7 +63,7 @@ function App() {
           <Route path="playlists" element={<Library />} />
           <Route path="favorites" element={<Library />} />
           <Route path="local-files" element={<LocalFiles />} />
-          <Route path="downloads" element={<LocalFiles />} />
+          <Route path="downloads" element={<Library />} />
           <Route path="settings" element={<Settings />} />
           <Route path="artist/:artistName" element={<Artist />} />
           <Route path="album/:albumId" element={<Album />} />
