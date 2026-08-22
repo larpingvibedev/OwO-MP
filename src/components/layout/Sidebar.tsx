@@ -148,8 +148,13 @@ export function Sidebar() {
                   autoFocus
                   className="sidebar-quick-input"
                 />
-                <button type="submit" className="sidebar-quick-submit-btn" title="Create Playlist">
-                  <Check size={14} />
+                <button 
+                  type="submit" 
+                  className={`sidebar-quick-submit-btn ${quickPlaylistName.trim() ? 'is-visible' : ''}`}
+                  disabled={!quickPlaylistName.trim()}
+                  title="Create Playlist"
+                >
+                  <Check size={13} strokeWidth={2.5} />
                 </button>
               </form>
 
